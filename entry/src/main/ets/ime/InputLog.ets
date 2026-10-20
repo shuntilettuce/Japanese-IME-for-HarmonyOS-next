@@ -202,6 +202,10 @@ export class InputLog {
   // 直前の候補更新。同じ読み・同じ候補の更新が続くと (保留ローマ字だけが
   // 変わった打鍵など) 同じ行が並ぶだけなので記録しない。
   private static lastUpdateKey: string = '';
+  // 直前に出した候補 (recordUpdate)。消し始め・全部消したときに残す
+  private static lastReading: string = '';
+  private static lastCands: string[] = [];
+  private static inDeleteRun: boolean = false;
   private static flushCount: number = 0;
   // 速度の集計 (notePerf)。対象ごとに件数・合計・最大を持つだけ。
   private static perfName: string = '';
@@ -479,9 +483,18 @@ export class InputLog {
 
   // 文字を消した。x は消した時の状態。確定後すぐの idle 削除は「確定した変換が
   // 間違っていた」の合図になるので、状態を分けて残す。
+  // 打っている途中で消し始めたとき (続けて消す最初の 1 字) は、消す前に出ていた読みと候補も残す。
+  // 「出てほしい語が候補に無くて打ち直した」を後から確かめるため (ユーザー 2026-10-20: ある活用形で出ない動詞を、
+  // 別の形で打って確定し後ろを消して打ち直していた。そのとき何が出ていたかがログに無かった)
   static recordDeleteChar(ch: string, state: string): void {
     if (!DEBUG_INPUT_LOG) { return; }
-    InputLog.push(LK_DELCHAR, '', ch, -1, 0, state);
+    if (state === 'COMPOSING' && !InputLog.inDeleteRun && InputLog.lastCands.length > 0) {
+      InputLog.push(LK_DELCHAR, InputLog.lastReading, ch, -1, InputLog.lastCands.length, state,
+        InputLog.lastCands, CAND_LIMIT_UPDATE);
+    } else {
+      InputLog.push(LK_DELCHAR, '', ch, -1, 0, state);
+    }
+    InputLog.inDeleteRun = true;
   }
 
   static recordUndo(ch: string): void {
@@ -514,6 +527,8 @@ export class InputLog {
     if (!DEBUG_INPUT_LOG) { return; }
     // 以前は候補40件を join して比べていたが、打鍵ごとに走るので
     // 先頭候補と件数だけで十分 (同じ読みで先頭も件数も同じなら同じ列)。
+    InputLog.lastReading = reading;
+    InputLog.lastCands = candidates;
     const key = `${reading}\u0001${convEnd}\u0001${candidates.length}${candidates.length > 0 ? candidates[0] : ''}`;
     if (key === InputLog.lastUpdateKey) { return; }
     InputLog.lastUpdateKey = key;
@@ -577,7 +592,8 @@ export class InputLog {
   static recordAbandon(reading: string): void {
     if (!DEBUG_INPUT_LOG) { return; }
     if (reading.length === 0) { return; }
-    InputLog.push(LK_ABANDON, reading, '', -1, 0, '');
+    // 全部消す前に出ていた候補も (何が無くて諦めたかを見るため)
+    InputLog.push(LK_ABANDON, reading, '', -1, InputLog.lastCands.length, '', InputLog.lastCands, CAND_LIMIT_UPDATE);
   }
 
   // ---- 書き込み ---------------------------------------------------------
@@ -587,6 +603,8 @@ export class InputLog {
       origins?: string, segDiag?: string): void {
     if (InputLog.secureField) { return; }
     if (InputLog.filesDir.length === 0) { return; }
+    if (k !== LK_DELCHAR) { InputLog.inDeleteRun = false; }
+    if (k === LK_COMMIT || k === LK_RAW || k === LK_ABANDON) { InputLog.lastCands = []; InputLog.lastReading = ''; }
     const e: InputLogEntry = { t: Date.now(), k: k, r: r, s: s, i: i, n: n, x: x };
     if (candidates !== undefined && candidates.length > 0) {
       e.c = candidates.slice(0, candLimit !== undefined && candLimit > 0 ? candLimit : CAND_LIMIT_UPDATE).join(',');

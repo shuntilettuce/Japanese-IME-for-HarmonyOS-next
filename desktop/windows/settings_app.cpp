@@ -26,7 +26,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr wchar_t VERSION[] = L"0.6.0";
+constexpr wchar_t VERSION[] = L"0.6.1";
 
 enum Id {
     ID_THEME = 100, ID_PUNCT, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
@@ -274,7 +274,8 @@ void sym_label(int i) {
 }
 
 // 詳細設定の右の列の下端 (窓の高さを決める)。キー割り当て (341) + 間 (10) + ローマ字の表 (172)
-constexpr int ADV_RIGHT_BOTTOM = 8 + 341 + 10 + 132;   // 右の列の下端 (キー割り当て・ローマ字の表)   // 右の列の下端 (キー割り当て・ローマ字の表・ソフトごとの日本語入力)
+constexpr int ADV_ROMAJI_LIST_H = 176;   // ローマ字の表の高さ (66 では 2 行しか見えなかった、ユーザー 2026-10-20)
+constexpr int ADV_RIGHT_BOTTOM = 8 + 341 + 10 + ADV_ROMAJI_LIST_H + 66;   // 右の列の下端 (キー割り当て・ローマ字の表)
 
 // 詳細設定のキー配列の欄を並べ直す: 親指シフトの配列のときだけ親指の設定 (親指キー・連続シフト・単独打鍵) を出し、
 // 欄と窓の高さをそれに合わせる (ユーザー 2026-10-16)
@@ -304,11 +305,13 @@ void adv_layout_relayout() {
     place(g_lgroup, 10, g_lgroup_y, 460, y - g_lgroup_y, true);
     // ソフトごとの日本語入力 (キー配列の欄の下)
     y += 8;
-    place(g_agroup, 10, y, 460, 120, true);
-    place(g_alist, 26, y + 20, 428, 64, true);
-    place(GetDlgItem(g_adv, ADV_ATOGGLE), 26, y + 88, 160, 25, true);
-    place(GetDlgItem(g_adv, ADV_ADEL), 194, y + 88, 120, 25, true);
-    y += 120;
+    // 一覧は右の列の下端まで伸ばす (最低でも 6 行ほど。64 では 2 行しか見えなかった、ユーザー 2026-10-20)
+    const int list_h = std::max(130, ADV_RIGHT_BOTTOM - y - 64);
+    place(g_agroup, 10, y, 460, list_h + 56, true);
+    place(g_alist, 26, y + 20, 428, list_h, true);
+    place(GetDlgItem(g_adv, ADV_ATOGGLE), 26, y + 24 + list_h, 160, 25, true);
+    place(GetDlgItem(g_adv, ADV_ADEL), 194, y + 24 + list_h, 120, 25, true);
+    y += list_h + 56;
     // 閉じるボタンと窓の高さ (右の列の下端より下)
     const int bottom = std::max(y, ADV_RIGHT_BOTTOM) + 10;
     place(GetDlgItem(g_adv, ADV_CLOSE), 870, bottom, 80, 25, true);
@@ -759,8 +762,9 @@ void open_advanced() {
     make(L"BUTTON", T(81), BS_PUSHBUTTON | WS_TABSTOP, 868, ry + 296, 60, 25, ADV_SDOWN);
     shortcut_refresh();
     ry += 351;
-    rgroup(T(82), ry, 132);
-    g_rlist = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 506, ry + 22, 428, 66, ADV_RLIST);
+    rgroup(T(82), ry, ADV_ROMAJI_LIST_H + 66);
+    g_rlist = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 506, ry + 22, 428, ADV_ROMAJI_LIST_H, ADV_RLIST);
+    const int rb = ry + 22 + ADV_ROMAJI_LIST_H;   // 表の下端 (入力欄はその下)
     ListView_SetExtendedListViewStyle(g_rlist, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     {
         const wchar_t* cols[] = {T(83), T(84)};
@@ -772,12 +776,12 @@ void open_advanced() {
             ListView_InsertColumn(g_rlist, i, &c);
         }
     }
-    make(L"STATIC", T(85), 0, 506, ry + 99, 40, 20, 0);
-    make(L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 548, ry + 96, 100, 23, ADV_RKEY);
-    make(L"STATIC", T(86), 0, 660, ry + 99, 40, 20, 0);
-    make(L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 702, ry + 96, 100, 23, ADV_RKANA);
-    make(L"BUTTON", T(77), BS_PUSHBUTTON | WS_TABSTOP, 810, ry + 95, 60, 25, ADV_RADD);
-    make(L"BUTTON", T(79), BS_PUSHBUTTON | WS_TABSTOP, 874, ry + 95, 60, 25, ADV_RDEL);
+    make(L"STATIC", T(85), 0, 506, rb + 11, 40, 20, 0);
+    make(L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 548, rb + 8, 100, 23, ADV_RKEY);
+    make(L"STATIC", T(86), 0, 660, rb + 11, 40, 20, 0);
+    make(L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 702, rb + 8, 100, 23, ADV_RKANA);
+    make(L"BUTTON", T(77), BS_PUSHBUTTON | WS_TABSTOP, 810, rb + 7, 60, 25, ADV_RADD);
+    make(L"BUTTON", T(79), BS_PUSHBUTTON | WS_TABSTOP, 874, rb + 7, 60, 25, ADV_RDEL);
     romaji_refresh();
     // ソフトごとの日本語入力のオン・オフ (ソフトを閉じたときの状態を覚えて、次に起動したとき戻す。ユーザー 2026-10-20)
     // 左の列のキー配列の欄の下 (位置は adv_layout_relayout が決める。右の列に置くと窓が画面より縦に長くなった)

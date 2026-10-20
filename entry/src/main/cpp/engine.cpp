@@ -2122,8 +2122,6 @@ void scores(kkc_engine* E, int rstart, int n, const std::vector<Edge>& ed, std::
 }
 
 // 上位 k (lattice.nbest / kkcnative の kkc_nbest と同じ)
-// 送り仮名違いの候補 (前に同じ漢字の並びの候補がある) に足すコスト (1 つにつき)
-constexpr double VARIANT_PENALTY = 1500.0;
 int nbest(const Lex& L, const std::vector<Edge>& E, int n, const float* u, double beta, double gamma, int k, int maxout,
           std::vector<ustr>& res, std::vector<SegInfo>* segs = nullptr, double* top2 = nullptr) {
     const int M = int(E.size());
@@ -2173,7 +2171,6 @@ int nbest(const Lex& L, const std::vector<Edge>& E, int n, const float* u, doubl
     std::stable_sort(fin.begin(), fin.end(), [](const Cand& a, const Cand& b) { return a.c < b.c; });
     std::unordered_set<ustr> seen;
     std::vector<int> path;
-    std::vector<double> costs;   // res の各候補の経路のコスト
     res.clear();
     if (top2) { top2[0] = 0; top2[1] = 1e18; }
     for (auto& f : fin) {
@@ -2199,36 +2196,8 @@ int nbest(const Lex& L, const std::vector<Edge>& E, int n, const float* u, doubl
         }
         if (top2 && res.size() < 2) top2[res.size()] = f.c;
         res.push_back(surf);
-        costs.push_back(f.c);
-        if (int(res.size()) >= maxout * 3) break;   // 送り仮名違いを下げて並べ直すので、多めに集める
+        if (int(res.size()) >= maxout) break;
     }
-    // 書き分けだけの違い (帰ってきた・帰って来た・取り込む・取込む: 肝心の語が同じ) は表記がほとんど同じなのでモデルの点も辞書のコストも
-    // 1 位と近く、上位を埋めて別の語 (返ってきた・描いておいて・取ってきて) を押し出していた。前に肝心の語が同じ候補があるたびに点を差し引いて並べ直す
-    // (1 位は前に何も無いので変わらない。送り仮名違いがはっきりよければ上に残る。ユーザー 2026-10-20「動詞の違いの配点が低すぎる」)
-    if (res.size() > 2) {
-        // 肝心の語 = 最初の漢字のかたまり (帰ってきた・帰って来た は 帰、返ってきた は 返)。後ろの補助の言葉の書き分け
-        // (来た/きた・置いて/おいて・貰う/もらう) や送り仮名だけの違いは同じ語とみる
-        auto skel = [](const ustr& x) {
-            auto kan = [](char32_t c) { return (c >= 0x4E00 && c <= 0x9FFF) || c == 0x3005; };
-            size_t i = 0;
-            while (i < x.size() && !kan(x[i])) i++;
-            size_t j = i;
-            while (j < x.size() && kan(x[j])) j++;
-            return x.substr(i, j - i);
-        };
-        std::unordered_map<ustr, int> seen_k;
-        std::vector<std::pair<double, size_t>> adj;
-        for (size_t i = 0; i < res.size(); i++) {
-            const ustr k = skel(res[i]);
-            const int before = k.empty() ? 0 : seen_k[k]++;
-            adj.push_back({costs[i] + VARIANT_PENALTY * before, i});
-        }
-        std::stable_sort(adj.begin(), adj.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-        std::vector<ustr> r2;
-        for (auto& [c, i] : adj) r2.push_back(std::move(res[i]));
-        res.swap(r2);
-    }
-    if (int(res.size()) > maxout) res.resize(size_t(maxout));
     return int(res.size());
 }
 
