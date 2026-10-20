@@ -348,7 +348,7 @@ void CandWindow::layout_tree(HDC dc) {
         if (w.s < 0.9f) {   // 確信していない語だけ別の候補を
             int yy = y + H / 2 + d(6), k = 0;
             for (auto& a : w.alts) {
-                if (a.second < 0.03f || k >= 2) continue;
+                if (a.second < 0.03f || k >= 4) continue;
                 k++;
                 ttexts_.push_back({x + wd / 2, yy, a.first, false, a.second});
                 {   // 選んでいない別の候補も灰色の線で本線につなぐ (札の左から直角に降りる)

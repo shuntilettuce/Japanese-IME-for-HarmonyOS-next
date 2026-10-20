@@ -1059,7 +1059,7 @@ void Composer::load_cands(size_t i) {
                 auto has = [&](const u16& x) { for (auto& t : top) if (t.first == x) return true; return false; };
                 if (!has(w.surface)) top.push_back({w.surface, w.s});
                 for (auto& a : w.alts)
-                    if (a.second >= 0.03f && top.size() < 3 && !has(a.first)) top.push_back(a);
+                    if (a.second >= 0.03f && top.size() < 5 && !has(a.first)) top.push_back(a);
                 // 二股の頭: 別の区切りの文を強さの順の位置に (強さ = 別の区切りの語のうち弱い方)
                 if (&w == &n.main.front() && !n.fork.empty()) {
                     u16 fs;

@@ -219,7 +219,7 @@ std::vector<TreeNode> build_tree(const std::vector<std::pair<double, std::vector
         t.s = float(s);
         t.link = k == 0 ? 1.f : float(prev > 0 ? both / prev : s);
         std::stable_sort(alt.begin(), alt.end(), [](auto& a, auto& b) { return a.second > b.second; });
-        for (size_t i = 0; i < alt.size() && i < 3; i++) t.alts.push_back({alt[i].first, float(alt[i].second)});
+        for (size_t i = 0; i < alt.size() && i < 6; i++) t.alts.push_back({alt[i].first, float(alt[i].second)});
     }
     // 区切り方で迷う所: 1 位と区切りが違う経路のうち確率の高いものから、違う区間 (両方の区切りが合う所で挟む) を取る
     struct Fork { int a, b; size_t p; double mass, best; };   // best = 出す別の道 (いちばん強い経路) の確率
