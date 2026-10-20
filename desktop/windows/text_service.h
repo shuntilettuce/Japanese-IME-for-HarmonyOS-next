@@ -120,6 +120,10 @@ private:
     ITfContext* comp_ctx_ = nullptr;
     TfGuidAtom atom_input_ = TF_INVALID_GUIDATOM, atom_converted_ = TF_INVALID_GUIDATOM, atom_focused_ = TF_INVALID_GUIDATOM;
     std::unique_ptr<Composer> composer_;
+    bool ensure_composer();
+    void place_fallback(bool ok, RECT& rc, HWND hwnd);   // 候補の窓の位置が取れないとき
+    RECT last_rc_ = {};
+    HWND last_rc_root_ = nullptr;   // 最初にキーを打ったときに Composer と Core を作る
     u16 left_ctx_;
     bool secure_ = false;   // いまの入力欄がパスワードの欄 (デバッグ用のビルドの入力の記録だけが使う)
     CandWindow cand_;

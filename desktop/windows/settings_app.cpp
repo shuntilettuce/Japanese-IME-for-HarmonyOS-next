@@ -1,6 +1,7 @@
 // shunti IME の設定 (shunti_settings.exe)。Windows の標準の部品だけで作った小さな窓。
 // 変えるとすぐ %APPDATA%\shunti IME\settings.json に書き、IME は次に打ち始めたときに読み直す。
 // ユーザー辞書 (userdict.json) の登録・削除と、学習 (learned.json) のリセットもここで行う。
+#include "update.h"
 #include <windows.h>
 #include <commctrl.h>
 #include <shellapi.h>
@@ -17,6 +18,7 @@
 #include "../core/store.h"
 #include "../core/text.h"
 #include "shortcut_key.h"
+#include "strings.h"
 
 using namespace shunti;
 using namespace shunti::win;
@@ -28,7 +30,7 @@ constexpr wchar_t VERSION[] = L"0.6.0";
 
 enum Id {
     ID_THEME = 100, ID_PUNCT, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
-    ID_LIST, ID_READING, ID_WORD, ID_POS, ID_ADD, ID_REMOVE, ID_IMPORT, ID_ADVANCED, ID_RESET, ID_LICENSE, ID_GITHUB, ID_ICON, ID_MODEL,
+    ID_LIST, ID_READING, ID_WORD, ID_POS, ID_ADD, ID_REMOVE, ID_IMPORT, ID_ADVANCED, ID_UPDATE, ID_RESET, ID_LICENSE, ID_GITHUB, ID_ICON, ID_MODEL, ID_CANDTREE,
 };
 
 // 変換モデル (settings.json の model の値と、画面の表示)。名前は配布の呼び名 (開発名は出さない)
@@ -36,12 +38,15 @@ const char* const MODELS[] = {"light", "standard"};
 
 struct PosItem { const wchar_t* label; const char* pos; const char* group; };
 // 品詞は MS-IME の分類にそろえる (MS-IME の一覧の出力をそのまま読み込めるように)
-const PosItem POS[] = {
-    {L"名詞", "noun", ""}, {L"短縮よみ", "abbrev", ""}, {L"顔文字", "kaomoji", ""}, {L"人名", "person", ""},
-    {L"地名", "place", ""}, {L"固有名詞・組織", "org", ""},
-    {L"動詞 (五段: 書く・ググる)", "verb", "godan"}, {L"動詞 (一段: 食べる)", "verb", "ichidan"}, {L"形容詞 (高い・エモい)", "adjective", ""},
-    {L"副詞", "adverb", ""}, {L"感動詞", "interjection", ""},
-};
+const std::vector<PosItem>& pos_items() {
+    static const std::vector<PosItem> POS = {
+        {T(1), "noun", ""}, {T(2), "abbrev", ""}, {T(3), "kaomoji", ""}, {T(4), "person", ""},
+        {T(5), "place", ""}, {T(6), "org", ""},
+        {T(7), "verb", "godan"}, {T(8), "verb", "ichidan"}, {T(9), "adjective", ""},
+        {T(10), "adverb", ""}, {T(11), "interjection", ""},
+    };
+    return POS;
+}
 
 fs::path g_dir;
 Settings g_s;
@@ -94,15 +99,16 @@ void save() {
     g_s.digits_fullwidth = checked(ID_DIGITS);
     g_s.live = checked(ID_LIVE);
     g_s.live_display = checked(ID_LIVEDISPLAY);
+    g_s.cand_tree = checked(ID_CANDTREE);
     g_s.live_commit = checked(ID_LIVECOMMIT);
     g_s.separate_suggest = checked(ID_SUGGEST);
     g_s.model = MODELS[std::clamp(selected(ID_MODEL), 0, 1)];
     if (!save_settings(g_dir / L"settings.json", g_s))
-        MessageBoxW(g_wnd, L"設定を保存できませんでした。", L"shunti IME", MB_ICONWARNING);
+        MessageBoxW(g_wnd, T(12), L"shunti IME", MB_ICONWARNING);
 }
 
 std::wstring pos_label(const UserDict::Entry& e) {
-    for (auto& p : POS)
+    for (auto& p : pos_items())
         if (e.pos == p.pos && (e.pos != "verb" || e.group == p.group || (e.group.empty() && std::string(p.group) == "godan"))) return p.label;
     return W8(e.pos);
 }
@@ -127,9 +133,9 @@ void refresh_list() {
 void add_word() {
     std::wstring r = text_of(ID_READING), w = text_of(ID_WORD);
     int p = std::max(0, selected(ID_POS));
-    std::string err = g_dict->add(U(r), U(w), POS[p].pos, POS[p].group);
+    std::string err = g_dict->add(U(r), U(w), pos_items()[size_t(p)].pos, pos_items()[size_t(p)].group);
     if (!err.empty()) {
-        MessageBoxW(g_wnd, W8(err).c_str(), L"ユーザー辞書", MB_ICONINFORMATION);
+        MessageBoxW(g_wnd, W8(err).c_str(), T(13), MB_ICONINFORMATION);
         return;
     }
     SetDlgItemTextW(g_wnd, ID_READING, L"");
@@ -151,7 +157,7 @@ void import_words() {
     if (!GetOpenFileNameW(&of)) return;
     std::ifstream f(path, std::ios::binary);
     if (!f.is_open()) {
-        MessageBoxW(g_wnd, L"ファイルを開けませんでした。", L"ユーザー辞書", MB_ICONWARNING);
+        MessageBoxW(g_wnd, T(14), T(13), MB_ICONWARNING);
         return;
     }
     std::string b((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
@@ -168,32 +174,36 @@ void import_words() {
     }
     auto res = g_dict->import_text(U(text));
     refresh_list();
-    std::wstring msg = std::to_wstring(res.first) + L" 語を登録しました。";
+    std::wstring msg = std::to_wstring(res.first) + T(15);
     if (!res.second.empty()) {
-        msg += L"\n\n登録できなかった行 (" + std::to_wstring(res.second.size()) + L"):";
+        msg += T(16) + std::to_wstring(res.second.size()) + L"):";
         for (size_t i = 0; i < res.second.size() && i < 12; i++) msg += L"\n" + W8(res.second[i]);
         if (res.second.size() > 12) msg += L"\n…";
     }
-    MessageBoxW(g_wnd, msg.c_str(), L"ユーザー辞書", MB_ICONINFORMATION);
+    MessageBoxW(g_wnd, msg.c_str(), T(13), MB_ICONINFORMATION);
 }
 
 // ---------------- 詳細設定 (別の窓) ----------------
 // 記号ごとの全角/半角・テンキー・候補の数・無変換キー・再変換・プライベート・ローマ字の表・辞書の書き出し
 const wchar_t SYMS[] = L"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
-enum { ADV_SYM0 = 500, ADV_NUMPAD = 600, ADV_PAGE, ADV_PRIVATE, ADV_ROMAJI, ADV_EXPORT, ADV_CLOSE,
-       ADV_KEYMAP = 710, ADV_LAYOUT = 711, ADV_LAYOUT_NOTE = 712, ADV_LTHUMBS = 713, ADV_LCONT, ADV_LTAP, ADV_LREP, ADV_RLIST = 720, ADV_RKEY, ADV_RKANA, ADV_RADD, ADV_RDEL,
+enum { ADV_SYM0 = 500, ADV_NUMPAD = 600, ADV_PAGE, ADV_APPOPEN, ADV_PRIVATE, ADV_ROMAJI, ADV_EXPORT, ADV_CLOSE,
+       ADV_KEYMAP = 710, ADV_LAYOUT = 711, ADV_LAYOUT_NOTE = 712, ADV_LTHUMBS = 713, ADV_LCONT, ADV_LTAP, ADV_LREP, ADV_RLIST = 720, ADV_RKEY, ADV_RKANA, ADV_RADD, ADV_RDEL, ADV_ALIST = 730, ADV_ATOGGLE, ADV_ADEL,
        ADV_SLIST = 800, ADV_SKEY, ADV_SFUNC, ADV_SADD, ADV_SCHG, ADV_SDEL, ADV_SUP, ADV_SDOWN, ADV_SRESET };
 // キー割り当ての型 (Google 日本語入力 = Mozc の keymap と同じ字)
 struct Keymap { const char* id; const wchar_t* name; };
-const Keymap KEYMAPS[] = {{"msime", L"MS-IME"}, {"atok", L"ATOK"}, {"kotoeri", L"ことえり"}};
+const std::vector<Keymap>& keymaps() {
+    static const std::vector<Keymap> KEYMAPS = {{"msime", L"MS-IME"}, {"atok", L"ATOK"}, {"kotoeri", T(17)}};
+    return KEYMAPS;
+}
 // キー配列: 置いてある layout_<id>.tsv を全部 (設定のフォルダ → インストール先)。名前・作者・公式ページは表の #! の行から
 struct LayoutEntry { std::string id; std::wstring name, note; bool thumbs = false; };   // thumbs: 親指シフトの配列 (表に lthumb・rthumb がある)
-HWND g_lgroup = nullptr, g_lthumb_label = nullptr, g_lother = nullptr;   // 詳細設定のキー配列の欄 (並べ直す部品)
+HWND g_lgroup = nullptr, g_lthumb_label = nullptr, g_lother = nullptr;
+HWND g_alist = nullptr, g_agroup = nullptr;   // 詳細設定のソフトごとの日本語入力の欄   // 詳細設定のキー配列の欄 (並べ直す部品)
 int g_lgroup_y = 0;
 std::vector<LayoutEntry> g_layouts;
 void load_layouts() {
     g_layouts.clear();
-    g_layouts.push_back({"", L"QWERTY ローマ字", L""});
+    g_layouts.push_back({"", T(18), L""});
     wchar_t exe[MAX_PATH];
     GetModuleFileNameW(nullptr, exe, MAX_PATH);
     std::vector<LayoutEntry> found;
@@ -223,7 +233,7 @@ void load_layouts() {
                 else if (line.compare(0, 7, "#! url ") == 0) url = W8(line.substr(7));
                 else if (line.compare(0, 7, "lthumb+") == 0 || line.compare(0, 7, "rthumb+") == 0) e.thumbs = true;
             }
-            e.note = author.empty() ? url : (L"作: " + author + (url.empty() ? L"" : L"  " + url));
+            e.note = author.empty() ? url : (T(19) + author + (url.empty() ? L"" : L"  " + url));
             found.push_back(std::move(e));
         }
     }
@@ -247,24 +257,24 @@ std::string g_half;   // 詳細設定の窓で選んでいる「半角にする�
 std::wstring sym_shown(wchar_t c, bool half) {
     if (half) return std::wstring(1, c);
     switch (c) {
-        case L',': return L"、";
-        case L'.': return L"。";
-        case L'/': return L"・";
-        case L'-': return L"ー";
-        case L'[': return L"「";
-        case L']': return L"」";
-        case L'\\': return L"￥";
+        case L',': return T(20);
+        case L'.': return T(21);
+        case L'/': return T(22);
+        case L'-': return T(23);
+        case L'[': return T(24);
+        case L']': return T(25);
+        case L'\\': return T(26);
         default: return std::wstring(1, wchar_t(c + 0xFEE0));
     }
 }
 
 void sym_label(int i) {
     const bool half = g_half.find(char(SYMS[i])) != std::string::npos;
-    SetDlgItemTextW(g_adv, ADV_SYM0 + i, (sym_shown(SYMS[i], half) + (half ? L"  半" : L"  全")).c_str());
+    SetDlgItemTextW(g_adv, ADV_SYM0 + i, (sym_shown(SYMS[i], half) + (half ? T(27) : T(28))).c_str());
 }
 
 // 詳細設定の右の列の下端 (窓の高さを決める)。キー割り当て (341) + 間 (10) + ローマ字の表 (172)
-constexpr int ADV_RIGHT_BOTTOM = 8 + 341 + 10 + 172;
+constexpr int ADV_RIGHT_BOTTOM = 8 + 341 + 10 + 132;   // 右の列の下端 (キー割り当て・ローマ字の表)   // 右の列の下端 (キー割り当て・ローマ字の表・ソフトごとの日本語入力)
 
 // 詳細設定のキー配列の欄を並べ直す: 親指シフトの配列のときだけ親指の設定 (親指キー・連続シフト・単独打鍵) を出し、
 // 欄と窓の高さをそれに合わせる (ユーザー 2026-10-16)
@@ -292,6 +302,13 @@ void adv_layout_relayout() {
     place(g_lother, 24, y + 2, 440, 20, true);
     y += 26;
     place(g_lgroup, 10, g_lgroup_y, 460, y - g_lgroup_y, true);
+    // ソフトごとの日本語入力 (キー配列の欄の下)
+    y += 8;
+    place(g_agroup, 10, y, 460, 120, true);
+    place(g_alist, 26, y + 20, 428, 64, true);
+    place(GetDlgItem(g_adv, ADV_ATOGGLE), 26, y + 88, 160, 25, true);
+    place(GetDlgItem(g_adv, ADV_ADEL), 194, y + 88, 120, 25, true);
+    y += 120;
     // 閉じるボタンと窓の高さ (右の列の下端より下)
     const int bottom = std::max(y, ADV_RIGHT_BOTTOM) + 10;
     place(GetDlgItem(g_adv, ADV_CLOSE), 870, bottom, 80, 25, true);
@@ -309,6 +326,7 @@ void adv_save() {
     g_s.numpad = std::max(0, selected(ADV_NUMPAD));
     g_s.page_size = 5 + std::max(0, selected(ADV_PAGE));
     g_s.private_mode = checked(ADV_PRIVATE);
+    g_s.app_default_open = SendDlgItemMessageW(g_adv, ADV_APPOPEN, CB_GETCURSEL, 0, 0) != 1;
     if (!g_layouts.empty()) {
         g_s.layout = g_layouts[size_t(std::clamp(selected(ADV_LAYOUT), 0, int(g_layouts.size()) - 1))].id;
         SetDlgItemTextW(g_adv, ADV_LAYOUT_NOTE, g_layouts[size_t(layout_index(g_s.layout))].note.c_str());
@@ -319,7 +337,7 @@ void adv_save() {
     g_s.layout_repeat = checked(ADV_LREP);
     g_wnd = keep;
     if (!save_settings(g_dir / L"settings.json", g_s))
-        MessageBoxW(g_adv, L"設定を保存できませんでした。", L"shunti IME", MB_ICONWARNING);
+        MessageBoxW(g_adv, T(12), L"shunti IME", MB_ICONWARNING);
 }
 
 void open_romaji_table() {
@@ -353,6 +371,74 @@ void romaji_save(const std::vector<std::pair<std::wstring, std::wstring>>& rows)
     std::string t = "# ローマ字の表に足す綴り: 綴り<TAB>かな (詳細設定で編集できます)\n";
     for (auto& r : rows) t += to_utf8(U(r.first)) + "\t" + to_utf8(U(r.second)) + "\n";
     write_file_atomic(g_dir / L"romaji.tsv", t);
+}
+
+// ---- ソフトごとの日本語入力 (IME が書く app_open.tsv: 実行ファイルの名前<TAB>1 か 0)
+
+std::vector<std::pair<std::wstring, bool>> app_rows() {
+    std::vector<std::pair<std::wstring, bool>> rows;
+    std::string t;
+    if (!read_file(g_dir / L"app_open.tsv", t)) return rows;
+    size_t i = 0;
+    while (i < t.size()) {
+        size_t j = t.find('\n', i);
+        if (j == std::string::npos) j = t.size();
+        std::string line = t.substr(i, j - i);
+        i = j + 1;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const size_t tab = line.find('\t');
+        if (tab == std::string::npos || tab == 0) continue;
+        std::wstring name = W8(line.substr(0, tab));
+        for (auto& c : name) c = wchar_t(towlower(c));   // 大文字小文字の違う同じソフト (Claude.exe・claude.exe) は 1 つに (後の行が新しい)
+        bool dup = false;
+        for (auto& r : rows) if (r.first == name) { r.second = line.substr(tab + 1, 1) == "1"; dup = true; }
+        if (!dup) rows.push_back({name, line.substr(tab + 1, 1) == "1"});
+    }
+    std::sort(rows.begin(), rows.end());
+    return rows;
+}
+
+void app_write(const std::vector<std::pair<std::wstring, bool>>& rows) {
+    std::string o;
+    for (auto& r : rows) o += to_utf8(U(r.first)) + "\t" + (r.second ? "1" : "0") + "\n";
+    write_file_atomic(g_dir / L"app_open.tsv", o);
+}
+
+void apps_refresh() {
+    if (!g_alist) return;
+    ListView_DeleteAllItems(g_alist);
+    int i = 0;
+    for (auto& r : app_rows()) {
+        std::wstring a = r.first, b = r.second ? T(29) : T(30);
+        LVITEMW it = {};
+        it.mask = LVIF_TEXT;
+        it.iItem = i;
+        it.pszText = a.data();
+        ListView_InsertItem(g_alist, &it);
+        ListView_SetItemText(g_alist, i, 1, b.data());
+        i++;
+    }
+}
+
+int app_selected() { return g_alist ? ListView_GetNextItem(g_alist, -1, LVNI_SELECTED) : -1; }
+
+void app_toggle() {
+    const int k = app_selected();
+    auto rows = app_rows();
+    if (k < 0 || k >= int(rows.size())) return;
+    rows[size_t(k)].second = !rows[size_t(k)].second;
+    app_write(rows);
+    apps_refresh();
+    ListView_SetItemState(g_alist, k, LVIS_SELECTED, LVIS_SELECTED);
+}
+
+void app_del() {
+    const int k = app_selected();
+    auto rows = app_rows();
+    if (k < 0 || k >= int(rows.size())) return;
+    rows.erase(rows.begin() + k);   // 消したソフトは次から「初めて使うソフト」の設定になる
+    app_write(rows);
+    apps_refresh();
 }
 
 void romaji_refresh() {
@@ -407,7 +493,7 @@ std::wstring shortcut_line(const std::string& key, const std::string& func) {
     const std::wstring name = n && *n ? n : W8(func);
     // 日本語キーボードのキーは日本語の名前で見せる (保存は英字の名前のまま)
     std::wstring k = W8(key);
-    for (auto [en, ja] : {std::pair{L"Muhenkan", L"無変換"}, {L"Henkan", L"変換"}, {L"Hiragana", L"ひらがな"}, {L"Kana", L"カタカナひらがな"}})
+    for (auto [en, ja] : {std::pair{L"Muhenkan", T(31)}, {L"Henkan", T(32)}, {L"Hiragana", T(33)}, {L"Kana", T(34)}})
         if (size_t i = k.rfind(en); i != std::wstring::npos && i + wcslen(en) == k.size()) { k = k.substr(0, i) + ja; break; }
     return k + L" → " + name;
 }
@@ -492,10 +578,10 @@ void shortcut_move(int delta) {
 
 void shortcut_reset() {
     const int kmi = std::clamp(int(SendDlgItemMessageW(g_adv, ADV_KEYMAP, CB_GETCURSEL, 0, 0)), 0, 2);
-    if (MessageBoxW(g_adv, L"キー割り当てを初期状態 (選んだ型) に戻します。よろしいですか?", L"shunti IME",
+    if (MessageBoxW(g_adv, T(35), L"shunti IME",
                     MB_YESNO | MB_ICONQUESTION) != IDYES)
         return;
-    g_s.keymap = KEYMAPS[kmi].id;
+    g_s.keymap = keymaps()[size_t(kmi)].id;
     g_s.shortcuts = default_shortcuts(g_s.keymap);
     shortcut_refresh();
     adv_save();
@@ -520,17 +606,17 @@ void export_words() {
     f.write(b.data(), std::streamsize(b.size()));
     f.close();
     if (!f) {
-        MessageBoxW(g_adv, L"書き出せませんでした (書き込めない場所かもしれません)。", L"ユーザー辞書", MB_ICONWARNING);
+        MessageBoxW(g_adv, T(36), T(13), MB_ICONWARNING);
         return;
     }
-    MessageBoxW(g_adv, (std::to_wstring(g_dict->entries().size()) + L" 語を書き出しました。").c_str(), L"ユーザー辞書", MB_ICONINFORMATION);
+    MessageBoxW(g_adv, (std::to_wstring(g_dict->entries().size()) + T(37)).c_str(), T(13), MB_ICONINFORMATION);
 }
 
 LRESULT CALLBACK adv_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_COMMAND) {
         int id = LOWORD(w), code = HIWORD(w);
         if (id == ADV_CLOSE || id == IDCANCEL) DestroyWindow(h);
-        else if ((id == ADV_NUMPAD || id == ADV_PAGE) && code == CBN_SELCHANGE) adv_save();
+        else if ((id == ADV_NUMPAD || id == ADV_PAGE || id == ADV_APPOPEN) && code == CBN_SELCHANGE) adv_save();
         else if (id >= ADV_SYM0 && id < ADV_SYM0 + 64 && code == BN_CLICKED) {   // 押すたびに全角 ⇔ 半角
             const char c = char(SYMS[id - ADV_SYM0]);
             const size_t at = g_half.find(c);
@@ -544,6 +630,8 @@ LRESULT CALLBACK adv_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
         else if ((id == ADV_LCONT || id == ADV_LTAP || id == ADV_LREP) && code == BN_CLICKED) adv_save();
         else if (id == ADV_RADD) romaji_add();
         else if (id == ADV_RDEL) romaji_del();
+        else if (id == ADV_ATOGGLE) app_toggle();
+        else if (id == ADV_ADEL) app_del();
         else if (id == ADV_SLIST && code == LBN_SELCHANGE) shortcut_select();
         else if (id == ADV_SADD) shortcut_add();
         else if (id == ADV_SCHG) shortcut_change();
@@ -556,6 +644,38 @@ LRESULT CALLBACK adv_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     if (m == WM_DESTROY) { g_adv = nullptr; EnableWindow(g_wnd, TRUE); SetForegroundWindow(g_wnd); return 0; }
     return DefWindowProcW(h, m, w, l);
+}
+
+// 更新の確認 (GitHub の最新の Windows 版)。interactive = ボタンから (結果を必ず知らせる)。開いたときは 1 日 1 回まで、新しい版があるときだけ知らせる
+void check_update(bool interactive) {
+    const std::filesystem::path stamp = g_dir / L"update_check.txt";
+    if (!interactive) {
+        std::error_code ec;
+        const auto t = std::filesystem::last_write_time(stamp, ec);
+        if (!ec && std::filesystem::file_time_type::clock::now() - t < std::chrono::hours(24)) return;
+        write_file_atomic(stamp, "checked\n");
+    }
+    HCURSOR old = SetCursor(LoadCursor(nullptr, IDC_WAIT));
+    shunti::update::Latest l = shunti::update::find_latest();
+    SetCursor(old);
+    if (l.version.empty()) {
+        if (interactive) MessageBoxW(g_wnd, (T(38) + l.error).c_str(), L"shunti IME", MB_ICONWARNING);
+        return;
+    }
+    if (!shunti::update::older(VERSION, l.version)) {
+        if (interactive) MessageBoxW(g_wnd, (std::wstring(T(39)) + VERSION + T(40)).c_str(), L"shunti IME", MB_ICONINFORMATION);
+        return;
+    }
+    const std::wstring q = T(41) + l.version + T(42) + VERSION + T(43) + T(44) + T(45);
+    const int a = MessageBoxW(g_wnd, q.c_str(), T(46), MB_ICONQUESTION | MB_YESNOCANCEL);
+    if (a == IDNO) { ShellExecuteW(g_wnd, L"open", l.page_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL); return; }
+    if (a != IDYES) return;
+    std::wstring err;
+    if (!shunti::update::download_and_install(l, err)) {
+        MessageBoxW(g_wnd, (T(47) + err).c_str(), L"shunti IME", MB_ICONERROR);
+        return;
+    }
+    PostMessageW(g_wnd, WM_CLOSE, 0, 0);   // 設定画面も入れ直すので閉じる
 }
 
 void open_advanced() {
@@ -573,28 +693,30 @@ void open_advanced() {
     }
     RECT r = {0, 0, S(960), S(ADV_RIGHT_BOTTOM + 45)};
     AdjustWindowRectExForDpi(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, FALSE, 0, g_dpi);
-    g_adv = CreateWindowExW(0, L"ShuntiImeAdvanced", L"shunti IME の詳細設定", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
+    g_adv = CreateWindowExW(0, L"ShuntiImeAdvanced", T(48), WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU,
                             CW_USEDEFAULT, CW_USEDEFAULT, r.right - r.left, r.bottom - r.top, g_wnd, nullptr, GetModuleHandleW(nullptr), nullptr);
     if (!g_adv) return;   // 窓を作れなかった: 設定の窓を使えないままにしない
     HWND keep = g_wnd;
     g_wnd = g_adv;
     int y = 8;
-    group(L"日本語入力時の記号 (クリックで変更)", y, 138);
+    group(T(49), y, 138);
     for (int i = 0; SYMS[i]; i++)
         make(L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP, 24 + (i % 8) * 54, y + 24 + (i / 8) * 28, 50, 25, ADV_SYM0 + i);
     y += 146;
-    group(L"入力", y, 84);
-    make(L"STATIC", L"テンキー:", 0, 24, y + 27, 90, 20, 0);
-    combo(130, y + 23, 240, ADV_NUMPAD, {L"常に半角", L"数字の全角/半角の設定に合わせる", L"常に全角"});
-    make(L"STATIC", L"候補の窓の数:", 0, 24, y + 57, 100, 20, 0);
-    combo(130, y + 53, 100, ADV_PAGE, {L"5", L"6", L"7", L"8", L"9"});
-    y += 92;
-    group(L"その他", y, 90);
-    make(L"BUTTON", L"プライベート (学習機能を一時的にオフ。Ctrl+Shift+F10 でも切り替え)", BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 22, 430, 22, ADV_PRIVATE);
-    make(L"BUTTON", L"ユーザー辞書を書き出す…", BS_PUSHBUTTON | WS_TABSTOP, 24, y + 54, 180, 25, ADV_EXPORT);
+    group(T(50), y, 114);
+    make(L"STATIC", T(51), 0, 24, y + 27, 120, 20, 0);
+    combo(150, y + 23, 300, ADV_NUMPAD, {T(52), T(53), T(54)});
+    make(L"STATIC", T(55), 0, 24, y + 57, 120, 20, 0);
+    combo(150, y + 53, 100, ADV_PAGE, {L"5", L"6", L"7", L"8", L"9"});
+    make(L"STATIC", T(56), 0, 24, y + 87, 120, 20, 0);
+    combo(150, y + 83, 300, ADV_APPOPEN, {T(57), T(58)});
+    y += 122;
+    group(T(59), y, 90);
+    make(L"BUTTON", T(60), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 22, 430, 22, ADV_PRIVATE);
+    make(L"BUTTON", T(61), BS_PUSHBUTTON | WS_TABSTOP, 24, y + 54, 180, 25, ADV_EXPORT);
     y += 98;
     g_lgroup_y = y;
-    g_lgroup = make(L"BUTTON", L"キー配列 (日本語入力がオンのとき)", BS_GROUPBOX, 10, y, 460, 198, 0);
+    g_lgroup = make(L"BUTTON", T(62), BS_GROUPBOX, 10, y, 460, 198, 0);
     {
         load_layouts();
         HWND cb = make(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, 24, y + 23, 300, 400, ADV_LAYOUT);
@@ -602,46 +724,46 @@ void open_advanced() {
     }
     make(L"STATIC", L"", 0, 24, y + 52, 430, 20, ADV_LAYOUT_NOTE);
     // 流儀の分かれる所 (配列ソフトの設定と同じ)。位置は adv_layout_relayout が決める
-    g_lthumb_label = make(L"STATIC", L"親指キー:", 0, 24, y + 78, 80, 20, 0);
-    combo(110, y + 74, 200, ADV_LTHUMBS, {L"無変換・変換", L"無変換・空白", L"空白・変換"});
-    make(L"BUTTON", L"連続シフト (親指を押したまま続けて打つ)", BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 102, 430, 22, ADV_LCONT);
-    make(L"BUTTON", L"親指キーを単独で押したら 本来のキー (空白・変換・無変換)", BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 124, 430, 22, ADV_LTAP);
-    make(L"BUTTON", L"押しっぱなしで繰り返す", BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 146, 430, 22, ADV_LREP);
-    g_lother = make(L"STATIC", L"その他の配列は 設定のフォルダに layout_名前.tsv を置くと ここに出ます", 0, 24, y + 172, 440, 20, 0);
-    make(L"BUTTON", L"閉じる", BS_DEFPUSHBUTTON | WS_TABSTOP, 870, y, 80, 25, ADV_CLOSE);
+    g_lthumb_label = make(L"STATIC", T(63), 0, 24, y + 78, 80, 20, 0);
+    combo(110, y + 74, 200, ADV_LTHUMBS, {T(64), T(65), T(66)});
+    make(L"BUTTON", T(67), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 102, 430, 22, ADV_LCONT);
+    make(L"BUTTON", T(68), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 124, 430, 22, ADV_LTAP);
+    make(L"BUTTON", T(69), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 146, 430, 22, ADV_LREP);
+    g_lother = make(L"STATIC", T(70), 0, 24, y + 172, 440, 20, 0);
+    make(L"BUTTON", T(71), BS_DEFPUSHBUTTON | WS_TABSTOP, 870, y, 80, 25, ADV_CLOSE);
 
     // ---- 右の列: ショートカットキー・ローマ字の表 ----
     auto rgroup = [](const wchar_t* t, int gy, int h) { make(L"BUTTON", t, BS_GROUPBOX, 490, gy, 460, h, 0); };
     int ry = 8;
-    rgroup(L"キー割り当て", ry, 341);
-    make(L"STATIC", L"型:", 0, 506, ry + 24, 30, 20, 0);
+    rgroup(T(72), ry, 341);
+    make(L"STATIC", T(73), 0, 506, ry + 24, 30, 20, 0);
     {
         HWND cb = make(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP, 542, ry + 20, 120, 200, ADV_KEYMAP);
-        for (auto& km : KEYMAPS) SendMessageW(cb, CB_ADDSTRING, 0, LPARAM(km.name));
+        for (auto& km : keymaps()) SendMessageW(cb, CB_ADDSTRING, 0, LPARAM(km.name));
     }
-    make(L"BUTTON", L"初期状態に戻す", BS_PUSHBUTTON | WS_TABSTOP, 820, ry + 20, 114, 25, ADV_SRESET);
+    make(L"BUTTON", T(74), BS_PUSHBUTTON | WS_TABSTOP, 820, ry + 20, 114, 25, ADV_SRESET);
     // 既定も自分で追加も同じ一覧 (上から順に、使える状態のものが効く)
     make(WC_LISTBOXW, L"", LBS_NOTIFY | WS_BORDER | WS_VSCROLL | WS_TABSTOP, 506, ry + 52, 428, 210, ADV_SLIST);
-    make(L"STATIC", L"キー:", 0, 506, ry + 270, 40, 20, 0);
+    make(L"STATIC", T(75), 0, 506, ry + 270, 40, 20, 0);
     make(HOTKEY_CLASSW, L"", WS_BORDER | WS_TABSTOP, 548, ry + 266, 130, 23, ADV_SKEY);
-    make(L"STATIC", L"機能:", 0, 686, ry + 270, 40, 20, 0);
+    make(L"STATIC", T(76), 0, 686, ry + 270, 40, 20, 0);
     {
         HWND cb = make(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, 728, ry + 266, 206, 300, ADV_SFUNC);
         for (auto& f : shortcut_funcs()) SendMessageW(cb, CB_ADDSTRING, 0, LPARAM(f.name));
         SendMessageW(cb, CB_SETCURSEL, 0, 0);
     }
-    make(L"BUTTON", L"追加", BS_PUSHBUTTON | WS_TABSTOP, 506, ry + 296, 60, 25, ADV_SADD);
-    make(L"BUTTON", L"変更", BS_PUSHBUTTON | WS_TABSTOP, 574, ry + 296, 60, 25, ADV_SCHG);
-    make(L"BUTTON", L"削除", BS_PUSHBUTTON | WS_TABSTOP, 642, ry + 296, 60, 25, ADV_SDEL);
-    make(L"BUTTON", L"上へ", BS_PUSHBUTTON | WS_TABSTOP, 800, ry + 296, 60, 25, ADV_SUP);
-    make(L"BUTTON", L"下へ", BS_PUSHBUTTON | WS_TABSTOP, 868, ry + 296, 60, 25, ADV_SDOWN);
+    make(L"BUTTON", T(77), BS_PUSHBUTTON | WS_TABSTOP, 506, ry + 296, 60, 25, ADV_SADD);
+    make(L"BUTTON", T(78), BS_PUSHBUTTON | WS_TABSTOP, 574, ry + 296, 60, 25, ADV_SCHG);
+    make(L"BUTTON", T(79), BS_PUSHBUTTON | WS_TABSTOP, 642, ry + 296, 60, 25, ADV_SDEL);
+    make(L"BUTTON", T(80), BS_PUSHBUTTON | WS_TABSTOP, 800, ry + 296, 60, 25, ADV_SUP);
+    make(L"BUTTON", T(81), BS_PUSHBUTTON | WS_TABSTOP, 868, ry + 296, 60, 25, ADV_SDOWN);
     shortcut_refresh();
     ry += 351;
-    rgroup(L"ローマ字の表 (足した綴りは元の表より優先)", ry, 172);
-    g_rlist = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 506, ry + 22, 428, 100, ADV_RLIST);
+    rgroup(T(82), ry, 132);
+    g_rlist = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 506, ry + 22, 428, 66, ADV_RLIST);
     ListView_SetExtendedListViewStyle(g_rlist, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     {
-        const wchar_t* cols[] = {L"綴り", L"かな"};
+        const wchar_t* cols[] = {T(83), T(84)};
         for (int i = 0; i < 2; i++) {
             LVCOLUMNW c = {};
             c.mask = LVCF_TEXT | LVCF_WIDTH;
@@ -650,19 +772,39 @@ void open_advanced() {
             ListView_InsertColumn(g_rlist, i, &c);
         }
     }
-    make(L"STATIC", L"綴り:", 0, 506, ry + 135, 40, 20, 0);
-    make(L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 548, ry + 132, 100, 23, ADV_RKEY);
-    make(L"STATIC", L"かな:", 0, 660, ry + 135, 40, 20, 0);
-    make(L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 702, ry + 132, 100, 23, ADV_RKANA);
-    make(L"BUTTON", L"追加", BS_PUSHBUTTON | WS_TABSTOP, 810, ry + 131, 60, 25, ADV_RADD);
-    make(L"BUTTON", L"削除", BS_PUSHBUTTON | WS_TABSTOP, 874, ry + 131, 60, 25, ADV_RDEL);
+    make(L"STATIC", T(85), 0, 506, ry + 99, 40, 20, 0);
+    make(L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 548, ry + 96, 100, 23, ADV_RKEY);
+    make(L"STATIC", T(86), 0, 660, ry + 99, 40, 20, 0);
+    make(L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 702, ry + 96, 100, 23, ADV_RKANA);
+    make(L"BUTTON", T(77), BS_PUSHBUTTON | WS_TABSTOP, 810, ry + 95, 60, 25, ADV_RADD);
+    make(L"BUTTON", T(79), BS_PUSHBUTTON | WS_TABSTOP, 874, ry + 95, 60, 25, ADV_RDEL);
     romaji_refresh();
+    // ソフトごとの日本語入力のオン・オフ (ソフトを閉じたときの状態を覚えて、次に起動したとき戻す。ユーザー 2026-10-20)
+    // 左の列のキー配列の欄の下 (位置は adv_layout_relayout が決める。右の列に置くと窓が画面より縦に長くなった)
+    g_agroup = make(L"BUTTON", T(87), BS_GROUPBOX, 10, 0, 460, 120, 0);
+    g_alist = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 26, 20, 428, 64, ADV_ALIST);
+    ListView_SetExtendedListViewStyle(g_alist, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+    {
+        const wchar_t* cols[] = {T(88), T(89)};
+        const int widths[] = {300, 100};
+        for (int i = 0; i < 2; i++) {
+            LVCOLUMNW c = {};
+            c.mask = LVCF_TEXT | LVCF_WIDTH;
+            c.pszText = const_cast<wchar_t*>(cols[i]);
+            c.cx = S(widths[i]);
+            ListView_InsertColumn(g_alist, i, &c);
+        }
+    }
+    make(L"BUTTON", T(90), BS_PUSHBUTTON | WS_TABSTOP, 26, 88, 160, 25, ADV_ATOGGLE);
+    make(L"BUTTON", T(91), BS_PUSHBUTTON | WS_TABSTOP, 194, 88, 120, 25, ADV_ADEL);
+    apps_refresh();
     g_loading = true;
     g_half = g_s.half_symbols;
     for (int i = 0; SYMS[i]; i++) sym_label(i);
     select(ADV_NUMPAD, g_s.numpad);
     select(ADV_PAGE, std::clamp(g_s.page_size, 5, 9) - 5);
     check(ADV_PRIVATE, g_s.private_mode);
+    select(ADV_APPOPEN, g_s.app_default_open ? 0 : 1);
     select(ADV_KEYMAP, g_s.keymap == "atok" ? 1 : g_s.keymap == "kotoeri" ? 2 : 0);
     select(ADV_LAYOUT, layout_index(g_s.layout));
     select(ADV_LTHUMBS, g_s.layout_thumbs);
@@ -688,41 +830,42 @@ void remove_word() {
 }
 
 void reset_learning() {
-    if (MessageBoxW(g_wnd, L"変換で選び直して覚えた語を、すべて忘れます。よろしいですか?", L"学習をリセット",
+    if (MessageBoxW(g_wnd, T(92), T(93),
                     MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
         return;
     Learning(g_dir / L"learned.json").clear();
-    MessageBoxW(g_wnd, L"学習をリセットしました。", L"shunti IME", MB_ICONINFORMATION);
+    MessageBoxW(g_wnd, T(94), L"shunti IME", MB_ICONINFORMATION);
 }
 
 void build() {
     int y = 8;
-    group(L"表示", y, 86);
-    make(L"STATIC", L"候補ウィンドウの色:", 0, 24, y + 27, 170, 20, 0);
-    combo(200, y + 23, 250, ID_THEME, {L"Windows の設定に合わせる", L"ライト", L"ダーク"});
-    make(L"BUTTON", L"アイコンの色をタスクバーに合わせる", BS_PUSHBUTTON | WS_TABSTOP, 24, y + 52, 250, 25, ID_ICON);
+    group(T(95), y, 86);
+    make(L"STATIC", T(96), 0, 24, y + 27, 170, 20, 0);
+    combo(200, y + 23, 250, ID_THEME, {T(97), T(98), T(99)});
+    make(L"BUTTON", T(100), BS_PUSHBUTTON | WS_TABSTOP, 24, y + 52, 250, 25, ID_ICON);
     y += 94;
 
-    group(L"変換", y, 60);
-    make(L"STATIC", L"変換モデル:", 0, 24, y + 27, 170, 20, 0);
-    combo(200, y + 23, 250, ID_MODEL, {L"軽量 (XS5)", L"標準 (S7)　推奨"});
+    group(T(32), y, 60);
+    make(L"STATIC", T(101), 0, 24, y + 27, 170, 20, 0);
+    combo(200, y + 23, 250, ID_MODEL, {T(102), T(103)});
     y += 68;
 
-    group(L"入力", y, 210);
-    make(L"STATIC", L"句読点:", 0, 24, y + 27, 170, 20, 0);
-    combo(200, y + 23, 120, ID_PUNCT, {L"、。", L"，．", L"、．", L"，。"});
-    make(L"BUTTON", L"何も入力していないときのスペースを全角にする", BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 54, 430, 22, ID_SPACE);
-    make(L"BUTTON", L"数字を全角で入力する", BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 79, 430, 22, ID_DIGITS);
-    make(L"BUTTON", L"入力中も変換候補を表示する", BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 104, 430, 22, ID_LIVE);
-    make(L"BUTTON", L"入力中の文字も変換して表示する (ライブ変換)", BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 129, 430, 22, ID_LIVEDISPLAY);
-    make(L"BUTTON", L"変換演算を直近の文字にのみ適用 (より軽量)", BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 154, 430, 22, ID_LIVECOMMIT);
-    make(L"BUTTON", L"提案 (打ち間違いの直し・日付・絵文字など) を候補と分けて表示する", BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 179, 430, 22, ID_SUGGEST);
-    y += 218;
+    group(T(50), y, 235);
+    make(L"STATIC", T(104), 0, 24, y + 27, 170, 20, 0);
+    combo(200, y + 23, 120, ID_PUNCT, {T(105), T(106), T(107), T(108)});
+    make(L"BUTTON", T(109), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 54, 430, 22, ID_SPACE);
+    make(L"BUTTON", T(110), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 79, 430, 22, ID_DIGITS);
+    make(L"BUTTON", T(111), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 104, 430, 22, ID_LIVE);
+    make(L"BUTTON", T(112), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 129, 430, 22, ID_LIVEDISPLAY);
+    make(L"BUTTON", T(113), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 154, 430, 22, ID_LIVECOMMIT);
+    make(L"BUTTON", T(114), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 179, 430, 22, ID_SUGGEST);
+    make(L"BUTTON", T(159), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 204, 430, 22, ID_CANDTREE);
+    y += 243;
 
-    group(L"ユーザー辞書", y, 216);
+    group(T(13), y, 216);
     g_list = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 24, y + 22, 432, 90, ID_LIST);
     ListView_SetExtendedListViewStyle(g_list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-    const wchar_t* cols[] = {L"読み", L"単語", L"品詞"};
+    const wchar_t* cols[] = {T(115), T(116), T(117)};
     int widths[] = {130, 130, 150};
     for (int i = 0; i < 3; i++) {
         LVCOLUMNW c = {};
@@ -731,34 +874,35 @@ void build() {
         c.cx = S(widths[i]);
         ListView_InsertColumn(g_list, i, &c);
     }
-    make(L"STATIC", L"読み:", 0, 24, y + 125, 44, 20, 0);
+    make(L"STATIC", T(118), 0, 24, y + 125, 44, 20, 0);
     make(L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 70, y + 122, 150, 23, ID_READING);
-    make(L"STATIC", L"単語:", 0, 232, y + 125, 44, 20, 0);
+    make(L"STATIC", T(119), 0, 232, y + 125, 44, 20, 0);
     make(L"EDIT", L"", ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 278, y + 122, 178, 23, ID_WORD);
-    make(L"STATIC", L"品詞:", 0, 24, y + 156, 44, 20, 0);
+    make(L"STATIC", T(120), 0, 24, y + 156, 44, 20, 0);
     HWND pos = make(WC_COMBOBOXW, L"", CBS_DROPDOWNLIST | WS_TABSTOP | WS_VSCROLL, 70, y + 152, 210, 200, ID_POS);
-    for (auto& p : POS) SendMessageW(pos, CB_ADDSTRING, 0, LPARAM(p.label));
-    make(L"BUTTON", L"追加", BS_PUSHBUTTON | WS_TABSTOP, 290, y + 151, 80, 25, ID_ADD);
-    make(L"BUTTON", L"削除", BS_PUSHBUTTON | WS_TABSTOP, 376, y + 151, 80, 25, ID_REMOVE);
-    make(L"BUTTON", L"ファイルから辞書を登録…", BS_PUSHBUTTON | WS_TABSTOP, 24, y + 182, 190, 25, ID_IMPORT);
-    make(L"STATIC", L"動詞・形容詞は終止形で\nMS-IME の一覧 (.txt) も登録可能",
+    for (auto& p : pos_items()) SendMessageW(pos, CB_ADDSTRING, 0, LPARAM(p.label));
+    make(L"BUTTON", T(77), BS_PUSHBUTTON | WS_TABSTOP, 290, y + 151, 80, 25, ID_ADD);
+    make(L"BUTTON", T(79), BS_PUSHBUTTON | WS_TABSTOP, 376, y + 151, 80, 25, ID_REMOVE);
+    make(L"BUTTON", T(121), BS_PUSHBUTTON | WS_TABSTOP, 24, y + 182, 190, 25, ID_IMPORT);
+    make(L"STATIC", T(122),
          0, 222, y + 180, 240, 34, 0);
     y += 224;
 
-    group(L"学習", y, 60);
-    make(L"BUTTON", L"学習をリセット", BS_PUSHBUTTON | WS_TABSTOP, 24, y + 24, 140, 25, ID_RESET);
+    group(T(123), y, 60);
+    make(L"BUTTON", T(93), BS_PUSHBUTTON | WS_TABSTOP, 24, y + 24, 140, 25, ID_RESET);
     y += 68;
-    make(L"BUTTON", L"詳細設定…", BS_PUSHBUTTON | WS_TABSTOP, 10, y, 120, 25, ID_ADVANCED);
+    make(L"BUTTON", T(124), BS_PUSHBUTTON | WS_TABSTOP, 10, y, 120, 25, ID_ADVANCED);
+    make(L"BUTTON", T(125), BS_PUSHBUTTON | WS_TABSTOP, 138, y, 120, 25, ID_UPDATE);
     y += 35;
 
     std::wstring about = std::wstring(L"shunti IME ") + VERSION;
 #ifdef SHUNTI_INPUT_LOG
-    about += L" (デバッグ版: 入力を記録しています)";
+    about += T(126);
 #endif
     make(L"STATIC", about.c_str(), 0, 14, y + 6, 200, 36, 0);
-    make(L"BUTTON", L"ライセンス", BS_PUSHBUTTON | WS_TABSTOP, 222, y, 80, 25, ID_LICENSE);
+    make(L"BUTTON", T(127), BS_PUSHBUTTON | WS_TABSTOP, 222, y, 80, 25, ID_LICENSE);
     make(L"BUTTON", L"GitHub", BS_PUSHBUTTON | WS_TABSTOP, 308, y, 76, 25, ID_GITHUB);
-    make(L"BUTTON", L"閉じる", BS_DEFPUSHBUTTON | WS_TABSTOP, 390, y, 80, 25, IDCANCEL);
+    make(L"BUTTON", T(71), BS_DEFPUSHBUTTON | WS_TABSTOP, 390, y, 80, 25, IDCANCEL);
 
     g_loading = true;
     select(ID_THEME, g_s.theme == "light" ? 1 : g_s.theme == "dark" ? 2 : 0);
@@ -769,6 +913,7 @@ void build() {
     check(ID_DIGITS, g_s.digits_fullwidth);
     check(ID_LIVE, g_s.live);
     check(ID_LIVEDISPLAY, g_s.live_display);
+    check(ID_CANDTREE, g_s.cand_tree);
     check(ID_LIVECOMMIT, g_s.live_commit);
     check(ID_SUGGEST, g_s.separate_suggest);
     g_loading = false;
@@ -777,7 +922,10 @@ void build() {
 
 LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
-        case WM_COMMAND: {
+        case WM_APP + 7:
+        check_update(false);
+        return 0;
+    case WM_COMMAND: {
             int id = LOWORD(w), code = HIWORD(w);
             if ((id == ID_THEME || id == ID_PUNCT || id == ID_MODEL) && code == CBN_SELCHANGE) save();
             else if (id == IDCANCEL) DestroyWindow(h);   // 「閉じる」と Esc
@@ -785,6 +933,7 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             else if (id == ID_ADD) add_word();
             else if (id == ID_IMPORT) import_words();
             else if (id == ID_ADVANCED) open_advanced();
+            else if (id == ID_UPDATE) check_update(true);
             else if (id == ID_REMOVE) remove_word();
             else if (id == ID_RESET) reset_learning();
             else if (id == ID_ICON) {
@@ -795,7 +944,7 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
                 std::wstring args = L"/s \"" + (fs::path(exe).parent_path() / L"shunti_ime_x64.dll").wstring() + L"\"";
                 std::wstring reg = std::wstring(sys) + L"\\regsvr32.exe";
                 if (reinterpret_cast<INT_PTR>(ShellExecuteW(h, L"runas", reg.c_str(), args.c_str(), nullptr, SW_HIDE)) > 32)
-                    MessageBoxW(h, L"アイコンの色を合わせました。タスクバーに出るまで、IME を切り替え直すか、少し待ってください。",
+                    MessageBoxW(h, T(128),
                                 L"shunti IME", MB_ICONINFORMATION);
             }
             else if (id == ID_LICENSE) {
@@ -850,9 +999,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     RegisterClassExW(&wc);
 
     g_dpi = GetDpiForSystem();
-    RECT rc = {0, 0, S(480), S(791)};
+    RECT rc = {0, 0, S(480), S(816)};
     AdjustWindowRectExForDpi(&rc, WS_OVERLAPPEDWINDOW & ~(WS_MAXIMIZEBOX | WS_THICKFRAME), FALSE, 0, g_dpi);
-    g_wnd = CreateWindowExW(0, wc.lpszClassName, L"shunti IME の設定", WS_OVERLAPPEDWINDOW & ~(WS_MAXIMIZEBOX | WS_THICKFRAME),
+    g_wnd = CreateWindowExW(0, wc.lpszClassName, T(129), WS_OVERLAPPEDWINDOW & ~(WS_MAXIMIZEBOX | WS_THICKFRAME),
                             CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top, nullptr, nullptr, inst, nullptr);
     g_dpi = GetDpiForWindow(g_wnd);
     // Windows の既定のメッセージ用の文字 (ダイアログと同じ)
@@ -861,6 +1010,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     g_font = CreateFontIndirectW(&ncm.lfMessageFont);
     build();
     ShowWindow(g_wnd, show);
+    PostMessageW(g_wnd, WM_APP + 7, 0, 0);   // 開いた後に更新を確かめる (1 日 1 回まで)
     if (open_dict) SetFocus(GetDlgItem(g_wnd, ID_READING));
 
     MSG msg;

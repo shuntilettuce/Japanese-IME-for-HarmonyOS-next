@@ -1,18 +1,23 @@
 #include "cand_window.h"
 
 #include <dwmapi.h>
+#include <objidl.h>
+#include <gdiplus.h>
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 
 #include "../core/composer.h"
 #include "globals.h"
+#include "strings.h"
 
 namespace shunti {
 namespace win {
 
 namespace {
 constexpr wchar_t CLASS_NAME[] = L"ShuntiImeCandidates";
+constexpr wchar_t TREE_CLASS_NAME[] = L"ShuntiImeCandidateTree";
 
 struct Colors { COLORREF bg, border, text, sub, sel_bg, sel_text, accent; };
 // Android 版・HarmonyOS 版の色 (LIGHT_THEME・DARK_THEME) に合わせる
@@ -44,14 +49,18 @@ CandWindow::~CandWindow() { destroy(); }
 void CandWindow::destroy() {
     if (hwnd_) DestroyWindow(hwnd_);
     hwnd_ = nullptr;
+    if (thwnd_) DestroyWindow(thwnd_);
+    thwnd_ = nullptr;
     if (font_) DeleteObject(font_);
     if (small_) DeleteObject(small_);
     font_ = small_ = nullptr;
+    for (HFONT* f : {&tfont_, &tsmall_, &talt_}) { if (*f) DeleteObject(*f); *f = nullptr; }
     dpi_ = 0;
 }
 
 void CandWindow::hide() {
     if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
+    if (thwnd_) ShowWindow(thwnd_, SW_HIDE);
 }
 
 LRESULT CALLBACK CandWindow::proc(HWND h, UINT m, WPARAM w, LPARAM l) {
@@ -70,11 +79,17 @@ LRESULT CALLBACK CandWindow::proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             return 1;
         case WM_LBUTTONUP:
             if (self && self->on_sugg_click) {
-                int i = self->hit_sugg(short(LOWORD(l)), short(HIWORD(l)));
+                int i = self->hit_sugg(short(LOWORD(l)) - self->list_x_, short(HIWORD(l)) - self->tree_h_);
                 if (i >= 0) { self->on_sugg_click(i); return 0; }
             }
+            if (self && self->on_click && !self->tree_.empty()) {
+                const POINT pt = {short(LOWORD(l)), short(HIWORD(l))};
+                for (size_t k = 0; k < self->tcands_.size(); k++)
+                    if (PtInRect(&self->tcands_[k].r, pt)) { self->on_click(self->tcand_idx_[k]); return 0; }
+                return 0;
+            }
             if (self && self->on_click) {
-                int i = self->hit(short(LOWORD(l)), short(HIWORD(l)));
+                int i = self->hit(short(LOWORD(l)) - self->list_x_, short(HIWORD(l)) - self->tree_h_);
                 if (i >= 0) self->on_click(i);
             }
             return 0;
@@ -87,12 +102,14 @@ LRESULT CALLBACK CandWindow::proc(HWND h, UINT m, WPARAM w, LPARAM l) {
 void CandWindow::show(const std::vector<u16>& cands, int sel, const RECT& anchor, HWND owner, const std::vector<u16>& sugg,
                       int sugg_sel, const std::vector<u16>& notes) {
     notes_ = notes;
-    if (cands.empty() && sugg.empty()) { hide(); return; }
+    if (cands.empty() && sugg.empty() && tree_.empty()) { hide(); return; }
     sugg_sel_ = sugg_sel;
     sugg_ = sugg;
     if (!register_class()) return;
     if (!hwnd_ || owner_ != owner) {
         if (hwnd_) DestroyWindow(hwnd_);
+        if (thwnd_) DestroyWindow(thwnd_);
+        thwnd_ = nullptr;
         owner_ = owner;
         hwnd_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, CLASS_NAME, L"", WS_POPUP, 0, 0, 1, 1,
                                 owner, nullptr, g_inst, nullptr);
@@ -110,6 +127,10 @@ void CandWindow::show(const std::vector<u16>& cands, int sel, const RECT& anchor
         dpi_ = dpi;
         font_ = CreateFontW(-MulDiv(16, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Yu Gothic UI");
         small_ = CreateFontW(-MulDiv(12, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Yu Gothic UI");
+        for (HFONT* f : {&tfont_, &tsmall_, &talt_}) if (*f) DeleteObject(*f);
+        tfont_ = CreateFontW(-MulDiv(14, int(dpi), 96), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Yu Gothic UI");
+        tsmall_ = CreateFontW(-MulDiv(9, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Yu Gothic UI");
+        talt_ = CreateFontW(-MulDiv(12, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Yu Gothic UI");
     }
     cands_ = cands;
     sel_ = std::clamp(sel, -1, int(cands.size()) - 1);   // -1 = まだ選んでいない (打っている間の候補)
@@ -121,11 +142,17 @@ void CandWindow::show(const std::vector<u16>& cands, int sel, const RECT& anchor
     MONITORINFO mi = {sizeof mi};
     GetMonitorInfoW(mon, &mi);
     RECT wa = mi.rcWork;
-    int x = anchor.left - pad_ - num_w_;
+    int x = tree_.empty() ? anchor.left - pad_ - num_w_ : anchor.left - MulDiv(14, int(dpi_), 96);   // 木は最初の札を文字の頭に
     int y = anchor.bottom + MulDiv(2, int(dpi_), 96);
     if (y + height_ > wa.bottom) y = anchor.top - height_ - MulDiv(2, int(dpi_), 96);
     x = std::max(int(wa.left), std::min(x, int(wa.right) - width_));
     y = std::max(int(wa.top), y);
+    if (!tree_.empty()) {   // 候補の木は背景の無い窓で
+        ShowWindow(hwnd_, SW_HIDE);
+        present_tree(x, y);
+        return;
+    }
+    if (thwnd_) ShowWindow(thwnd_, SW_HIDE);
     SetWindowPos(hwnd_, HWND_TOPMOST, x, y, width_, height_, SWP_NOACTIVATE | SWP_SHOWWINDOW);
     InvalidateRect(hwnd_, nullptr, FALSE);
 }
@@ -192,23 +219,494 @@ void CandWindow::layout() {
     width_ = pad_ + num_w_ + text_w + pad_ * 2;
     if (cands_.empty() && sugg_.empty()) footer_h_ = 0;
     height_ = cands_.empty() ? footer_h_ : pad_ / 2 + row_h_ * (end - start) + footer_h_;
+    // 候補の木の帯を上に。候補の一覧は選んでいる文節の札の下にずらす
+    tree_w_ = tree_h_ = list_x_ = 0;
+    tseps_.clear();
+    if (!tree_.empty()) {
+        HDC tdc = GetDC(hwnd_);
+        layout_tree(tdc);
+        ReleaseDC(hwnd_, tdc);
+    }
+    lw_ = width_;
+    lh_ = height_;
+    if (!tree_.empty()) lw_ = lh_ = 0;   // 候補は木の帯の中 (選んでいる札の下) に出す
+    if (lh_ == 0) list_x_ = 0;
+    width_ = std::max(tree_w_, list_x_ + lw_);
+    height_ = tree_h_ + lh_;
+}
+
+namespace {
+constexpr int TB_R = 47, TB_G = 111, TB_B = 237;   // shunti IME の青
+COLORREF blend(COLORREF bg, float a) {
+    a = std::clamp(a, 0.f, 1.f);
+    return RGB(int(GetRValue(bg) + (TB_R - GetRValue(bg)) * a), int(GetGValue(bg) + (TB_G - GetGValue(bg)) * a),
+               int(GetBValue(bg) + (TB_B - GetBValue(bg)) * a));
+}
+bool ensure_gdiplus() {
+    static ULONG_PTR token = 0;
+    if (!token) {
+        Gdiplus::GdiplusStartupInput in;
+        if (Gdiplus::GdiplusStartup(&token, &in, nullptr) != Gdiplus::Ok) token = 0;
+    }
+    return token != 0;
+}
+// 字の幅と高さ。描くのと同じ GDI+ の計り方で (GDI で計ると GDI+ で描いた字がはみ出して … で切れた)
+SIZE text_size(HDC dc, HFONT f, const u16& t) {
+    SIZE z = {};
+    if (!ensure_gdiplus()) {
+        HGDIOBJ o = SelectObject(dc, f);
+        GetTextExtentPoint32W(dc, W(t), int(t.size()), &z);
+        SelectObject(dc, o);
+        return z;
+    }
+    Gdiplus::Graphics g(dc);
+    g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAliasGridFit);
+    Gdiplus::Font font(dc, f);
+    Gdiplus::RectF out;
+    g.MeasureString(W(t), INT(t.size()), &font, Gdiplus::PointF(0, 0), Gdiplus::StringFormat::GenericTypographic(), &out);
+    z.cx = LONG(std::ceil(out.Width));
+    z.cy = LONG(std::ceil(font.GetHeight(&g)));
+    return z;
+}
+// 強さの色: 弱い 赤 → オレンジ → 黄 → 黄緑 → 青 強い (青の濃さだけでは見分けにくい。ユーザー 2026-10-20)。
+// 木に無い候補 (強さが分からない = ほぼ 0) は赤
+COLORREF strength_color(float s) {
+    struct Stop { float at; int r, g, b; };
+    static const Stop st[] = {{0.f, 0xE5, 0x39, 0x35}, {0.15f, 0xFF, 0x8A, 0x1F}, {0.4f, 0xFF, 0xD2, 0x1A},
+                              {0.7f, 0x8B, 0xD3, 0x2E}, {1.f, TB_R, TB_G, TB_B}};
+    s = std::clamp(s, 0.f, 1.f);
+    for (int i = 0; i < 4; i++) {
+        if (s > st[i + 1].at) continue;
+        const float t = (s - st[i].at) / (st[i + 1].at - st[i].at);
+        return RGB(int(st[i].r + (st[i + 1].r - st[i].r) * t), int(st[i].g + (st[i + 1].g - st[i].g) * t), int(st[i].b + (st[i + 1].b - st[i].b) * t));
+    }
+    return RGB(TB_R, TB_G, TB_B);
+}
+COLORREF mix(COLORREF a, COLORREF b, float t) {
+    return RGB(int(GetRValue(a) + (GetRValue(b) - GetRValue(a)) * t), int(GetGValue(a) + (GetGValue(b) - GetGValue(a)) * t),
+               int(GetBValue(a) + (GetBValue(b) - GetBValue(a)) * t));
+}
+// 地の色に合う字の色 (明るい地なら濃い字)
+COLORREF ink_on(COLORREF bg) {
+    const float l = (0.299f * GetRValue(bg) + 0.587f * GetGValue(bg) + 0.114f * GetBValue(bg)) / 255.f;
+    return l > 0.58f ? RGB(0x1D, 0x24, 0x33) : RGB(255, 255, 255);
+}
+
+u16 percent(float s) {
+    const std::string n = std::to_string(int(std::lround(s * 100)));
+    return u16(n.begin(), n.end());
+}
+}  // namespace
+
+// 小さな札 (別の候補) の四角: 字の後ろに強さの数字を小さく (s < 0 なら数字なし)。cx = 中央、top = 字の上
+RECT CandWindow::pill_rect(HDC dc, const u16& text, float s, int cx, int top) const {
+    const SIZE z = text_size(dc, talt_, text);
+    const int nw = s >= 0 ? int(text_size(dc, tsmall_, percent(s)).cx) + MulDiv(4, int(dpi_), 96) : 0;
+    const int w = z.cx + nw + MulDiv(10, int(dpi_), 96);
+    return {cx - w / 2, top - MulDiv(1, int(dpi_), 96), cx - w / 2 + w, top + z.cy + MulDiv(1, int(dpi_), 96)};
+}
+
+// 候補の木の帯: 文節の札をピンと張った線でつなぎ、札の色 = 語の強さ (strength_color)、線の色と太さ = 前の語との結びつき。
+// 選んでいる札の下に、その文節の候補を強さの数字つきで縦に並べる (二股の頭なら別の区切りの文も強さの順に混ぜる)。
+// 選んでいる候補からは、基板の配線のように本線へケーブルを引く (今の文がどの候補を通っているか)。
+// 確信している語 (90 以上) は別の候補を出さない。選んでいない二股は、区間の下に別の区切りを薄いセルで出す
+void CandWindow::layout_tree(HDC dc) {
+    auto d = [&](int v) { return MulDiv(v, int(dpi_), 96); };
+    tchips_.clear();
+    ttexts_.clear();
+    tlines_.clear();
+    tdots_.clear();
+    tpaths_.clear();
+    tcands_.clear();
+    tcand_idx_.clear();
+    const int H = d(22), GAP = d(12), pad = d(8), FH = d(20);
+    const int Y = pad + H / 2;
+    int maxY = Y + H / 2 + d(16), maxX = 0;
+    bool list_set = false, col_set = false;
+    struct FCell { RECT r; const TreeWord* w; };
+    std::vector<FCell> fcells;   // 選んでいない二股の別の区切り (y は後で、いちばん下に)
+    // 選んでいる札が入っている二股の区間の右端 (別の区切りの候補の行をそこまで伸ばす)
+    int fork_right = -1;
+    auto chip = [&](const TreeWord& w, int x, int y) {
+        const bool sel = w.rs < tree_re_ && w.re > tree_rs_;
+        // 選んでいる文節の頭の札 = 候補の 1 つ目 (候補の列はこの札の下に続く。選んでいる候補には枠とケーブル)
+        const bool head = sel && !cands_.empty() && !col_set;
+        const u16& text = head ? cands_[0] : w.surface;
+        const float st = head && !scores_.empty() && scores_[0] >= 0 ? scores_[0] : w.s;
+        const SIZE z = text_size(dc, tfont_, text);
+        const int nw = st >= 0 ? int(text_size(dc, tsmall_, percent(st)).cx) + d(4) : 0;   // 強さの数字 (字の後ろに小さく)
+        const int wd = std::max(d(26), int(z.cx) + nw + d(14));
+        tchips_.push_back({{x, y - H / 2, x + wd, y + H / 2}, text, st, head ? sel_ <= 0 : (sel && cands_.empty()), false});
+        if (sel && !list_set) { list_x_ = std::max(0, x - pad_ - num_w_ + d(4)); list_set = true; }
+        if (sel && !cands_.empty() && !col_set) {
+            col_set = true;
+            colx_ = x;
+            colw_ = wd;
+            return wd;   // 候補の列は後で (二股の区間の幅が分かってから)
+        }
+        if (w.s < 0) return wd;   // 強さが分からない札 (点数も別の候補も出さない)
+        if (w.s < 0.9f) {   // 確信していない語だけ別の候補を
+            int yy = y + H / 2 + d(6), k = 0;
+            for (auto& a : w.alts) {
+                if (a.second < 0.03f || k >= 2) continue;
+                k++;
+                ttexts_.push_back({x + wd / 2, yy, a.first, false, a.second});
+                {   // 選んでいない別の候補も灰色の線で本線につなぐ (札の左から直角に降りる)
+                    const RECT pr = pill_rect(dc, a.first, a.second, x + wd / 2, yy);
+                    const float cy = (pr.top + pr.bottom) / 2.f, x0 = float(x - d(6)), c45 = float(d(4));
+                    const float left = float(pr.left);
+                    if (left > x0 + c45) tpaths_.push_back({{{x0, float(Y)}, {x0, cy - c45}, {x0 + c45, cy}, {left, cy}}, a.second, true, x + wd / 2});
+                }
+                yy += d(24);
+                maxY = std::max(maxY, yy);
+            }
+        }
+        return wd;
+    };
+    int x = pad + d(6);
+    float px = float(pad), py = float(Y);
+    tdots_.push_back({px, py});
+    for (auto& n : tree_) {
+        if (n.main.empty()) continue;
+        bool focus_here = false;
+        for (auto& w : n.main) focus_here |= w.rs < tree_re_ && w.re > tree_rs_;
+        const int fx = x;
+        int tx = fx;
+        for (size_t j = 0; j < n.main.size(); j++) {
+            tlines_.push_back({j ? float(tx - GAP) : px, j ? float(Y) : py, float(tx), float(Y), n.main[j].link});
+            tx += chip(n.main[j], tx, Y) + GAP;
+        }
+        tx -= GAP;
+        int end = tx;
+        if (!n.fork.empty()) {
+            if (focus_here) {
+                fork_right = tx;
+            } else {   // 区間の幅を読みの長さで分けたセル (字が入らなければ区間を広げる)
+                const int gap = d(2);
+                std::vector<int> need;
+                int sum = 0, rl = 0;
+                for (auto& w : n.fork) {
+                    need.push_back(int(text_size(dc, talt_, w.surface).cx) + d(12));
+                    sum += need.back();
+                    rl += w.re - w.rs;
+                }
+                const int W = std::max(tx - fx, sum + gap * int(n.fork.size() - 1));
+                const int extra = W - sum - gap * int(n.fork.size() - 1);
+                int cx = fx;
+                for (size_t j = 0; j < n.fork.size(); j++) {
+                    const auto& w = n.fork[j];
+                    int cw = need[j] + (rl > 0 ? extra * (w.re - w.rs) / rl : 0);
+                    if (j + 1 == n.fork.size()) cw = fx + W - cx;
+                    fcells.push_back({{cx, 0, cx + cw, FH}, &w});
+                    cx += cw + gap;
+                }
+                end = std::max(tx, fx + W);
+            }
+        }
+        px = float(tx);
+        py = float(Y);
+        x = end + GAP;
+    }
+    // 選んでいる文節の候補の列: 最初は木の候補 (と別の区切り) だけ。その下で ↓ を押すと残りを 5 個ずつ
+    if (col_set) {
+        const int n = int(cands_.size());
+        const bool brief = short_ > 0 && short_ < n;
+        std::vector<int> rows;
+        if (brief) {
+            for (int i = 0; i < short_; i++) rows.push_back(i);
+            if (sel_ >= short_) {   // 木の候補の下の残り: 5 個ずつ (木の候補は上に残したまま。ユーザー 2026-10-20「5 個ぐらいずつ」)
+                constexpr int MORE = 5;
+                const int st = short_ + (sel_ - short_) / MORE * MORE;
+                rows.push_back(-1);   // 区切りの線
+                for (int i = st; i < std::min(n, st + MORE); i++) rows.push_back(i);
+            }
+        } else {
+            const int st = page_ * Composer::PAGE;
+            for (int i = st; i < std::min(n, st + Composer::PAGE); i++) rows.push_back(i);
+        }
+        // 候補はほかの札の別の候補と同じ小さな札で、札の下の中央に (目立たせない。隣の札の候補を隠さない)
+        const int cx = colx_ + colw_ / 2;
+        int yy = Y + H / 2 + d(6);
+        for (int i : rows) {
+            if (i == 0) continue;   // 1 つ目は上の札
+            if (i < 0) { tseps_.push_back(yy - d(4)); yy += d(4); continue; }
+            const float sc = size_t(i) < scores_.size() ? scores_[size_t(i)] : -1.f;
+            RECT rc = pill_rect(dc, cands_[size_t(i)], sc, cx, yy);
+            if (i == fork_ && fork_right > colx_) {
+                // 別の区切りの文は区切りが変わる範囲の幅まで伸ばす (結合したセル)。隣の札の候補を 1 つだけ潰すなら潰してよい
+                // (ユーザー 2026-10-20)。2 つ以上にかかるなら伸ばさない
+                const RECT wide = {colx_, rc.top, std::max(int(rc.right), fork_right), rc.bottom};
+                std::vector<size_t> hit;
+                for (size_t k = 0; k < ttexts_.size(); k++) {
+                    const TText& t = ttexts_[k];
+                    if (t.tiny || t.x == cx) continue;
+                    const RECT ar = pill_rect(dc, t.text, t.s, t.x, t.y);
+                    RECT o;
+                    if (IntersectRect(&o, &ar, &wide)) hit.push_back(k);
+                }
+                if (hit.size() <= 1) {
+                    if (!hit.empty()) {   // 潰す候補と、その点数 (すぐ下の小さな字) と線を外す
+                        const TText v = ttexts_[hit[0]];
+                        const RECT vr = pill_rect(dc, v.text, v.s, v.x, v.y);
+                        const float vcy = (vr.top + vr.bottom) / 2.f;
+                        std::vector<TText> kt;
+                        for (auto& t : ttexts_)
+                            if (!(t.x == v.x && (t.y == v.y || (t.tiny && t.y == v.y + d(16))))) kt.push_back(t);
+                        ttexts_ = std::move(kt);
+                        std::vector<TPath> kp;
+                        for (auto& t : tpaths_)
+                            if (!(t.owner == v.x && std::fabs(t.pts.back().second - vcy) < 1.f)) kp.push_back(t);
+                        tpaths_ = std::move(kp);
+                    }
+                    rc = wide;
+                }
+            }
+            tcands_.push_back({rc, cands_[size_t(i)], sc, i == sel_, i == fork_});
+            tcand_idx_.push_back(i);
+            maxX = std::max(maxX, int(rc.right));
+            yy += d(24);
+        }
+        if (brief && sel_ < short_) {
+            const std::wstring h = T(158);
+            ttexts_.push_back({cx, yy - d(2), u16(h.begin(), h.end()), true, 0});
+            yy += d(12);
+        } else if (!brief && n > Composer::PAGE) {
+            const std::string s = std::to_string(std::max(sel_, 0) + 1) + " / " + std::to_string(n);
+            ttexts_.push_back({cx, yy - d(4), u16(s.begin(), s.end()), true, 0});
+            yy += d(10);
+        }
+        maxY = std::max(maxY, yy + d(2));
+        // 本線から各候補へ直角に降りる線 (選んでいる候補だけ青いケーブル、ほかは灰色)
+        for (auto& t : tcands_) {
+            const float cy = (t.r.top + t.r.bottom) / 2.f, c45 = float(d(4));
+            const float x0 = std::min(float(colx_ - d(6)), float(t.r.left) - c45 - d(2));
+            tpaths_.push_back({{{x0, float(Y)}, {x0, cy - c45}, {x0 + c45, cy}, {float(t.r.left), cy}}, std::max(t.s, 0.f), !t.sel});
+        }
+    }
+    if (!fcells.empty()) {   // 選んでいない二股の別の区切り: いちばん下に、区間の幅のセルで
+        const int top = maxY + d(6);
+        for (auto& f : fcells) {
+            RECT r = f.r;
+            OffsetRect(&r, 0, top);
+            tchips_.push_back({r, f.w->surface, f.w->s, false, true});
+        }
+        maxY = top + FH + d(4);
+    }
+    tree_w_ = std::max(x, maxX) + pad;
+    tree_h_ = maxY + pad / 2;
+}
+
+// 候補の木の窓: 背景の無い窓 (札と線だけが浮いて見える)。GDI+ で透明度つきの絵を描き、UpdateLayeredWindow で出す
+void CandWindow::present_tree(int wx, int wy) {
+    if (!ensure_gdiplus()) return;
+    if (!thwnd_) {
+        static bool reg = false;
+        if (!reg) {
+            WNDCLASSEXW wc = {sizeof wc};
+            wc.style = CS_IME;   // 影は付けない (札の形でなく窓の四角に付くため)
+            wc.lpfnWndProc = DefWindowProcW;
+            wc.hInstance = g_inst;
+            wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+            wc.lpszClassName = TREE_CLASS_NAME;
+            reg = RegisterClassExW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+        }
+        thwnd_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, TREE_CLASS_NAME, L"", WS_POPUP, 0, 0, 1, 1,
+                                 owner_, nullptr, g_inst, nullptr);
+        if (!thwnd_) return;
+        SetWindowLongPtrW(thwnd_, GWLP_USERDATA, LONG_PTR(this));
+        SetWindowLongPtrW(thwnd_, GWLP_WNDPROC, LONG_PTR(&CandWindow::proc));
+    }
+    const int W = std::max(1, width_), Hh = std::max(1, height_);
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize = sizeof bi.bmiHeader;
+    bi.bmiHeader.biWidth = W;
+    bi.bmiHeader.biHeight = -Hh;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    void* bits = nullptr;
+    HDC sdc = GetDC(nullptr);
+    HDC mdc = CreateCompatibleDC(sdc);
+    HBITMAP dib = CreateDIBSection(sdc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!dib) { DeleteDC(mdc); ReleaseDC(nullptr, sdc); return; }
+    HGDIOBJ ob = SelectObject(mdc, dib);
+    {
+        Gdiplus::Bitmap canvas(W, Hh, W * 4, PixelFormat32bppPARGB, static_cast<BYTE*>(bits));
+        Gdiplus::Graphics g(&canvas);
+        g.Clear(Gdiplus::Color(0, 0, 0, 0));
+        paint_tree(g, mdc);
+    }
+    POINT src = {0, 0}, dst = {wx, wy};
+    SIZE sz = {W, Hh};
+    BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    UpdateLayeredWindow(thwnd_, sdc, &dst, &sz, mdc, &src, 0, &bf, ULW_ALPHA);
+    SetWindowPos(thwnd_, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    SelectObject(mdc, ob);
+    DeleteObject(dib);
+    DeleteDC(mdc);
+    ReleaseDC(nullptr, sdc);
+}
+
+void CandWindow::paint_tree(Gdiplus::Graphics& g, HDC dc) {
+    auto d = [&](float v) { return v * float(dpi_) / 96.f; };
+    const Colors c = colors(theme);
+    const bool dark = theme == "dark" || (theme != "light" && apps_dark());
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    g.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAliasGridFit);
+    auto col = [&](COLORREF r, int a = 255) { return Gdiplus::Color(BYTE(a), GetRValue(r), GetGValue(r), GetBValue(r)); };
+    auto rounded = [&](Gdiplus::GraphicsPath& path, const RECT& rc) {
+        const float x = float(rc.left), y = float(rc.top), w = float(rc.right - rc.left), h = float(rc.bottom - rc.top), r = d(8);
+        path.AddArc(x, y, r, r, 180, 90);
+        path.AddArc(x + w - r, y, r, r, 270, 90);
+        path.AddArc(x + w - r, y + h - r, r, r, 0, 90);
+        path.AddArc(x, y + h - r, r, r, 90, 90);
+        path.CloseFigure();
+    };
+    const Gdiplus::Color outline = dark ? Gdiplus::Color(255, 255, 255, 255) : Gdiplus::Color(255, 11, 42, 107);
+    Gdiplus::Font fbig(dc, tfont_), falt(dc, talt_), ftiny(dc, tsmall_);
+    Gdiplus::FontFamily fam;
+    fbig.GetFamily(&fam);
+    // 浮いている字 (点数・別の候補・案内): 背景が無いので、テーマの背景色のふちどりを付けて読めるように
+    auto halo_text = [&](const u16& t, Gdiplus::Font& f, float cx, float top, COLORREF fg) {
+        Gdiplus::GraphicsPath p;
+        Gdiplus::StringFormat sf(Gdiplus::StringFormat::GenericTypographic());
+        sf.SetAlignment(Gdiplus::StringAlignmentCenter);
+        Gdiplus::FontFamily ff;
+        f.GetFamily(&ff);
+        const float em = f.GetUnit() == Gdiplus::UnitPoint ? f.GetSize() * float(dpi_) / 72.f : f.GetSize();
+        p.AddString(W(t), INT(t.size()), &ff, f.GetStyle(), em, Gdiplus::PointF(cx, top), &sf);
+        Gdiplus::Pen halo(col(c.bg, 220), d(3.f));
+        halo.SetLineJoin(Gdiplus::LineJoinRound);
+        g.DrawPath(&halo, &p);
+        Gdiplus::SolidBrush b(col(fg));
+        g.FillPath(&b, &p);
+    };
+    auto box_text = [&](const u16& t, Gdiplus::Font& f, const RECT& rc, COLORREF fg, Gdiplus::StringAlignment al) {
+        Gdiplus::StringFormat sf(Gdiplus::StringFormat::GenericTypographic());
+        sf.SetAlignment(al);
+        sf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+        sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap | Gdiplus::StringFormatFlagsNoClip);
+        Gdiplus::SolidBrush b(col(fg));
+        g.DrawString(W(t), INT(t.size()), &f, Gdiplus::RectF(float(rc.left), float(rc.top), float(rc.right - rc.left), float(rc.bottom - rc.top)), &sf, &b);
+    };
+    // 小さな札の字: 字の後ろに強さの数字を小さく
+    auto pill_text = [&](const u16& t, float s, const RECT& rc, COLORREF fg) {
+        if (s < 0) { box_text(t, falt, rc, fg, Gdiplus::StringAlignmentCenter); return; }
+        const u16 n = percent(s);
+        const int nw = int(text_size(dc, tsmall_, n).cx);
+        RECT tr = {rc.left + int(d(4)), rc.top, rc.right - nw - int(d(6)), rc.bottom};
+        box_text(t, falt, tr, fg, Gdiplus::StringAlignmentCenter);
+        RECT nr = {rc.right - nw - int(d(7)), rc.top + int(d(1)), rc.right - int(d(3)), rc.bottom};
+        box_text(n, ftiny, nr, fg, Gdiplus::StringAlignmentCenter);
+    };
+    // 文節どうしはピンと張った線
+    for (auto& l : tlines_) {
+        Gdiplus::Pen pen(col(mix(c.bg, strength_color(l.s), 0.45f + 0.55f * l.s)), d(0.8f + 2.4f * l.s));
+        pen.SetStartCap(Gdiplus::LineCapRound);
+        pen.SetEndCap(Gdiplus::LineCapRound);
+        g.DrawLine(&pen, l.x1, l.y1, l.x2, l.y2);
+    }
+    // 候補の列の配線: 選んでいない候補は灰色、選んでいる候補は青 (基板の配線のように直角、角は 45 度。本線側はビア)
+    for (int pass = 0; pass < 2; pass++)
+        for (auto& t : tpaths_) {
+            if (t.gray != (pass == 0)) continue;
+            Gdiplus::Pen pen(t.gray ? col(c.sub, 150) : col(strength_color(t.s)), t.gray ? d(1.f) : d(1.2f + 1.6f * t.s));
+            pen.SetLineJoin(Gdiplus::LineJoinRound);
+            pen.SetStartCap(Gdiplus::LineCapRound);
+            pen.SetEndCap(Gdiplus::LineCapRound);
+            std::vector<Gdiplus::PointF> pts;
+            for (auto& q : t.pts) pts.push_back({q.first, q.second});
+            g.DrawLines(&pen, pts.data(), INT(pts.size()));
+            if (!t.gray) {
+                Gdiplus::SolidBrush ring(col(blend(c.bg, 0.85f))), hole(col(c.bg));
+                const float ro = d(4.f), ri = d(1.8f);
+                g.FillEllipse(&ring, t.pts.front().first - ro, t.pts.front().second - ro, 2 * ro, 2 * ro);
+                g.FillEllipse(&hole, t.pts.front().first - ri, t.pts.front().second - ri, 2 * ri, 2 * ri);
+            }
+        }
+    for (size_t i = 0; i < tdots_.size(); i++) {
+        const float r = d(2.8f);
+        Gdiplus::SolidBrush b(col(blend(c.bg, 0.9f)));
+        g.FillEllipse(&b, tdots_[i].first - r, tdots_[i].second - r, 2 * r, 2 * r);
+    }
+    // 選んでいる文節の候補: ほかの札の別の候補と同じ小さな札 (選んでいる候補に枠、別の区切りの文は点線の枠)
+    // 小さな札の地: 強さの色 (上の札よりわずかに地に寄せる。強さが分からなければ赤)
+    auto pill_fill = [&](float s) { return mix(c.bg, strength_color(std::max(s, 0.f)), 0.85f); };
+    for (auto& t : tcands_) {
+        const COLORREF fill = pill_fill(t.s);
+        Gdiplus::GraphicsPath path;
+        rounded(path, t.r);
+        Gdiplus::SolidBrush b(col(fill));
+        g.FillPath(&b, &path);
+        if (t.ghost) {
+            Gdiplus::Pen pen(col(blend(c.bg, 0.7f)), d(1.f));
+            pen.SetDashStyle(Gdiplus::DashStyleDash);
+            g.DrawPath(&pen, &path);
+        }
+        if (t.sel) {
+            Gdiplus::Pen pen(outline, d(1.6f));
+            g.DrawPath(&pen, &path);
+        }
+        pill_text(t.text, t.s, t.r, ink_on(fill));
+    }
+    for (int y : tseps_) {
+        Gdiplus::Pen pen(col(c.sub, 120), d(1.f));
+        g.DrawLine(&pen, float(colx_ + d(4)), float(y), float(colx_ + colw_ - d(4)), float(y));
+    }
+    for (auto& t : tchips_) {
+        const COLORREF fill = t.s < 0 ? blend(c.bg, 0.7f) : t.ghost ? mix(c.bg, strength_color(t.s), 0.8f) : strength_color(t.s);
+        const COLORREF fg = ink_on(fill);
+        Gdiplus::GraphicsPath path;
+        rounded(path, t.r);
+        Gdiplus::SolidBrush b(col(fill));
+        g.FillPath(&b, &path);
+        if (t.sel) {
+            Gdiplus::Pen pen(outline, d(1.6f));
+            g.DrawPath(&pen, &path);
+        }
+        if (t.ghost || t.s < 0) {
+            box_text(t.text, t.ghost ? falt : fbig, t.r, fg, Gdiplus::StringAlignmentCenter);
+        } else {   // 字の後ろに強さの数字を小さく
+            const u16 n = percent(t.s);
+            const int nw = int(text_size(dc, tsmall_, n).cx) + int(d(4));
+            const int tw = int(text_size(dc, tfont_, t.text).cx);
+            const int left = (t.r.left + t.r.right - tw - nw) / 2;
+            RECT tr = {left - int(d(2)), t.r.top, left + tw + int(d(2)), t.r.bottom};
+            box_text(t.text, fbig, tr, fg, Gdiplus::StringAlignmentCenter);
+            RECT nr = {left + tw + int(d(2)), t.r.top + int(d(2)), left + tw + nw + int(d(2)), t.r.bottom};
+            box_text(n, ftiny, nr, fg, Gdiplus::StringAlignmentNear);
+        }
+    }
+    // 別の候補は強さの色の小さな札に、案内はふちどりの字で
+    for (auto& t : ttexts_) {
+        if (t.tiny) {
+            halo_text(t.text, ftiny, float(t.x), float(t.y), c.sub);
+            continue;
+        }
+        const RECT rc = pill_rect(dc, t.text, t.s, t.x, t.y);
+        Gdiplus::GraphicsPath path;
+        rounded(path, rc);
+        const COLORREF fill = pill_fill(t.s);
+        Gdiplus::SolidBrush b(col(fill));
+        g.FillPath(&b, &path);
+        pill_text(t.text, t.s, rc, ink_on(fill));
+    }
 }
 
 // 提案の頭の文字: 列に入る方法 (入ったら出し方)
 std::wstring CandWindow::sugg_label() const {
     if (!label.empty()) return label;
-    return sugg_sel_ < 0 ? L"提案 Shift+↓" : L"提案";
+    return sugg_sel_ < 0 ? T(136) : T(137);
 }
 
 // 下の行の右の文字
 std::wstring CandWindow::foot_text(int n) const {
-    if (sugg_sel_ >= 0) return L"←→ で選ぶ  Enter で確定  Esc で戻る";
+    if (sugg_sel_ >= 0) return T(138);
     if (n == 0) return L"";
-    return sel_ < 0 ? L"Tab で選ぶ  " + std::to_wstring(n) + L" 件" : std::to_wstring(sel_ + 1) + L" / " + std::to_wstring(n);
+    return sel_ < 0 ? T(139) + std::to_wstring(n) + T(140) : std::to_wstring(sel_ + 1) + L" / " + std::to_wstring(n);
 }
 
 int CandWindow::hit_sugg(int x, int y) const {
-    if (y < height_ - footer_h_ || y >= height_) return -1;
+    if (y < lh_ - footer_h_ || y >= lh_) return -1;
     for (size_t i = 0; i < sugg_x_.size(); i++)
         if (x >= sugg_x_[i].first && x < sugg_x_[i].second) return int(i);
     return -1;
@@ -237,6 +735,13 @@ void CandWindow::paint(HDC wdc) {
     FrameRect(dc, &rc, border);
     DeleteObject(border);
     SetBkMode(dc, TRANSPARENT);
+
+    // 候補の一覧は (list_x_, tree_h_) から。一覧の描き方は木が無いときと同じ (幅と高さを一覧のものにして描く)
+    const int full_w = width_, full_h = height_;
+    width_ = lw_;
+    height_ = lh_;
+    POINT org;
+    SetViewportOrgEx(dc, list_x_, tree_h_, &org);
 
     int start = page_ * Composer::PAGE;
     int end = std::min(int(cands_.size()), start + Composer::PAGE);
@@ -311,6 +816,9 @@ void CandWindow::paint(HDC wdc) {
     SetTextColor(dc, c.sub);
     DrawTextW(dc, foot.c_str(), int(foot.size()), &fr, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
     SelectObject(dc, oldf);
+    SetViewportOrgEx(dc, org.x, org.y, nullptr);
+    width_ = full_w;
+    height_ = full_h;
 
     BitBlt(wdc, 0, 0, width_, height_, dc, 0, 0, SRCCOPY);
     SelectObject(dc, oldb);

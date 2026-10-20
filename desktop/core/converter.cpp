@@ -1,6 +1,8 @@
 #include <cstdlib>
 #include "converter.h"
 
+#include <cmath>
+
 #include <algorithm>
 
 #include "engine.h"
@@ -120,8 +122,144 @@ bool Converter::convert_once(const u16& ctx, const u16& kana, int max, Conversio
         r0 = r1;
         s0 = s1;
     }
-    if (r0 != kana.size() || s0 != top.size()) out.words.clear();
+    if (r0 != kana.size() || s0 != top.size()) { out.words.clear(); return true; }
+    {   // 候補の木
+        constexpr int PM = 40, WC = 2048, TC = 8192;
+        std::vector<double> costs(PM);
+        std::vector<int32_t> cnt(PM), pe(WC), pl(WC);
+        std::vector<uint16_t> tx(TC);
+        int np = kkc_last_paths(e_, PM, costs.data(), cnt.data(), pe.data(), pl.data(), WC, tx.data(), TC);
+        std::vector<std::pair<double, std::vector<TreeWord>>> paths;
+        size_t wi = 0, ti = 0;
+        for (int p = 0; p < np; p++) {
+            std::vector<TreeWord> ws;
+            int r = 0;
+            for (int k = 0; k < cnt[size_t(p)]; k++, wi++) {
+                TreeWord w;
+                w.surface.assign(reinterpret_cast<const char16_t*>(tx.data() + ti), size_t(pl[wi]));
+                ti += size_t(pl[wi]);
+                w.rs = r;
+                w.re = r = pe[wi];
+                ws.push_back(std::move(w));
+            }
+            paths.push_back({costs[size_t(p)], std::move(ws)});
+        }
+        // 1 位の経路が候補の 1 位と同じときだけ (差別語で落ちたときなどは出さない)
+        if (!paths.empty()) {
+            u16 j;
+            for (auto& w : paths[0].second) j += w.surface;
+            if (j == top) {
+                std::vector<int> cuts;
+                int r = 0;
+                for (auto& ph : group_phrases(out.words)) cuts.push_back(r += int(ph.reading.size()));
+                out.tree = build_tree(paths, cuts);
+            }
+        }
+    }
     return true;
+}
+
+// 経路のコストの差を確率に直す温度 (コストは辞書のコストと同じ単位。1000 ほどの差で約 e 倍)
+constexpr double TREE_TEMP = 2500.0;
+
+std::vector<TreeNode> build_tree(const std::vector<std::pair<double, std::vector<TreeWord>>>& raw, const std::vector<int>& cuts) {
+    std::vector<TreeNode> out;
+    if (raw.empty() || raw[0].second.empty()) return out;
+    // 語を文節にまとめる: 経路ごとに、その経路の区切りのうち 1 位の文節の終わりと合う所だけで切る
+    // (1 位の文節の終わりをまたぐ語がある所は、その経路だけ文節が長くなる = 区切り方で迷う所)
+    std::vector<std::pair<double, std::vector<TreeWord>>> paths;
+    for (auto& [c, ws] : raw) {
+        std::vector<TreeWord> ch;
+        TreeWord cur;
+        bool open = false;
+        for (auto& x : ws) {
+            if (!open) { cur = TreeWord(); cur.rs = x.rs; open = true; }
+            cur.surface += x.surface;
+            cur.re = x.re;
+            if (std::find(cuts.begin(), cuts.end(), x.re) != cuts.end()) { ch.push_back(cur); open = false; }
+        }
+        if (open) ch.push_back(cur);
+        paths.push_back({c, std::move(ch)});
+    }
+    // 文節にまとめると同じになる経路は 1 つに (確率は後で足す)
+    const size_t P = paths.size();
+    std::vector<double> w(P);
+    double sum = 0;
+    for (size_t i = 0; i < P; i++) sum += w[i] = std::exp(-(paths[i].first - paths[0].first) / TREE_TEMP);
+    for (auto& x : w) x /= sum;
+    auto has = [&](size_t p, const TreeWord& t) {
+        for (auto& x : paths[p].second)
+            if (x.rs == t.rs && x.re == t.re && x.surface == t.surface) return true;
+        return false;
+    };
+    auto bounds = [&](size_t p) {
+        std::vector<int> b;
+        for (auto& x : paths[p].second) b.push_back(x.re);
+        return b;
+    };
+    const std::vector<TreeWord>& top = paths[0].second;
+    const std::vector<int> b0 = bounds(0);
+    // 1 位の語ごとの強さ・別の表記・前の語との結びつき
+    std::vector<TreeWord> words = top;
+    for (size_t k = 0; k < words.size(); k++) {
+        TreeWord& t = words[k];
+        double s = 0, both = 0, prev = 0;
+        std::vector<std::pair<u16, double>> alt;
+        for (size_t p = 0; p < P; p++) {
+            const bool h = has(p, t);
+            if (h) s += w[p];
+            if (k > 0 && has(p, top[k - 1])) { prev += w[p]; if (h) both += w[p]; }
+            for (auto& x : paths[p].second) {
+                if (x.rs != t.rs || x.re != t.re || x.surface == t.surface) continue;
+                auto it = std::find_if(alt.begin(), alt.end(), [&](auto& a) { return a.first == x.surface; });
+                if (it == alt.end()) alt.push_back({x.surface, w[p]});
+                else it->second += w[p];
+            }
+        }
+        t.s = float(s);
+        t.link = k == 0 ? 1.f : float(prev > 0 ? both / prev : s);
+        std::stable_sort(alt.begin(), alt.end(), [](auto& a, auto& b) { return a.second > b.second; });
+        for (size_t i = 0; i < alt.size() && i < 3; i++) t.alts.push_back({alt[i].first, float(alt[i].second)});
+    }
+    // 区切り方で迷う所: 1 位と区切りが違う経路のうち確率の高いものから、違う区間 (両方の区切りが合う所で挟む) を取る
+    struct Fork { int a, b; size_t p; double mass, best; };   // best = 出す別の道 (いちばん強い経路) の確率
+    std::vector<Fork> forks;
+    auto in = [](const std::vector<int>& v, int x) { return std::find(v.begin(), v.end(), x) != v.end(); };
+    for (size_t p = 1; p < P; p++) {
+        const std::vector<int> bp = bounds(p);
+        // 違う区切りの位置を 1 位の区切りの区間に広げる
+        int a = -1, b = -1;
+        for (int x : bp) if (!in(b0, x)) { if (a < 0 || x < a) a = x; if (x > b) b = x; }
+        for (int x : b0) if (!in(bp, x) && x != b0.back()) { if (a < 0 || x < a) a = x; if (x > b) b = x; }
+        if (a < 0) continue;
+        int lo = 0, hi = b0.back();
+        for (int x : b0) { if (x < a && in(bp, x)) lo = std::max(lo, x); if (x > b && in(bp, x)) hi = std::min(hi, x); }
+        // ほかの迷う所と重なるなら足さない
+        bool clash = false;
+        for (auto& f : forks)
+            if (!(hi <= f.a || lo >= f.b)) { if (lo == f.a && hi == f.b) f.mass += w[p]; clash = true; break; }
+        if (!clash) forks.push_back({lo, hi, p, w[p], w[p]});
+    }
+    // 迷う所ごとに節を作る
+    size_t k = 0;
+    while (k < words.size()) {
+        const Fork* f = nullptr;
+        for (auto& x : forks)
+            if (x.a == words[k].rs && x.mass >= 0.08 && x.best >= 0.06) { f = &x; break; }
+        TreeNode n;
+        if (!f) { n.main.push_back(words[k++]); out.push_back(std::move(n)); continue; }
+        while (k < words.size() && words[k].re <= f->b) n.main.push_back(words[k++]);
+        for (auto x : paths[f->p].second)
+            if (x.rs >= f->a && x.re <= f->b) {
+                double s = 0;
+                for (size_t p = 0; p < P; p++) if (has(p, x)) s += w[p];
+                x.s = float(s);
+                n.fork.push_back(std::move(x));
+            }
+        n.p = float(std::max(0.0, 1.0 - f->mass));
+        out.push_back(std::move(n));
+    }
+    return out;
 }
 
 Conversion Converter::convert(const u16& ctx, const u16& kana, int max) {

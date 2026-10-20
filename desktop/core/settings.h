@@ -63,6 +63,7 @@ struct Settings {
     bool live = true;                // 打っている間も候補を出す
     bool live_commit = true;         // リアルタイム確定
     bool live_display = false;       // ライブ変換: 入力中の文字を、空白を押す前から変換して見せる
+    bool cand_tree = false;          // 新デザインの候補バー (候補の木: 文節の札・強さの色・別の区切り)。既定はオフ
     bool ctrl_space = false;         // Ctrl+Space でも日本語入力のオン・オフ (shortcuts に移した。古い設定の読み替え用)
     bool separate_suggest = true;    // 提案 (打ち間違いの直し・日付・住所・絵文字など) を候補に混ぜず、候補の窓の上の行に分けて出す
     std::string model = "standard";  // 変換モデル: light (XS3・メモリの少ない PC 向け)・standard (S7)
@@ -72,6 +73,7 @@ struct Settings {
     int page_size = 9;               // 候補の窓の 1 ページの数 (5〜9)
     bool muhenkan_off = true;        // 無変換キーで日本語入力をオフ (打っていないとき。shortcuts に移した。読み替え用)
     bool reconvert = true;           // 選んだ文字を変換キーで変換し直す (再変換。shortcuts に移した。読み替え用)
+    bool app_default_open = true;    // 初めて使うソフトでの日本語入力 (以後はソフトごとに前の状態を覚える。ブログの要望 2026-10-18)
     bool private_mode = false;       // プライベート: 学習・文の流れ・提案の学習を残さない (Ctrl+Shift+F10 でも切り替え)
     // 打っている間の Ctrl + 字: ひらがな・カタカナ・半角カタカナ・全角英数・半角英数 (- は割り当て無し。英字か @ ; :)
     // (shortcuts に移した。古い設定の読み替え用)

@@ -31,6 +31,7 @@ bool load_settings(const fs::path& p, Settings& s) {
     boolean("live_commit", s.live_commit);
     boolean("separate_suggest", s.separate_suggest);
     boolean("live_display", s.live_display);
+    boolean("cand_tree", s.cand_tree);
     boolean("ctrl_space", s.ctrl_space);
     str("model", s.model);
     if (const json::Value* x = v.get("punct"); x && x->type == json::Value::Number) s.punct = int(x->num) & 3;
@@ -40,6 +41,7 @@ bool load_settings(const fs::path& p, Settings& s) {
     boolean("muhenkan_off", s.muhenkan_off);
     boolean("reconvert", s.reconvert);
     boolean("private_mode", s.private_mode);
+    boolean("app_default_open", s.app_default_open);
     str("keymap", s.keymap);
     if (const json::Value* x = v.get("ctrl_keys"); x && x->type == json::Value::String)
         s.ctrl_keys = x->str;
@@ -92,11 +94,13 @@ bool save_settings(const fs::path& p, const Settings& s) {
     o += std::string("  \"live_commit\": ") + b(s.live_commit) + ",\n";
     o += std::string("  \"separate_suggest\": ") + b(s.separate_suggest) + ",\n";
     o += std::string("  \"live_display\": ") + b(s.live_display) + ",\n";
+    o += std::string("  \"cand_tree\": ") + b(s.cand_tree) + ",\n";
     o += "  \"model\": " + json::quote(s.model) + ",\n";
     o += "  \"half_symbols\": " + json::quote(s.half_symbols) + ",\n";
     o += "  \"numpad\": " + std::to_string(s.numpad) + ",\n";
     o += "  \"page_size\": " + std::to_string(s.page_size) + ",\n";
     o += std::string("  \"private_mode\": ") + b(s.private_mode) + ",\n";
+    o += std::string("  \"app_default_open\": ") + b(s.app_default_open) + ",\n";
     o += "  \"keymap\": " + json::quote(s.keymap) + ",\n";
     o += "  \"layout\": " + json::quote(s.layout) + ",\n";
     o += "  \"layout_window\": " + std::to_string(s.layout_window) + ",\n";

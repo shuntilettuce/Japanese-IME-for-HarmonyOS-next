@@ -352,9 +352,11 @@ bool Composer::press_input(const KeyEvent& ev) {
             update_live();
             if (!live_cands_.empty()) {
                 int sel = 0;
+                pred_tab_.clear();
                 if (ev.key == Key::Tab)
                     for (size_t i = 0; i < live_cands_.size(); i++)
-                        if (contains(live_pred_, live_cands_[i])) { sel = int(i); break; }
+                        if (contains(live_pred_, live_cands_[i])) pred_tab_.push_back(int(i));
+                if (!pred_tab_.empty()) sel = pred_tab_[0];
                 enter_single(live_cands_[sel], live_cands_, sel);
                 first_cands_ = live_cands_;
                 first_via_ = "live";
@@ -430,6 +432,43 @@ bool Composer::press_input(const KeyEvent& ev) {
     }
 }
 
+// 候補の木の二股: 文節 i (区間の頭) から区間の終わりまでの文節を 1 つにまとめる (別の区切りの候補を選んだ)
+void Composer::fork_merge(size_t i) {
+    Seg& s = segs_[i];
+    int st = -tree_off_;
+    for (size_t k = 0; k < i; k++) st += int(segs_[k].reading.size());
+    for (auto& n : tree_) {
+        if (n.fork.empty() || n.main.empty() || n.main.front().rs != st) continue;
+        const int b = n.main.back().re;
+        size_t j = i + 1;
+        int e = st + int(s.reading.size());
+        while (j < segs_.size() && e < b) e += int(segs_[j++].reading.size());
+        if (e != b) return;   // 区間の終わりが文節の切れ目でない (文節を伸び縮みさせた後など)
+        s.own_reading = s.reading;
+        s.own_tail_r = s.tail_r;
+        s.own_tail_s = s.tail_s;
+        s.merged.assign(segs_.begin() + long(i + 1), segs_.begin() + long(j));
+        for (auto& m : s.merged) s.reading += m.reading;
+        s.tail_r.clear();
+        s.tail_s.clear();
+        segs_.erase(segs_.begin() + long(i + 1), segs_.begin() + long(j));
+        whole_.clear();
+        return;
+    }
+}
+
+void Composer::fork_unmerge(size_t i) {
+    Seg& s = segs_[i];
+    if (s.merged.empty() && s.own_reading.empty()) return;
+    s.reading = s.own_reading;
+    s.tail_r = s.own_tail_r;
+    s.tail_s = s.own_tail_s;
+    s.own_reading.clear();
+    std::vector<Seg> rest = std::move(s.merged);
+    s.merged.clear();
+    segs_.insert(segs_.begin() + long(i + 1), rest.begin(), rest.end());
+}
+
 bool Composer::press_convert(const KeyEvent& ev) {
     Seg& s = segs_[focus_];
     auto set_sel = [&](int i) {
@@ -438,10 +477,14 @@ bool Composer::press_convert(const KeyEvent& ev) {
         // 最後のページに入るなら、先に続きを読む (候補が途中で切れないように)
         if (i >= 0 && i / PAGE >= (int(s.cands.size()) - 1) / PAGE) load_more(focus_);
         int n = int(s.cands.size());
+        const int old = s.sel;
         s.sel = ((i % n) + n) % n;
         s.surface = s.cands[size_t(s.sel)];
         s.changed = true;
         cand_open_ = true;
+        // 別の区切りの候補に入った・出た: 区間の文節をまとめる・戻す (s は前の文節なので、後ろを消したり足したりしても有効)
+        if (s.fork_idx >= 0 && old == s.fork_idx && s.sel != s.fork_idx) fork_unmerge(focus_);
+        if (s.fork_idx >= 0 && s.sel == s.fork_idx && old != s.fork_idx) fork_merge(focus_);
     };
     switch (ev.key) {
         case Key::Char: {
@@ -462,10 +505,21 @@ bool Composer::press_convert(const KeyEvent& ev) {
             type_char(ev.ch, ev.raw);
             return true;
         }
+        case Key::Tab:
+            // Tab で予測の候補に入ったときは、Tab・Shift+Tab で予測の候補の中だけを回る (普通の変換候補に移っていた。ブログの報告 2026-10-12)
+            if (!pred_tab_.empty()) {
+                auto it = std::find(pred_tab_.begin(), pred_tab_.end(), s.sel);
+                const int m = int(pred_tab_.size());
+                const int k = it == pred_tab_.end() ? 0 : int(it - pred_tab_.begin());
+                set_sel(pred_tab_[size_t(((ev.shift ? k - 1 : k + 1) % m + m) % m)]);
+                return true;
+            }
+            set_sel(ev.shift ? s.sel - 1 : s.sel + 1);
+            return true;
         case Key::Space:
         case Key::Henkan:
         case Key::Down:
-        case Key::Tab:
+            pred_tab_.clear();   // ほかのキーで候補を動かしたら、普通の並びで
             set_sel(ev.shift && ev.key != Key::Down ? s.sel - 1 : s.sel + 1);
             return true;
         case Key::Up:
@@ -599,6 +653,13 @@ void Composer::select_candidate(int index) {
 
 // ---------------------------------------------------------------- 打っている間の変換
 
+// 語の並びの読みをつないだもの
+static u16 frozen_prefix_reading(const std::vector<Word>& ws) {
+    u16 r;
+    for (const Word& w : ws) r += w.reading;
+    return r;
+}
+
 void Composer::update_live() {
     // 打っている間の変換は、候補の窓 (live) かリアルタイム変換 (live_display) のどちらかで要る。窓とは別に選べる (ユーザー 2026-10-14)
     if (!(options.live || options.live_display) || state_ != State::Input || !conv_ || kana_.empty()) {
@@ -610,7 +671,33 @@ void Composer::update_live() {
     if (key == live_key_) return;
     sync_user_dict();
     if (!calibrated_) calibrate();
-    Conversion c = conv_->convert(conv_ctx(), kana_, kCandidates);
+    Conversion c;
+    // 前の方の固定 (live_commit) をオフにしていると、長く打つほど 1 打ごとに読み全体を変換し直して打鍵が引っかかった
+    // (132 字で 1 打 0.1 秒超・ブログの方の設定)。表示用には、前の結果の語の区切りのうち末尾から keep_ 字より前の分を使い回し、
+    // 後ろだけを変換し直す (そこまでの表記を文脈にして)。スペースで変換するときは全体を変換するので、結果は変わらない
+    size_t pre_r = 0;
+    u16 pre_s;
+    std::vector<Word> pre_w;
+    if (!options.live_commit && caret_ == kana_.size() && kana_.size() > keep_ * 2) {
+        for (const Word& w : live_words_) {
+            if (pre_r + w.reading.size() + keep_ > kana_.size()) break;
+            pre_r += w.reading.size();
+            pre_s += w.surface;
+            pre_w.push_back(w);
+        }
+        if (pre_r == 0 || kana_.compare(0, pre_r, frozen_prefix_reading(pre_w)) != 0) pre_r = 0;
+    }
+    if (pre_r > 0) {
+        Conversion t = conv_->convert(conv_ctx() + pre_s, kana_.substr(pre_r), kCandidates);
+        for (auto& x : t.cands) c.cands.push_back(pre_s + x);
+        c.words = pre_w;
+        c.words.insert(c.words.end(), t.words.begin(), t.words.end());
+        c.sugg = t.sugg;
+        c.sugg_kinds = t.sugg_kinds;
+    } else {
+        c = conv_->convert(conv_ctx(), kana_, kCandidates);
+    }
+    live_words_ = c.words;
     if (options.live_commit && caret_ == kana_.size() && !alpha_run_ && live_commit(c)) {
         update_live();   // 前の方を固定した: 残りを変換し直す
         return;
@@ -677,6 +764,8 @@ void Composer::update_live() {
     }
     if (dict_) {   // ユーザー辞書に登録した語は先頭に
         std::vector<u16> user = dict_->lookup(kana_);
+        // 登録した語どうしは選んだ回数の多い順 (前は登録順のままで、学習が効かなかった。ブログの報告 2026-10-18)
+        if (learning_ && user.size() > 1) user = learning_->apply_order(kana_, user);
         for (auto it = user.rbegin(); it != user.rend(); ++it) {
             cands.erase(std::remove(cands.begin(), cands.end(), *it), cands.end());
             cands.insert(cands.begin(), *it);
@@ -825,6 +914,7 @@ void Composer::sync_user_dict() {
 std::vector<Composer::Seg> Composer::convert_phrases(const u16& ctx, const u16& reading, std::vector<u16>* whole) {
     std::vector<Seg> out;
     Conversion c = conv_ ? conv_->convert(ctx, reading, kCandidates) : Conversion();
+    last_tree_ = std::move(c.tree);
     if (whole) {
         *whole = c.cands;
         prefer_greetings(reading, *whole);
@@ -853,6 +943,9 @@ void Composer::convert_all() {
     sync_user_dict();
     segs_ = frozen_;
     std::vector<Seg> rest = convert_phrases(conv_ctx(), kana_, &whole_);
+    tree_ = std::move(last_tree_);
+    tree_off_ = 0;
+    for (auto& s : segs_) tree_off_ += int(s.reading.size());
     // 文節に分ける変換 (PC の IME の伝統) はそのままに、打っている間の一覧 (Tab・スマホと同じ) の工夫を受け入れる
     // (ユーザー 2026-10-16「space は伝統的な挙動で、そのうえで色んな機能を」): 文全体の候補はその一覧 (学習の並べ替え・
     // ユーザー辞書・挨拶・括弧・提案) から予測 (読みより長い語) を除いたもの。文全体で選び直したことがあるなどで一覧の 1 位が
@@ -866,6 +959,7 @@ void Composer::convert_all() {
         if (!live.empty() && !whole_.empty() && live[0] != whole_[0] && live[0] != joined) {
             Seg one{kana_, live[0]};
             rest.assign(1, std::move(one));
+            tree_.clear();   // 木は AI の 1 位の形なので合わない
         }
         if (!live.empty()) whole_ = std::move(live);
     }
@@ -910,6 +1004,7 @@ void Composer::enter_single(const u16& surface, std::vector<u16> cands, int sel)
     segs_ = frozen_;
     frozen_.clear();
     segs_.push_back(std::move(s));
+    tree_.clear();   // 文 1 つの変換: 木は文節の札をそのまま並べる (rebuild_view)
     if (had_frozen) whole_.clear();
     else whole_.clear();
     focus_ = segs_.size() - 1;
@@ -943,6 +1038,50 @@ void Composer::load_cands(size_t i) {
     list.insert(list.begin(), s.surface);
     push_unique(list, s.reading);
     push_unique(list, to_katakana(s.reading));
+    // 候補の木: 木に出ている表記 (1 位と強い別の候補) と、二股の頭なら別の区切りの文を、強い順に先頭に寄せる。
+    // 窓は最初はこれだけを出し、その下で ↓ を押すと残りの候補を出す (tree_k = 先頭の木の候補の数。0 = 木に無い文節)
+    s.tree_k = 0;
+    s.fork_idx = -1;
+    std::vector<float> scores;
+    if (options.cand_tree && !tree_.empty()) {
+        int r = -tree_off_;
+        for (size_t k = 0; k < i; k++) r += int(segs_[k].reading.size());
+        const int re = r + int(s.reading.size());
+        for (auto& n : tree_)
+            for (auto& w : n.main) {
+                if (w.rs != r || w.re != re) continue;
+                auto score_of = [&](const u16& x) {
+                    if (x == w.surface) return w.s;
+                    for (auto& a : w.alts) if (a.first == x) return a.second;
+                    return -1.f;
+                };
+                std::vector<std::pair<u16, float>> top{{list[0], score_of(list[0])}};
+                auto has = [&](const u16& x) { for (auto& t : top) if (t.first == x) return true; return false; };
+                if (!has(w.surface)) top.push_back({w.surface, w.s});
+                for (auto& a : w.alts)
+                    if (a.second >= 0.03f && top.size() < 3 && !has(a.first)) top.push_back(a);
+                // 二股の頭: 別の区切りの文を強さの順の位置に (強さ = 別の区切りの語のうち弱い方)
+                if (&w == &n.main.front() && !n.fork.empty()) {
+                    u16 fs;
+                    float sc = 1;
+                    for (auto& fw : n.fork) { fs += fw.surface; sc = std::min(sc, fw.s); }
+                    if (!has(fs)) {
+                        size_t at = 1;
+                        while (at < top.size() && top[at].second >= sc) at++;
+                        top.insert(top.begin() + long(at), {fs, sc});
+                        s.fork_idx = int(at);
+                    }
+                }
+                std::vector<u16> rest;
+                for (auto& x : list) if (!has(x)) rest.push_back(x);
+                s.tree_k = int(top.size());
+                list.clear();
+                for (auto& t : top) { list.push_back(t.first); scores.push_back(t.second); }
+                list.insert(list.end(), rest.begin(), rest.end());
+            }
+    }
+    scores.resize(list.size(), -1.f);
+    s.scores = std::move(scores);
     s.cands = std::move(list);
     s.sel = 0;
     s.loaded = true;
@@ -1140,6 +1279,7 @@ void Composer::passthrough(const KeyEvent& ev) {
 
 void Composer::to_idle() {
     state_ = State::Idle;
+    pred_tab_.clear();
     kana_.clear();
     caret_ = 0;
     romaji_.reset();
@@ -1230,6 +1370,67 @@ void Composer::rebuild_view() {
             v.cands = segs_[focus_].cands;
             if (segs_.size() == 1) for (auto& x : v.cands) v.cand_notes.push_back(sugg_note(x));
             v.cand_sel = segs_[focus_].sel;
+            v.cand_short = segs_[focus_].tree_k;
+            v.cand_scores = segs_[focus_].scores;
+            v.cand_scores.resize(v.cands.size(), -1.f);
+            v.cand_fork = segs_[focus_].fork_idx;
+        }
+        if (options.cand_tree && tree_.empty()) {
+            // 木が無い (文 1 つで変換した・固定した前の方がある など): 文節の札だけを並べる (強さは分からない = -1)
+            int r = 0;
+            for (auto& sg : segs_) {
+                TreeNode n;
+                TreeWord w;
+                w.surface = sg.surface;
+                w.rs = r;
+                w.re = r += int(sg.reading.size());
+                w.s = -1;
+                n.main.push_back(std::move(w));
+                v.tree.push_back(std::move(n));
+            }
+            int f = 0;
+            for (size_t i = 0; i < focus_; i++) f += int(segs_[i].reading.size());
+            v.tree_rs = f;
+            v.tree_re = f + int(segs_[focus_].reading.size());
+        }
+        if (options.cand_tree && !tree_.empty()) {
+            // 木の語の区間と同じ文節は、今選んでいる表記で見せる (選び直したら木にも出る)
+            v.tree = tree_;
+            {   // 固定した前の方の文節 (木の外) も、強さの分からない札として頭に
+                std::vector<TreeNode> pre;
+                int q = -tree_off_;
+                for (auto& sg : segs_) {
+                    if (q >= 0) break;
+                    TreeNode n;
+                    TreeWord w;
+                    w.surface = sg.surface;
+                    w.rs = q;
+                    w.re = q += int(sg.reading.size());
+                    w.s = -1;
+                    n.main.push_back(std::move(w));
+                    pre.push_back(std::move(n));
+                }
+                v.tree.insert(v.tree.begin(), pre.begin(), pre.end());
+            }
+            int r = -tree_off_;
+            for (size_t i = 0; i < segs_.size(); i++) {
+                const int rs = r, re = r + int(segs_[i].reading.size());
+                r = re;
+                if (i == focus_) { v.tree_rs = rs; v.tree_re = re; }
+                // 別の区切りを選んでまとめた文節: 木はそのまま (候補の列の別の区切りの行にケーブルがつながる)
+                if (!segs_[i].own_reading.empty()) continue;
+                for (auto& n : v.tree)
+                    for (auto& w : n.main)
+                        if (w.rs == rs && w.re == re && w.surface != segs_[i].surface) {
+                            // 別の表記にしたら、その表記と元の 1 位を入れ替える (強さも)
+                            auto it = std::find_if(w.alts.begin(), w.alts.end(), [&](auto& a) { return a.first == segs_[i].surface; });
+                            float s = it != w.alts.end() ? it->second : 0.f;
+                            if (it != w.alts.end()) w.alts.erase(it);
+                            w.alts.insert(w.alts.begin(), {w.surface, w.s});
+                            w.surface = segs_[i].surface;
+                            w.s = s;
+                        }
+            }
         }
     }
     view_ = std::move(v);

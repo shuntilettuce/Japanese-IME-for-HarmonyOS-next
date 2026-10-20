@@ -46,13 +46,13 @@ rc /nologo %DEFS% /fo "%OBJ%\shunti_ime.res" "%HERE%shunti_ime.rc" || exit /b 1
 cl /nologo /c /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS %DEFS% ^
   /I"%ROOT%\entry\src\main\cpp" /Fo"%OBJ%\\" ^
   "%HERE%dllmain.cpp" "%HERE%globals.cpp" "%HERE%text_service.cpp" "%HERE%cand_window.cpp" "%HERE%display_attr.cpp" "%HERE%langbar.cpp" ^
-  "%HERE%input_log.cpp" "%CORE%\text.cpp" "%CORE%\romaji.cpp" "%CORE%\store.cpp" "%CORE%\settings.cpp" ^
+  "%HERE%input_log.cpp" "%HERE%strings.cpp" "%CORE%\text.cpp" "%CORE%\romaji.cpp" "%CORE%\store.cpp" "%CORE%\settings.cpp" ^
   "%CORE%\converter.cpp" "%CORE%\composer.cpp" "%CORE%\flow.cpp" "%CORE%\layout.cpp" "%CORE%\datetime.cpp" "%ROOT%\entry\src\main\cpp\engine.cpp" || exit /b 1
 rem 変換エンジンの AVX2 版の計算だけは /arch:AVX2 で (使うのは CPU が対応しているときだけ。engine_simd.h を参照)
 cl /nologo /c /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /arch:AVX2 %DEFS% /Fo"%OBJ%\\" ^
   "%ROOT%\entry\src\main\cpp\engine_avx2.cpp" || exit /b 1
 link /nologo /DLL /guard:cf /DEF:"%HERE%shunti_ime.def" /OUT:"%DIST%\shunti_ime_%1.dll" "%OBJ%\*.obj" "%OBJ%\shunti_ime.res" ^
-  ole32.lib oleaut32.lib uuid.lib advapi32.lib user32.lib gdi32.lib shell32.lib dwmapi.lib || exit /b 1
+  ole32.lib oleaut32.lib uuid.lib advapi32.lib user32.lib gdi32.lib shell32.lib dwmapi.lib gdiplus.lib || exit /b 1
 del "%DIST%\shunti_ime_%1.exp" "%DIST%\shunti_ime_%1.lib" 2>nul
 exit /b 0
 
@@ -64,7 +64,12 @@ set OBJ=%HERE%..\build\obj_settings%SUFFIX%
 if not exist "%OBJ%" mkdir "%OBJ%"
 rc /nologo %DEFS% /fo "%OBJ%\settings_app.res" "%HERE%settings_app.rc" || exit /b 1
 cl /nologo /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS %DEFS% /Fo"%OBJ%\\" ^
-  "%HERE%settings_app.cpp" "%CORE%\text.cpp" "%CORE%\store.cpp" "%CORE%\settings.cpp" /Fe"%DIST%\shunti_settings.exe" ^
-  /link /SUBSYSTEM:WINDOWS /guard:cf "%OBJ%\settings_app.res" comctl32.lib comdlg32.lib shell32.lib ole32.lib user32.lib gdi32.lib ^
+  "%HERE%settings_app.cpp" "%HERE%strings.cpp" "%HERE%update.cpp" "%CORE%\text.cpp" "%CORE%\store.cpp" "%CORE%\settings.cpp" /Fe"%DIST%\shunti_settings.exe" ^
+  /link /SUBSYSTEM:WINDOWS /guard:cf "%OBJ%\settings_app.res" comctl32.lib comdlg32.lib shell32.lib ole32.lib user32.lib gdi32.lib winhttp.lib ^
+  /MANIFEST:EMBED "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'" || exit /b 1
+rem web installer: downloads the latest Windows release from GitHub and runs install.ps1
+cl /nologo /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\\" ^
+  "%HERE%setup.cpp" "%HERE%strings.cpp" "%HERE%update.cpp" /Fe"%HERE%..\build\shunti-IME-setup.exe" ^
+  /link /SUBSYSTEM:WINDOWS /guard:cf "%OBJ%\settings_app.res" shell32.lib user32.lib winhttp.lib ^
   /MANIFEST:EMBED "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'" || exit /b 1
 exit /b 0

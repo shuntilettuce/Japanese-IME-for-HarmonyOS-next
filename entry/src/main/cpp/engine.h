@@ -40,6 +40,8 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
 // keys = 打った鍵 (英字・記号そのまま)。span_end[i] = 読みの i 文字目が鍵の何文字目までで決まったか (単調増加)。
 // 直後の 1 回の kkc_convert にだけ効く (その変換の読みの長さが nk と合わなければ使わない)
 KKC_API void kkc_set_keys(kkc_engine* e, const uint16_t* keys, int nkeys, const int32_t* span_end, int nk);
+// カーソルの後ろの文 (後ろの文脈、80 字ほど)。直後の 1 回の kkc_convert にだけ効く。後ろの文脈を学んだモデル (S8 から) だけが使う
+KKC_API void kkc_set_right_ctx(kkc_engine* e, const uint16_t* text, int n);
 
 // 直前の kkc_convert の 1 位と 2 位 (表記が違う最初の 2 つ) の経路のコストの差 (大きいほど迷いが少ない)。
 // 段階式 (辞書だけで決まるときはモデルを呼ばない) の判定に使う。2 位が無ければとても大きな値
@@ -53,6 +55,11 @@ KKC_API int kkc_last_scores(kkc_engine* e, float* u, int cap);
 // 直前の kkc_convert の 1 位の候補の語の区切り。ends[i] = i 語目の読みの終わりの位置 (読みの UTF-16 の字数)、
 // lens[i] = i 語目の表記の長さ (UTF-16)。返り値は語の数。長い入力で「前の方を固定して後ろだけ変換する」ために使う
 KKC_API int kkc_last_segments(kkc_engine* e, int32_t* ends, int32_t* lens, int cap);
+
+// 直前の kkc_convert の上位の経路 (候補の木の窓用)。経路 p のコスト costs[p]・語の数 counts[p]、語ごとに読みの終わり ends と
+// 表記の長さ lens (UTF-16)、表記は text に続けて書く。返り値は経路の数。kkc_convert のすぐ後に同じスレッドで呼ぶ
+KKC_API int kkc_last_paths(kkc_engine* e, int pmax, double* costs, int32_t* counts, int32_t* ends, int32_t* lens, int wcap,
+                           uint16_t* text, int tcap);
 
 // 直前の kkc_convert の 1 位の候補の語ごとの品詞の左右 ID (辞書の ID。辞書に無い語は名詞の ID)。返り値は語の数。
 // PC 版が文節 (自立語 + 付属語) の区切りを決めるのに使う

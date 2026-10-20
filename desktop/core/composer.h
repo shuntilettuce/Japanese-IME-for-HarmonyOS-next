@@ -57,6 +57,12 @@ struct View {
     int sugg_sel = -1;            // 提案の列で選んでいるもの (-1 = 提案の列に入っていない)
     // 文の流れの続き (確定した後、何も打っていないときだけ。Tab で 1 つ目を入れる)
     std::vector<u16> post;
+    // 候補の木 (変換中だけ。候補の窓の上の帯)。tree_rs〜tree_re = 選んでいる文節の読みの区間 (木の読みの位置)
+    std::vector<TreeNode> tree;
+    int tree_rs = -1, tree_re = -1;
+    int cand_short = 0;
+    std::vector<float> cand_scores;   // 候補ごとの木の強さ (-1 = 分からない)
+    int cand_fork = -1;               // 別の区切りの候補の番号 (-1 = 無し)           // 候補の木: 選ぶ位置が cand_short 未満のあいだは先頭の cand_short 個だけ出す (0 = 全部)
 };
 
 // 入力の記録 (デバッグ用のビルドだけが受け取って書く。HarmonyOS 版 InputLog.ets と同じ種別とキー)。
@@ -78,6 +84,7 @@ struct ComposerOptions {
     bool live_commit = true;   // 長い入力の前の方を固定する (保留: 入力欄には確定せず、変換した形で見せて文節で直せる)
     bool live_display = false; // ライブ変換: 入力中の文字を、空白を押す前から AI の 1 位で見せる (Enter でそのまま確定)
     bool always_cands = true;  // 変換中は候補の窓をいつも出す
+    bool cand_tree = false;     // 変換中は候補の窓の上に候補の木 (文節の強さ・つながり・迷う区切り) を出す
     bool space_fullwidth = true;   // 何も打っていないときの空白を全角に (Shift で逆)
     int punct = 0;                 // 句読点: 0 = 、。 1 = ，． 2 = 、． 3 = ，。
     bool digits_fullwidth = false; // 数字を全角で入れる
@@ -155,6 +162,13 @@ private:
         int sel = 0;
         bool changed = false;    // 変換のあとで選び直した (確定したときに学習する)
         int limit = 0;           // 読み込んだ候補の数の上限 (最後のページに来たら増やして続きを読む)
+        int tree_k = 0;          // 候補の木: 先頭の木の候補の数 (窓は選ぶ位置がこれ未満のあいだこれだけ出す)
+        std::vector<float> scores;   // 候補の木の強さ (cands と同じ並び。分からなければ -1)
+        // 候補の木の二股: cands[fork_idx] = 別の区切りの文 (区間の頭の文節だけが持つ)。選ぶと区間の文節を 1 つにまとめ、
+        // 離れると元に戻す (merged = まとめた後ろの文節、own_* = まとめる前の自分の読みと付属語)
+        int fork_idx = -1;
+        std::vector<Seg> merged;
+        u16 own_reading, own_tail_r, own_tail_s;
     };
 
     void start_input();
@@ -171,6 +185,8 @@ private:
     void load_cands(size_t i);
     void load_more(size_t i);   // 最後のページに来た: 候補の続き (変換の上位をもっと + その読みの辞書の語を全部) を足す
     void resize_focus(int delta);
+    void fork_merge(size_t i);     // 候補の木の二股: 文節 i から区間の終わりまでを 1 つにまとめる
+    void fork_unmerge(size_t i);   // まとめたのを元の文節に戻す
     void transform(Key f);
     u16 alpha_source(const u16& reading) const;
     void back_to_input();
@@ -236,6 +252,11 @@ private:
     std::vector<Seg> segs_;
     std::vector<u16> whole_;   // 文全体の候補 (文節が 1 つのとき、その候補に使う)
     std::vector<u16> first_cands_;   // 変換したときの文全体の候補 (記録用)
+    std::vector<TreeNode> tree_;     // 直前のスペースの変換の候補の木 (convert_phrases が最後の変換のものを入れる)
+    std::vector<TreeNode> last_tree_;
+    int tree_off_ = 0;               // 木の読みの位置 0 が kana_ のどこか (固定した前の方の読みの長さ)
+    std::vector<Word> live_words_;   // 直前の打っている間の変換の 1 位の語の区切り (固定オフのとき、前の方を使い回す)
+    std::vector<int> pred_tab_;      // Tab で予測の候補に入ったとき、候補の中の予測の位置 (Tab はこの中だけを回る)
     std::string first_via_;          // どうやって変換を始めたか (space・live・fkey。記録用)
     size_t focus_ = 0;
     bool cand_open_ = false;

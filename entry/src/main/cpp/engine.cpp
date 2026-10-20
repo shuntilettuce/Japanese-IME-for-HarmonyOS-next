@@ -81,6 +81,10 @@ struct LatinWord { ustr surf; int32_t lid, rid, cost; };
 
 // 1 位の候補の語: 読みの終わりの位置・表記の長さ (UTF-16)・品詞の左右 ID
 struct SegInfo { int e, l16, lid, rid; };
+// 上位の経路 1 本 (候補の木の窓用): コストと語ごとの (読みの終わり, 表記)
+struct PathInfo { double c; std::vector<std::pair<int, ustr>> w; };
+// 直前の nbest (1 位の区切りを取ったもの) の上位の経路。kkc_convert の終わりで kkc_engine に写す
+thread_local std::vector<PathInfo> tl_paths;
 
 // ユーザー辞書の語 (読み・表記・品詞の左右 ID・コスト)。辞書の語と同じく網に入れ、モデルが文脈で採点する
 struct UserWord { ustr r, s; int32_t lid, rid, cost; };
@@ -132,6 +136,10 @@ struct Lex {
     bool latin = false;  // 英字の辺 (K_LATIN) を作るか (モデルが辺の種類 K_LATIN を知っているとき。kkc_open が決める)
     // 英字だけの語 (a-z A-Z と数字、2 字以上) の表: 小文字の綴り -> 表記・品詞・コスト (kkc_open が作って使い回す)
     std::unordered_map<std::string, LatinWord> latin_words;
+    // 表記の頭の字 -> (語の番号, 読みの番号)。漢字を含む 2 字以上の語だけ。確定済みの漢字の語の続き (直滑 + こう → 降) を探すのに使う。
+    // 初めて要るときに作る (kanji_continuation_edges)
+    mutable std::unordered_map<char32_t, std::vector<std::pair<uint32_t, uint32_t>>> head_idx;
+    mutable bool head_built = false;
     int32_t abbr_lid = -1, abbr_rid = -1;   // 略語 (読みのアルファベットから作る GDP・IME) の品詞 (kkc_open で辞書の GDP から写す)
     static constexpr int RB = 16;      // 版 2 の読みの区切り
     static constexpr int MAXR = 256;   // 読みの長さの上限 (pack_lex.py が確かめる)
@@ -203,39 +211,45 @@ struct Lex {
         for (int i = 0; i < n; i++) { h ^= k[i]; h *= 1099511628211ULL; }
         return h ^ (h >> 29);
     }
+    // 読みを先頭から順に (版 2 は前の読みから戻すので、1 つずつ reading(i) で引くと区切りの頭から読み直して 16 倍遅い)
+    template <class F> void each_reading(F f) const {
+        uint16_t buf[MAXR];
+        for (int i = 0; i < nread; i++) {
+            int rn;
+            const uint16_t* r = ver == 1 ? (rn = int(r_off[i + 1] - r_off[i]), r_blob + r_off[i]) : (rn = next_reading(i, buf), buf);
+            f(r, rn);
+        }
+    }
     void build_bloom() {
         if (!bloom.empty() || nread <= 0) return;
         const size_t bits = size_t(nread) * 12;
         bloom.assign((bits + 63) / 64, 0);
-        uint16_t buf[MAXR];
-        for (int i = 0; i < nread; i++) {
-            int rn;
-            const uint16_t* r = reading(i, rn, buf);
+        each_reading([&](const uint16_t* r, int rn) {
             const uint64_t h = hash16(r, rn), h2 = (h >> 32) | 1;
             for (int j = 0; j < 4; j++) { const size_t b = size_t((h + j * h2) % bits); bloom[b >> 6] |= 1ULL << (b & 63); }
-        }
+        });
         build_pbloom();
     }
     // 読みの頭 (どこかの読みがこれで始まる) のブルームフィルタ。打ち間違いの辺づくりで、区間を後ろへ延ばしても語が無いと
-    // 分かったら延ばすのをやめる (結果は同じ。頭の無い区間の引きを省く)
+    // 分かったら延ばすのをやめる (結果は同じ。頭の無い区間の引きを省く)。
+    // 大きさは頭の延べ数 (読みの字数の合計) から決める (前は同じ頭を 1 つにする集合を作っていて、辞書を開くのに 2 秒かかった。
+    // ブルームフィルタは「無い」の判定だけに使うので、大きさを変えても結果は同じ)
     std::vector<uint64_t> pbloom;
     size_t pbits = 0;
     void build_pbloom() {
         if (!pbloom.empty() || nread <= 0) return;
-        std::unordered_set<uint64_t> heads;   // 頭の数を数えてから大きさを決める (同じ頭は 1 つ)
-        uint16_t buf[MAXR];
-        for (int i = 0; i < nread; i++) {
-            int rn;
-            const uint16_t* r = reading(i, rn, buf);
-            uint64_t h = 1469598103934665603ULL;
-            for (int j = 0; j < rn; j++) { h ^= r[j]; h *= 1099511628211ULL; heads.insert(h ^ (h >> 29)); }
-        }
-        pbits = std::max<size_t>(64, heads.size() * 10);
+        size_t total = 0;
+        each_reading([&](const uint16_t*, int rn) { total += size_t(rn); });
+        pbits = std::max<size_t>(64, total * 6);
         pbloom.assign((pbits + 63) / 64, 0);
-        for (uint64_t h : heads) {
-            const uint64_t h2 = (h >> 32) | 1;
-            for (int j = 0; j < 3; j++) { const size_t b = size_t((h + j * h2) % pbits); pbloom[b >> 6] |= 1ULL << (b & 63); }
-        }
+        each_reading([&](const uint16_t* r, int rn) {
+            uint64_t h = 1469598103934665603ULL;
+            for (int j = 0; j < rn; j++) {
+                h ^= r[j]; h *= 1099511628211ULL;
+                const uint64_t x = h ^ (h >> 29), x2 = (x >> 32) | 1;
+                for (int t = 0; t < 3; t++) { const size_t b = size_t((x + t * x2) % pbits); pbloom[b >> 6] |= 1ULL << (b & 63); }
+            }
+        });
     }
     // h = 読みの頭の FNV (hash16 と同じ作り)。無ければ false (あるかもしれなければ true)
     bool maybe_head(uint64_t h) const {
@@ -541,6 +555,8 @@ constexpr int32_t LATIN_WORD_BONUS = 500;
 constexpr int32_t ENG_COST = 32000;
 // 英字の辺 (K_LATIN) のコストに上乗せする値。かな・カタカナの語より英字の語を出にくくする (日本語寄りにする)
 constexpr int32_t LATIN_BIAS = 3000;
+// 辞書に無い英字の並び (打ったまま・大文字・頭だけ大文字) の語のコスト (学習の網 kkcnative2 と同じ)
+constexpr int32_t LATIN_RAW_COST = 6000;
 
 // ---------------------------------------------------------------- 打ち間違いの辺 (S7、モデルが辺の種類 K_TYPO を知っているときだけ)
 // 打った読みをローマ字に直し、打ち間違い 1 打ぶんを戻した読み (余分な 1 打を消す・隣のキーを正しいキーに・抜けた 1 打を足す・
@@ -1073,6 +1089,11 @@ std::vector<Edge> edges(const Lex& L, const ustr& r, const std::vector<UserWord>
                     const Ent en = L.ent(j);
                     if (en.cost >= ENG_COST) continue;   // 英カタカナ辞書の語は網に入れない
                     ustr sf = from16(L.s_blob + en.soff, en.slen);
+                    // 読みが「、」の手前で切れた作品名 (それは → それは、突然、嵐のように…・あした → 明日、キミと手をつなぐよ) は使わない。
+                    // 辞書を作るときに題名の読みを途中までしか取れていなかった (約 1000 語。ユーザー 2026-10-17「固有名詞が強すぎる」)
+                    if (sf.size() > size_t(e - s) + 1 &&
+                        std::any_of(sf.begin(), sf.end(), [](char32_t ch) { return ch == U'、' || ch == U'。' || ch == U'…'; }))
+                        continue;
                     // 辞書の数字 (に -> 2) は、後ろに単位が続いて大きい数になる所 (に|せんちょう) では使わない。
                     // そこは数の辺 (2000兆・二千兆) に任せる。使うと採点器が「2千兆」「2千長円」のつなぎを選んでいた
                     if (std::all_of(sf.begin(), sf.end(), [](char32_t ch) { return ch >= U'0' && ch <= U'9'; }) &&
@@ -1204,6 +1225,104 @@ bool has_latin_word(const ustr& s) {
     return false;
 }
 
+// ---------------------------------------------------------------- 確定済みのカタカナ語の続き
+// 左の文脈がカタカナで終わっていて (確定したところで止まった「フリッ」「スマー」)、それに読みの頭をカタカナにして足すと辞書の
+// カタカナ語になる (フリッ+く = フリック、スマー+とふぉん = スマートフォン) なら、読みの頭をカタカナにした辺を安く足す。
+// 教材は語の切れ目でしか例を切っていないので、モデルは語の途中で切れた左の文脈を知らない (ユーザー 2026-10-20)
+constexpr int32_t KATA_CONT_COST = 0;
+void kata_continuation_edges(const Lex& L, const ustr& ctx, const ustr& r, std::vector<Edge>& out) {
+    auto is_kata = [](char32_t c) { return (c >= 0x30A1 && c <= 0x30FA) || c == 0x30FC; };
+    size_t t = 0;   // 左の文脈の終わりのカタカナの字数
+    while (t < ctx.size() && t < 12 && is_kata(ctx[ctx.size() - 1 - t])) t++;
+    if (t < 2) return;
+    const int n = int(r.size());
+    int best = 0;
+    for (int j = 1; j <= std::min(n, 12); j++) {
+        if (!((r[j - 1] >= 0x3041 && r[j - 1] <= 0x3096) || r[j - 1] == 0x30FC)) break;
+        const ustr tail_r = to_kata(r.substr(0, size_t(j)));
+        for (size_t k = 2; k <= t; k++) {   // 左のカタカナの後ろ k 字 + 読みの頭 j 字 = 辞書のカタカナ語か
+            const ustr word = ctx.substr(ctx.size() - k) + tail_r;
+            std::vector<uint16_t> key;
+            for (char32_t c : word) key.push_back(uint16_t(c >= 0x30A1 && c <= 0x30F6 ? c - 0x60 : c));
+            uint32_t a, b;
+            if (!L.find(key.data(), int(key.size()), a, b)) continue;
+            bool hit = false;
+            for (uint32_t q = a; q < b && !hit; q++) {
+                const Ent en = L.ent(q);
+                hit = en.cost < ENG_COST && from16(L.s_blob + en.soff, en.slen) == word;
+            }
+            if (hit) { best = j; break; }
+        }
+    }
+    if (best > 0) out.push_back({0, best, to_kata(r.substr(0, size_t(best))), L.noun, L.noun, KATA_CONT_COST, K_KATA});
+}
+
+// 確定済みの漢字の語の続き: 左の文脈の終わり (直滑) で始まり、読みが今の読みの頭 (こう) で終わる辞書の語 (直滑降 ちょっかっこう) があれば、
+// 残りの表記 (降) の辺を足す。左の文脈が語の切れ目で終わっている (東京 + とおおさか → 東京都) こともあるので、どちらにするかは採点器が文脈で決める
+constexpr int32_t KANJI_CONT_COST = 3000;   // 続きの辺のコストの上限 (珍しい語 直滑降 は辞書のコストが高く、そのままでは出なかった)
+void kanji_continuation_edges(const Lex& L, const ustr& ctx, const ustr& r, std::vector<Edge>& out) {
+    auto is_kanji = [](char32_t c) { return (c >= 0x4E00 && c <= 0x9FFF) || c == 0x3005; };
+    if (ctx.empty() || !is_kanji(ctx.back()) || r.empty()) return;
+    if (!L.head_built) {   // 表記の頭の字の索引を作る (よく使う語だけ: 辞書のコスト 7000 未満)
+        L.head_built = true;
+        uint16_t rb[Lex::MAXR];
+        for (int i = 0; i < L.nread; i++) {
+            if (L.ver != 1) L.next_reading(i, rb);
+            for (uint32_t j = L.e_first[i]; j < L.e_first[i + 1]; j++) {
+                const Ent en = L.ent(j);
+                if (en.slen < 1 || en.cost >= 7000) continue;   // 1 字の語も入れる (左の文脈の終わりが完成した語かを見るため)
+                const uint16_t* q = L.s_blob + en.soff;
+                bool kan = false;
+                for (int x = 0; x < en.slen && !kan; x++) kan = is_kanji(q[x]);
+                if (kan) L.head_idx[char32_t(q[0])].push_back({j, uint32_t(i)});
+            }
+        }
+    }
+    const int n = int(r.size());
+    int best_j = 0;
+    Edge best{};
+    uint16_t rb[Lex::MAXR];
+    for (size_t k = 1; k <= std::min<size_t>(4, ctx.size()); k++) {   // 左の文脈の後ろ k 字が語の頭
+        const ustr P = ctx.substr(ctx.size() - k);
+        bool kan = false;
+        for (char32_t c : P) kan = kan || is_kanji(c);
+        if (!kan) continue;
+        auto it = L.head_idx.find(P[0]);
+        if (it == L.head_idx.end()) continue;
+        // 左の文脈の終わりがそれだけでよく使う語 (東京・会社) なら、語の切れ目で終わっているとみて続きを探さない (dev が 0.5 点落ちた)
+        bool complete = false;
+        for (const auto& [j, ri] : it->second) {
+            const Ent en = L.ent(j);
+            if (en.slen != int(k) || en.cost >= 6000) continue;
+            const uint16_t* q = L.s_blob + en.soff;
+            bool same = true;
+            for (size_t x = 0; x < k && same; x++) same = q[x] == P[x];
+            if (same) { complete = true; break; }
+        }
+        if (complete) continue;
+        for (const auto& [j, ri] : it->second) {
+            const Ent en = L.ent(j);
+            if (en.slen <= int(k)) continue;
+            const uint16_t* q = L.s_blob + en.soff;
+            bool head = true;
+            for (size_t x = 0; x < k && head; x++) head = q[x] == P[x];
+            if (!head) continue;
+            int rn = 0;
+            const uint16_t* rd = L.reading(int(ri), rn, rb);
+            // 読みの終わりが今の読みの頭 jj 字と同じ (前の k 字に読みが 1 字以上は残る)
+            for (int jj = std::min(n, rn - int(k)); jj >= 1; jj--) {
+                bool tail = true;
+                for (int x = 0; x < jj && tail; x++) tail = rd[rn - jj + x] == r[size_t(x)];
+                if (!tail) continue;
+                if (jj > best_j || (jj == best_j && std::min(en.cost, KANJI_CONT_COST) < best.cost))
+                    best_j = jj, best = {0, jj, from16(q + k, size_t(en.slen) - k), int32_t(en.lid), int32_t(en.rid), std::min(en.cost, KANJI_CONT_COST), K_DICT};
+                break;
+            }
+        }
+    }
+    if (best_j > 0) out.push_back(best);
+}
+
 // ---------------------------------------------------------------- 英字の辺 (ローマ字で打った英単語。K_LATIN)
 // 打った鍵の列 (kkc_set_keys) の、かなの区間 [s, e) に対応する鍵の区間 [span_start(s), span_end[e-1]) が英字だけのとき、
 // 小文字にして英単語の一覧 (Lex::latin_words) を引く。当たれば正しい大文字小文字の表記の辺を足す。かなにするか
@@ -1223,8 +1342,16 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
             else return;   // 英字だけの区間だけ (記号は見ない)
         }
         auto it = L.latin_words.find(lower);
-        if (it == L.latin_words.end()) return;
-        out.push_back({s, e, it->second.surf, it->second.lid, it->second.rid, it->second.cost + LATIN_BIAS, K_LATIN});
+        if (it != L.latin_words.end()) {
+            out.push_back({s, e, it->second.surf, it->second.lid, it->second.rid, it->second.cost + LATIN_BIAS, K_LATIN});
+            return;
+        }
+        // 辞書に無い英字の並び (略語・新しい語): 打ったまま (大文字小文字も打った通り) を、辞書の語より高い点で (名詞として)。
+        // 大文字・頭だけ大文字も出すと、free shipping → Free Shipping のように勝手に大文字にした (2026-10-18 英字まじりベンチ)。
+        // 大文字にしたい人は Shift で打つ
+        ustr typed;
+        for (int i = ks; i < ke; i++) typed.push_back(char32_t(keys[size_t(i)]));
+        out.push_back({s, e, typed, L.noun, L.noun, LATIN_RAW_COST + LATIN_BIAS, K_LATIN});
     };
     for (int s = 0; s < n; s++) {
         const int ks = s == 0 ? 0 : span_end[size_t(s - 1)];
@@ -1719,11 +1846,14 @@ struct kkc_engine {
     std::vector<float> K;
     std::vector<float> last_u;
     std::vector<SegInfo> last_segs;   // 直前の変換の 1 位の語の区切り
+    std::vector<PathInfo> last_paths; // 直前の変換の上位の経路 (kkc_last_paths)
     double last_cost[2] = {0, 0};     // 直前の変換の 1 位・2 位 (表記が違う最初の 2 つ) の経路のコスト。2 位が無ければ大きな値
     std::vector<UserWord> user;                   // ユーザー辞書の語 (kkc_user_add_like で足す)
     // 打った鍵の列 (kkc_set_keys)。直後の 1 回の変換で英字の辺 (K_LATIN) を作るのに使う
     std::vector<uint16_t> keys;
     std::vector<int32_t> span_end;
+    // カーソルの後ろの文 (kkc_set_right_ctx)。直後の 1 回の変換で、後ろの文脈を学んだモデル (区分 4 つ) に渡す
+    std::vector<uint16_t> rctx;
     // 整数に丸めた重み (層ごとに inw, outw, l1w, l2w)。空なら float のまま
     std::vector<QW> qw;
     // 作業用
@@ -1992,6 +2122,8 @@ void scores(kkc_engine* E, int rstart, int n, const std::vector<Edge>& ed, std::
 }
 
 // 上位 k (lattice.nbest / kkcnative の kkc_nbest と同じ)
+// 送り仮名違いの候補 (前に同じ漢字の並びの候補がある) に足すコスト (1 つにつき)
+constexpr double VARIANT_PENALTY = 1500.0;
 int nbest(const Lex& L, const std::vector<Edge>& E, int n, const float* u, double beta, double gamma, int k, int maxout,
           std::vector<ustr>& res, std::vector<SegInfo>* segs = nullptr, double* top2 = nullptr) {
     const int M = int(E.size());
@@ -2041,6 +2173,7 @@ int nbest(const Lex& L, const std::vector<Edge>& E, int n, const float* u, doubl
     std::stable_sort(fin.begin(), fin.end(), [](const Cand& a, const Cand& b) { return a.c < b.c; });
     std::unordered_set<ustr> seen;
     std::vector<int> path;
+    std::vector<double> costs;   // res の各候補の経路のコスト
     res.clear();
     if (top2) { top2[0] = 0; top2[1] = 1e18; }
     for (auto& f : fin) {
@@ -2050,6 +2183,12 @@ int nbest(const Lex& L, const std::vector<Edge>& E, int n, const float* u, doubl
         ustr surf;
         for (auto it = path.rbegin(); it != path.rend(); ++it) surf += E[*it].surf;
         if (!seen.insert(surf).second) continue;
+        if (segs) {
+            if (res.empty()) tl_paths.clear();
+            PathInfo pi{f.c, {}};
+            for (auto it = path.rbegin(); it != path.rend(); ++it) pi.w.push_back({E[*it].e, E[*it].surf});
+            tl_paths.push_back(std::move(pi));
+        }
         if (res.empty() && segs) {   // 1 位の語の区切り: (読みの終わりの位置, 表記の長さ UTF-16)
             segs->clear();
             for (auto it = path.rbegin(); it != path.rend(); ++it) {
@@ -2060,8 +2199,36 @@ int nbest(const Lex& L, const std::vector<Edge>& E, int n, const float* u, doubl
         }
         if (top2 && res.size() < 2) top2[res.size()] = f.c;
         res.push_back(surf);
-        if (int(res.size()) >= maxout) break;
+        costs.push_back(f.c);
+        if (int(res.size()) >= maxout * 3) break;   // 送り仮名違いを下げて並べ直すので、多めに集める
     }
+    // 書き分けだけの違い (帰ってきた・帰って来た・取り込む・取込む: 肝心の語が同じ) は表記がほとんど同じなのでモデルの点も辞書のコストも
+    // 1 位と近く、上位を埋めて別の語 (返ってきた・描いておいて・取ってきて) を押し出していた。前に肝心の語が同じ候補があるたびに点を差し引いて並べ直す
+    // (1 位は前に何も無いので変わらない。送り仮名違いがはっきりよければ上に残る。ユーザー 2026-10-20「動詞の違いの配点が低すぎる」)
+    if (res.size() > 2) {
+        // 肝心の語 = 最初の漢字のかたまり (帰ってきた・帰って来た は 帰、返ってきた は 返)。後ろの補助の言葉の書き分け
+        // (来た/きた・置いて/おいて・貰う/もらう) や送り仮名だけの違いは同じ語とみる
+        auto skel = [](const ustr& x) {
+            auto kan = [](char32_t c) { return (c >= 0x4E00 && c <= 0x9FFF) || c == 0x3005; };
+            size_t i = 0;
+            while (i < x.size() && !kan(x[i])) i++;
+            size_t j = i;
+            while (j < x.size() && kan(x[j])) j++;
+            return x.substr(i, j - i);
+        };
+        std::unordered_map<ustr, int> seen_k;
+        std::vector<std::pair<double, size_t>> adj;
+        for (size_t i = 0; i < res.size(); i++) {
+            const ustr k = skel(res[i]);
+            const int before = k.empty() ? 0 : seen_k[k]++;
+            adj.push_back({costs[i] + VARIANT_PENALTY * before, i});
+        }
+        std::stable_sort(adj.begin(), adj.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        std::vector<ustr> r2;
+        for (auto& [c, i] : adj) r2.push_back(std::move(res[i]));
+        res.swap(r2);
+    }
+    if (int(res.size()) > maxout) res.resize(size_t(maxout));
     return int(res.size());
 }
 
@@ -2157,6 +2324,13 @@ KKC_API void kkc_set_typo(kkc_engine* e, int on, float bias) {
     e->lex.typo = on != 0 && e->m.n_kind > K_TYPO;
     if (e->lex.typo) e->lex.build_bloom();
     e->typo_bias = bias;
+}
+
+// カーソルの後ろの文 (後ろの文脈) を渡す。直後の 1 回の kkc_convert にだけ効く。後ろの文脈を学んだモデル (S8 から) だけが使い、
+// それ以前のモデルでは何もしない。長さはモデルの位置の表に合わせて切る (呼ぶ側は 80 字ほどを渡せばよい)
+KKC_API void kkc_set_right_ctx(kkc_engine* e, const uint16_t* text, int n) {
+    if (!e) return;
+    if (n > 0) e->rctx.assign(text, text + n); else e->rctx.clear();
 }
 
 // 打った鍵の列 (ローマ字の英字) を渡す。英字のまま打った語 (github) を候補にできるようにする。
@@ -2634,7 +2808,11 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
     }
     e->keys.clear();
     e->span_end.clear();
+    std::vector<uint16_t> rctx;   // 後ろの文脈も直後の 1 回だけ
+    rctx.swap(e->rctx);
     std::vector<Edge> E = edges(e->lex, r, &e->user);
+    kata_continuation_edges(e->lex, from16(ctx, size_t(nctx)), r, E);    // 確定済みのカタカナ語の続き (フリッ + く)
+    kanji_continuation_edges(e->lex, from16(ctx, size_t(nctx)), r, E);   // 確定済みの漢字の語の続き (直滑 + こう)
     if (!keys.empty()) {
         std::vector<Edge> lat;
         latin_edges(e->lex, keys, span_end, n, lat);
@@ -2645,6 +2823,7 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
     e->suggest.clear();
     e->last_u.clear();
     e->last_segs.clear();
+    tl_paths.clear();
     bool done = false;
     if (use_model == 2 && n >= CASCADE_MAX_LEN) use_model = 1;
     if (!use_model || n == 0 || use_model == 2) {
@@ -2687,6 +2866,15 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
             if (room > 0) {
                 tok.push_back(SEP); seg.push_back(2);
                 for (char32_t ch : dr) { tok.push_back(M.vid(ch)); seg.push_back(2); }
+            }
+        }
+        // 後ろの文脈 (S8 のモデル: 区分 3)。入力の最後に置く。位置の表に入りきらない分は削る (学習と同じ)
+        if (M.n_seg > 3 && !rctx.empty()) {
+            const int room = M.max_len - int(tok.size()) - 1;
+            if (room > 0) {
+                const ustr rc = from16(rctx.data(), std::min(rctx.size(), size_t(room)));
+                tok.push_back(SEP); seg.push_back(3);
+                for (char32_t ch : rc) { tok.push_back(M.vid(ch)); seg.push_back(3); }
             }
         }
         if (int(tok.size()) > M.max_len) return -3;   // 読みが長すぎる
@@ -3143,6 +3331,34 @@ KKC_API int kkc_last_scores(kkc_engine* e, float* u, int cap) {
     return n;
 }
 
+KKC_API int kkc_last_paths(kkc_engine* e, int pmax, double* costs, int32_t* counts, int32_t* ends, int32_t* lens, int wcap,
+                           uint16_t* text, int tcap) {
+    if (!e) return 0;
+    e->last_paths = tl_paths;
+    int np = 0, nw = 0, nt = 0;
+    for (const PathInfo& p : e->last_paths) {
+        if (np >= pmax) break;
+        if (nw + int(p.w.size()) > wcap) break;
+        int need = 0;
+        for (auto& w : p.w) for (char32_t c : w.second) need += c >= 0x10000 ? 2 : 1;
+        if (nt + need > tcap) break;
+        costs[np] = p.c;
+        counts[np] = int(p.w.size());
+        for (auto& w : p.w) {
+            int l = 0;
+            for (char32_t c : w.second) {
+                if (c >= 0x10000) { char32_t v = c - 0x10000; text[nt++] = uint16_t(0xD800 + (v >> 10)); text[nt++] = uint16_t(0xDC00 + (v & 0x3FF)); l += 2; }
+                else { text[nt++] = uint16_t(c); l++; }
+            }
+            ends[nw] = w.first;
+            lens[nw] = l;
+            nw++;
+        }
+        np++;
+    }
+    return np;
+}
+
 KKC_API int kkc_last_segments(kkc_engine* e, int32_t* ends, int32_t* lens, int cap) {
     if (!e) return -2;
     int n = int(e->last_segs.size());
@@ -3184,6 +3400,10 @@ KKC_API int kkc_user_add_like(kkc_engine* e, const uint16_t* r, int nr, const ui
 #define KKC_FRAG 4500   // 「ね」へのつながりのコストがこれより高い語は、言い切れない形として予測に出さない
 #endif
 
+// 固有名詞 (Mozc の ID: 固有名詞一般 1920・人名 1921・名 1922・姓 1923・組織 1929)。読みの続く語 (予測) には出さない:
+// 「いく」で 生田絵梨花・育、「おつ」で 尾辻舞・乙骨耐軒 が並んでいた (ユーザー 2026-10-17)。名前は読みを打ち切れば変換の候補に出る
+static bool proper_noun_lid(int lid) { return (lid >= 1920 && lid <= 1923) || lid == 1929; }
+
 KKC_API int kkc_complete(kkc_engine* e, const uint16_t* prefix, int np, int max_extra, int maxout, uint16_t* out, int cap) {
     if (!e || np <= 0) return 0;
     const Lex& L = e->lex;
@@ -3213,9 +3433,15 @@ KKC_API int kkc_complete(kkc_engine* e, const uint16_t* prefix, int np, int max_
         // 順位は語のコスト (よく使う語ほど低い)。ただし後ろに終助詞「ね」が付きにくい語 (よろしけれ・いただい など
         // 活用の途中の形) は、言い切れないので除く
         for (uint32_t j = L.e_first[i]; j < L.e_first[i + 1]; j++)
-            if (L.ent(j).cost < ENG_COST && L.conn(L.ent(j).rid, ne_lid) <= KKC_FRAG) found.push_back({L.ent(j).cost, j});
+            if (L.ent(j).cost < ENG_COST && L.conn(L.ent(j).rid, ne_lid) <= KKC_FRAG && !proper_noun_lid(L.ent(j).lid))
+                found.push_back({L.ent(j).cost, j});
     }
     std::sort(found.begin(), found.end(), [](const C& a, const C& b) { return a.cost < b.cost; });
+    std::unordered_set<ustr> all;   // 候補の表記すべて (言いかけの形を見分けるため)
+    for (const C& c : found) {
+        const Ent en = L.ent(c.ent);
+        all.insert(from16(L.s_blob + en.soff, en.slen));
+    }
     std::vector<uint16_t> buf;
     std::unordered_set<ustr> seen;
     int n = 0;
@@ -3227,6 +3453,10 @@ KKC_API int kkc_complete(kkc_engine* e, const uint16_t* prefix, int np, int max_
         const char32_t last = sf.back();
         if (last == U'ゃ' || last == U'ゅ' || last == U'ょ' || last == U'っ') continue;
         if (sf.size() >= 2 && (sf.compare(sf.size() - 2, 2, U"けれ") == 0 || sf.compare(sf.size() - 2, 2, U"かろ") == 0)) continue;
+        if (sf.size() >= 3 && sf.compare(sf.size() - 3, 3, U"しから") == 0) continue;   // よろしから・宜しから (未然形)
+        // 歩こ・楽しも・住み着こ (後ろに う の付いた 歩こう が候補にあれば、言いかけの形は出さない)。
+        // 感動詞・接続詞 (Mozc の ID 2591・2593: おはよ / おはよう) は別の語なので除かない
+        if (en.lid != 2591 && en.lid != 2593 && all.count(sf + U"う")) continue;
         if (!seen.insert(sf).second) continue;
         to16(sf, buf);
         buf.push_back(0);

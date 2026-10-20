@@ -5,6 +5,7 @@
 #include <string>
 
 #include "globals.h"
+#include "strings.h"
 #include "text_service.h"
 
 namespace shunti {
@@ -56,7 +57,7 @@ STDMETHODIMP LangBarButton::GetInfo(TF_LANGBARITEMINFO* info) {
     info->guidItem = GUID_LBI_INPUTMODE;   // タスクバーの入力モードの表示になる
     info->dwStyle = TF_LBI_STYLE_BTN_BUTTON | TF_LBI_STYLE_SHOWNINTRAY;
     info->ulSort = 0;
-    wcscpy_s(info->szDescription, L"入力モード");
+    wcscpy_s(info->szDescription, T(131));
     return S_OK;
 }
 STDMETHODIMP LangBarButton::GetStatus(DWORD* status) {
@@ -66,7 +67,7 @@ STDMETHODIMP LangBarButton::GetStatus(DWORD* status) {
 }
 STDMETHODIMP LangBarButton::GetTooltipString(BSTR* tip) {
     if (!tip) return E_INVALIDARG;
-    *tip = SysAllocString(ts_ && ts_->is_open() ? L"ひらがな (shunti IME)" : L"半角英数 (shunti IME)");
+    *tip = SysAllocString(ts_ && ts_->is_open() ? T(132) : T(133));
     return *tip ? S_OK : E_OUTOFMEMORY;
 }
 // メニューを出すための見えない窓 (この IME を動かしているスレッドのもの。TrackPopupMenu は同じスレッドの窓が要る)
@@ -85,9 +86,9 @@ STDMETHODIMP LangBarButton::OnClick(TfLBIClick click, POINT pt, const RECT*) {
     if (click != TF_LBI_CLK_RIGHT) return S_OK;
     // 右クリック: 小さなメニュー (オン・オフと設定)
     HMENU m = CreatePopupMenu();
-    AppendMenuW(m, MF_STRING, 1, ts_ && ts_->is_open() ? L"日本語入力をオフ" : L"日本語入力をオン");
+    AppendMenuW(m, MF_STRING, 1, ts_ && ts_->is_open() ? T(58) : T(57));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m, MF_STRING, 2, L"設定・ユーザー辞書...");
+    AppendMenuW(m, MF_STRING, 2, T(134));
     HWND owner = menu_owner();
     SetForegroundWindow(owner);   // こうしないと、外をクリックしてもメニューが閉じない
     int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON | TPM_BOTTOMALIGN, pt.x, pt.y, 0, owner, nullptr);
@@ -102,10 +103,10 @@ enum { MENU_TOGGLE = 1, MENU_SETTINGS = 2 };
 
 STDMETHODIMP LangBarButton::InitMenu(ITfMenu* menu) {
     if (!menu) return E_INVALIDARG;
-    const wchar_t* toggle = ts_ && ts_->is_open() ? L"日本語入力をオフ" : L"日本語入力をオン";
+    const wchar_t* toggle = ts_ && ts_->is_open() ? T(58) : T(57);
     menu->AddMenuItem(MENU_TOGGLE, 0, nullptr, nullptr, toggle, ULONG(wcslen(toggle)), nullptr);
     menu->AddMenuItem(UINT(-1), TF_LBMENUF_SEPARATOR, nullptr, nullptr, L"", 0, nullptr);
-    const wchar_t* settings = L"設定・ユーザー辞書...";
+    const wchar_t* settings = T(134);
     menu->AddMenuItem(MENU_SETTINGS, 0, nullptr, nullptr, settings, ULONG(wcslen(settings)), nullptr);
     return S_OK;
 }
@@ -123,7 +124,7 @@ STDMETHODIMP LangBarButton::GetIcon(HICON* icon) {
 }
 STDMETHODIMP LangBarButton::GetText(BSTR* text) {
     if (!text) return E_INVALIDARG;
-    *text = SysAllocString(ts_ && ts_->is_open() ? L"あ" : L"A");
+    *text = SysAllocString(ts_ && ts_->is_open() ? T(135) : L"A");
     return *text ? S_OK : E_OUTOFMEMORY;
 }
 

@@ -213,6 +213,7 @@ std::vector<u16> date_forms(int64_t days) {
         out.push_back(w_ + M + u"月" + D + u"日");
         out.push_back(w_ + M + u"月" + D + u"日(" + dow1 + u")");
     }
+    out.push_back(Y + num2(m) + num2(d));   // 数字 8 桁 (20261021。8 桁から日付にする向きの逆。ユーザー 2026-10-20)
     return out;
 }
 
@@ -357,6 +358,24 @@ std::vector<u16> datetime_predict(const u16& reading, std::time_t now) {
     const int64_t today = days_from_civil(y, mo, d);
     const int wday = wday_of_days(today);
 
+    // 数字 8 桁の日付 (20261018 → 2026年10月18日(日)・2026/10/18 など)。ありえない日付は出さない (ブログの要望 2026-10-18、Beki IME のように)
+    if (reading.size() == 8) {
+        int v[8], k = 0;
+        for (char16_t c : reading) {
+            if (c >= u'0' && c <= u'9') v[k++] = c - u'0';
+            else if (c >= 0xFF10 && c <= 0xFF19) v[k++] = c - 0xFF10;
+            else break;
+        }
+        if (k == 8) {
+            const int Y = v[0] * 1000 + v[1] * 100 + v[2] * 10 + v[3], M = v[4] * 10 + v[5], D = v[6] * 10 + v[7];
+            if (Y >= 1900 && Y <= 2100 && M >= 1 && M <= 12 && D >= 1 && D <= 31) {
+                const int64_t days = days_from_civil(Y, M, D);
+                int y2, m2, d2;
+                civil_from_days(days, y2, m2, d2);
+                if (y2 == Y && m2 == M && d2 == D) return date_forms(days);
+            }
+        }
+    }
     int off;
     if (find_offset(DAY_OFFSETS, sizeof(DAY_OFFSETS) / sizeof(DAY_OFFSETS[0]), reading, off)) return date_forms(today + off);
     if (find_offset(YEAR_OFFSETS, sizeof(YEAR_OFFSETS) / sizeof(YEAR_OFFSETS[0]), reading, off)) return year_offset_forms(y + off);

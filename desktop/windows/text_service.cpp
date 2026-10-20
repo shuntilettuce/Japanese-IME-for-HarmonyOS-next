@@ -9,6 +9,7 @@
 #include "input_log.h"
 #include "langbar.h"
 #include "shortcut_key.h"
+#include "strings.h"
 
 // 試験用: 設定のフォルダに layout_trace.on があるときだけ、配列が受け取ったキーと時刻を layout_trace.txt に書く
 static void layout_trace(const char* op, const std::string& k, uint64_t t) {
@@ -156,16 +157,8 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* tm, TfClientId cid, DWORD) {
     tm_->AddRef();
     cid_ = cid;
 
-    Core& c = core();
-    composer_ = std::make_unique<Composer>(c.conv.ok() ? &c.conv : nullptr, &c.learning, &c.dict);
-    composer_->flow = &c.flow;
-    composer_->set_context_provider([this] { return left_ctx_; });
-    if (INPUT_LOG_ENABLED) {   // デバッグ用のビルドだけ (リリース用では INPUT_LOG_ENABLED が false で、書き出す関数も空)
-        composer_->on_log = [this](const LogEvent& e) {
-            if (!secure_) input_log(e);
-        };
-        input_log_simple("diag", "activate");
-    }
+    // 辞書・モデル・学習の読み込み (Core) と Composer は、最初にキーを打ったときに作る (ensure_composer)。
+    // IME はアプリが起動して入力の仕組みに加わるたびに読み込まれるので、ここで作ると入力しないアプリまで起動が遅くなった (ブログの報告 2026-10-18)
     cand_.on_click = [this](int i) { on_candidate_clicked(i); };
     cand_.on_sugg_click = [this](int i) { on_suggestion_clicked(i); };
 
@@ -189,17 +182,28 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* tm, TfClientId cid, DWORD) {
     ComPtr<ITfLangBarItemMgr> lbm;
     if (SUCCEEDED(tm_->QueryInterface(IID_PPV_ARGS(&lbm)))) lbm->AddItem(langbar_);
 
-    set_open(app_open_state(true));   // このアプリで前にオフにしていればオフのまま (MS-IME と同じくアプリごとに覚える)
+    // このソフトで前に使ったときの状態 (終了時・切り替え時に覚える)。初めてのソフトは設定 (初めて使うソフト: オン/オフ)
+    Settings st;   // Core はまだ作らない (起動を軽く) ので、設定は直接読む
+    load_settings(user_dir() / L"settings.json", st);
+    set_open(app_open_state(st.app_default_open));
     return S_OK;
 }
 
 // アプリ (実行ファイルの名前) ごとの日本語入力のオン・オフ。shunti IME の設定のフォルダの app_open.tsv に覚える
+// 実行ファイルの名前の大文字小文字をそろえる (app_open.tsv の古い行は Claude.exe のように大文字まじり)
+static std::string lower_ascii(std::string s) {
+    for (auto& c : s) if (c >= 'A' && c <= 'Z') c = char(c + 32);
+    return s;
+}
+
 std::wstring TextService::app_name() {
     wchar_t path[MAX_PATH] = L"";
     GetModuleFileNameW(nullptr, path, MAX_PATH);
     std::wstring s(path);
     size_t k = s.find_last_of(L"\\/");
-    return k == std::wstring::npos ? s : s.substr(k + 1);
+    std::wstring name = k == std::wstring::npos ? s : s.substr(k + 1);
+    for (auto& c : name) c = wchar_t(towlower(c));   // Claude.exe と claude.exe を同じソフトとして覚える
+    return name;
 }
 
 bool TextService::app_open_state(bool def) {
@@ -213,7 +217,7 @@ bool TextService::app_open_state(bool def) {
         std::string line = t.substr(i, j - i);
         i = j + 1;
         size_t tab = line.find('\t');
-        if (tab != std::string::npos && line.substr(0, tab) == me) return line.substr(tab + 1, 1) == "1";
+        if (tab != std::string::npos && lower_ascii(line.substr(0, tab)) == me) return line.substr(tab + 1, 1) == "1";
     }
     return def;
 }
@@ -228,7 +232,7 @@ void TextService::remember_app_open(bool open) {
         if (j == std::string::npos) j = t.size();
         std::string line = t.substr(i, j - i);
         i = j + 1;
-        if (line.empty() || line.substr(0, line.find('\t')) == me) continue;
+        if (line.empty() || lower_ascii(line.substr(0, line.find('\t'))) == me) continue;   // 大文字小文字の違う古い行も置き換える
         out += line + "\n";
     }
     out += me + "\t" + (open ? "1" : "0") + "\n";
@@ -236,6 +240,7 @@ void TextService::remember_app_open(bool open) {
 }
 
 STDMETHODIMP TextService::Deactivate() {
+    if (tm_) remember_app_open(is_open());   // ソフトの終了・IME の切り替え: このソフトでの状態を覚える (次に起動したとき戻す)
     finish_composition();
     cand_.destroy();
     if (langbar_) {
@@ -387,6 +392,7 @@ void TextService::apply_settings() {
         composer_->options.live = s.live;
         composer_->options.live_commit = s.live_commit;
         composer_->options.live_display = s.live_display;
+        composer_->options.cand_tree = s.cand_tree;
         composer_->options.space_fullwidth = s.space_fullwidth;
         composer_->options.punct = s.punct;
         composer_->options.digits_fullwidth = s.digits_fullwidth;
@@ -513,8 +519,26 @@ static bool read_only_context(ITfContext* ctx) {
     return (st.dwDynamicFlags & TF_SD_READONLY) != 0;
 }
 
+// Composer (と辞書・モデル・学習の Core) を、要るときに初めて作る
+bool TextService::ensure_composer() {
+    if (composer_) return true;
+    if (!tm_) return false;
+    Core& c = core();
+    composer_ = std::make_unique<Composer>(c.conv.ok() ? &c.conv : nullptr, &c.learning, &c.dict);
+    composer_->flow = &c.flow;
+    composer_->set_context_provider([this] { return left_ctx_; });
+    if (INPUT_LOG_ENABLED) {   // デバッグ用のビルドだけ (リリース用では INPUT_LOG_ENABLED が false で、書き出す関数も空)
+        composer_->on_log = [this](const LogEvent& e) {
+            if (!secure_) input_log(e);
+        };
+        input_log_simple("diag", "activate");
+    }
+    apply_settings();
+    return true;
+}
+
 TextService::Action TextService::classify(WPARAM vk, LPARAM lp, KeyEvent& ev, ITfContext* ctx) {
-    if (!composer_) return Action::None;
+    if (!ensure_composer()) return Action::None;
     bool composing = composer_->composing();
     if (!composing) apply_settings();   // 設定画面で変えた分 (ファイルの更新を見るだけなので軽い)
     const bool ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0, alt = GetKeyState(VK_MENU) < 0;
@@ -969,6 +993,29 @@ void TextService::apply(TfEditCookie ec, ITfContext* ctx) {
     update_candidates(ec, ctx, v);
 }
 
+// 候補の窓の置き場所が取れなかったとき (Firefox は配置が決まるまで位置を教えず、キャレットも知らせない: 窓が左上の隅に出た。
+// ブログの報告 2026-10-18): キャレット → 同じ窓で最後に取れた位置 → 入力している窓の下の辺り、の順に。取れた位置は覚えておく
+void TextService::place_fallback(bool ok, RECT& rc, HWND hwnd) {
+    if (ok && (rc.left != 0 || rc.top != 0)) {
+        last_rc_ = rc;
+        last_rc_root_ = GetAncestor(hwnd, GA_ROOT);
+        return;
+    }
+    GUITHREADINFO gi = {sizeof gi};
+    if (GetGUIThreadInfo(0, &gi) && gi.hwndCaret && (gi.rcCaret.right > gi.rcCaret.left || gi.rcCaret.bottom > gi.rcCaret.top)) {
+        rc = gi.rcCaret;
+        MapWindowPoints(gi.hwndCaret, nullptr, reinterpret_cast<POINT*>(&rc), 2);
+        return;
+    }
+    HWND root = GetAncestor(hwnd ? hwnd : GetForegroundWindow(), GA_ROOT);
+    if (root && root == last_rc_root_ && (last_rc_.left != 0 || last_rc_.top != 0)) { rc = last_rc_; return; }
+    RECT w = {};
+    if (root && GetWindowRect(root, &w)) {   // 窓の下の方の左寄り
+        const int x = w.left + (w.right - w.left) / 4, y = w.bottom - (w.bottom - w.top) / 4;
+        rc = {x, y - 20, x + 1, y};
+    }
+}
+
 void TextService::update_candidates(TfEditCookie ec, ITfContext* ctx, const View& v) {
     // 確定した後の文の流れの続き (お疲れ様です -> 。 -> 本日の進捗報告です。): カーソルの所に小さく。Tab かクリックで入れる
     if (!comp_ && !v.post.empty()) {
@@ -984,22 +1031,18 @@ void TextService::update_candidates(TfEditCookie ec, ITfContext* ctx, const View
             view->GetWnd(&hwnd);
             sel.range->Release();
         }
-        if (!ok) {
-            GUITHREADINFO gi = {sizeof gi};
-            if (GetGUIThreadInfo(0, &gi) && gi.hwndCaret) {
-                rc = gi.rcCaret;
-                MapWindowPoints(gi.hwndCaret, nullptr, reinterpret_cast<POINT*>(&rc), 2);
-                if (!hwnd) hwnd = gi.hwndCaret;
-            }
-        }
         if (!hwnd) hwnd = GetFocus();
+        place_fallback(ok, rc, hwnd);
         post_ctx_ = ctx;
-        cand_.label = L"続き Tab";
+        cand_.label = T(130);
+        cand_.set_tree({}, -1, -1);
         cand_.show({}, -1, rc, hwnd, v.post, -1);
         return;
     }
     cand_.label.clear();
-    if (!comp_ || ((!v.cand_open || v.cands.empty()) && v.sugg.empty())) { cand_.hide(); return; }
+    if (!comp_ || ((!v.cand_open || v.cands.empty()) && v.sugg.empty() && v.tree.empty())) { cand_.hide(); return; }
+    // 候補の木があるときは、木の頭を入力中の文字の頭にそろえる (窓を文字の頭の下に出す)
+    const int at = v.tree.empty() ? v.anchor : 0;
     ComPtr<ITfContextView> view;
     ComPtr<ITfRange> r, a;
     RECT rc = {};
@@ -1009,20 +1052,14 @@ void TextService::update_candidates(TfEditCookie ec, ITfContext* ctx, const View
     if (ok) {
         LONG moved = 0;
         a->Collapse(ec, TF_ANCHOR_START);
-        a->ShiftEnd(ec, v.anchor + 1, &moved, nullptr);
-        a->ShiftStart(ec, v.anchor, &moved, nullptr);
+        a->ShiftEnd(ec, at + 1, &moved, nullptr);
+        a->ShiftStart(ec, at, &moved, nullptr);
         ok = view->GetTextExt(ec, a.Get(), &rc, &clipped) == S_OK && (rc.right > rc.left || rc.bottom > rc.top);
         view->GetWnd(&hwnd);
     }
-    if (!ok) {   // 位置を教えてくれないアプリ: キャレットの位置の下に出す
-        GUITHREADINFO gi = {sizeof gi};
-        if (GetGUIThreadInfo(0, &gi) && gi.hwndCaret) {
-            rc = gi.rcCaret;
-            MapWindowPoints(gi.hwndCaret, nullptr, reinterpret_cast<POINT*>(&rc), 2);
-            if (!hwnd) hwnd = gi.hwndCaret;
-        }
-    }
     if (!hwnd) hwnd = GetFocus();
+    place_fallback(ok, rc, hwnd);
+    cand_.set_tree(v.tree, v.tree_rs, v.tree_re, v.cand_short, v.cand_scores, v.cand_fork);
     cand_.show(v.cand_open ? v.cands : std::vector<u16>{}, v.cand_sel, rc, hwnd, v.sugg, v.sugg_sel, v.cand_notes);
 }
 

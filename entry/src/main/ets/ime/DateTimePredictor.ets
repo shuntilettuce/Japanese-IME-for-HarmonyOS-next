@@ -274,6 +274,7 @@ export class DateTimePredictor {
       out.push(`${w_}${m}月${day}日`);
       out.push(`${w_}${m}月${day}日(${dow})`);
     }
+    out.push(`${y}${m < 10 ? '0' : ''}${m}${day < 10 ? '0' : ''}${day}`);   // 数字 8 桁 (20261021。PC 版と同じ)
     return out;
   }
 
@@ -384,6 +385,17 @@ export class DateTimePredictor {
   // Live date/time candidates for `reading` as of `now`, or [] if the reading
   // isn't a date/time trigger.
   static predict(reading: string, now: Date): string[] {
+    // 数字 8 桁の日付 (20261018 → 2026年10月18日(日) など)。ありえない日付は出さない (PC 版と同じ)
+    const digits = reading.replace(/[０-９]/g, (c: string) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
+    if (/^\d{8}$/.test(digits)) {
+      const y = parseInt(digits.substring(0, 4), 10);
+      const m = parseInt(digits.substring(4, 6), 10);
+      const dd = parseInt(digits.substring(6, 8), 10);
+      const d8 = new Date(y, m - 1, dd);
+      if (y >= 1900 && y <= 2100 && d8.getFullYear() === y && d8.getMonth() === m - 1 && d8.getDate() === dd) {
+        return DateTimePredictor.dateForms(d8);
+      }
+    }
     const dayOff = DAY_OFFSETS[reading];
     if (dayOff !== undefined) {
       const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayOff);

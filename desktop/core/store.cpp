@@ -154,13 +154,22 @@ std::vector<u16> Learning::apply_order(const u16& reading, const std::vector<u16
     Entry* e = find(reading);
     if (!e) return cands;
     auto count = [&](const u16& s) { for (auto& c : e->counts) if (c.first == s) return c.second; return 0; };
-    std::vector<u16> boosted, rest;
+    // 2 回以上選んだ表記は先頭へ (回数の多い順)。1 回だけのものはモデルの 1 位を覆さず 2 位へ
+    // (1 回の誤操作や特別な文脈の選択が、どの文でも 1 位になり続けた: 一つの動詞にこだわる。ユーザー 2026-10-20、S8_DESIGN §10 の B)
+    std::vector<u16> boosted, once, rest;
     for (auto& c : cands) {
         const int n = count(c);
         if (n < 0) continue;   // 消した表記
-        (n > 0 ? boosted : rest).push_back(c);
+        (n >= 2 ? boosted : n == 1 ? once : rest).push_back(c);
     }
     std::stable_sort(boosted.begin(), boosted.end(), [&](const u16& a, const u16& b) { return count(a) > count(b); });
+    if (!once.empty()) {
+        if (boosted.empty() && !rest.empty()) {   // モデルの 1 位 (学習していない最初の候補) の後ろに
+            boosted.push_back(rest.front());
+            rest.erase(rest.begin());
+        }
+        boosted.insert(boosted.end(), once.begin(), once.end());
+    }
     boosted.insert(boosted.end(), rest.begin(), rest.end());
     // 英カタカナ辞書の英単語 (全部小文字: いんじぇくしょん → injection) は、学習で上がっても 2 位まで (1 位はカタカナのまま)
     auto english = [](const u16& s) {
@@ -195,7 +204,7 @@ u16 Learning::top(const u16& reading) {
     Entry* e = find(reading);
     if (!e) return u16();
     u16 best;
-    int n = 0;
+    int n = 1;   // 2 回以上選んだものだけ (1 回だけの選択で文節の変換を覆さない)
     for (auto& c : e->counts) if (c.second > n) { n = c.second; best = c.first; }
     return best;
 }
@@ -368,14 +377,15 @@ void UserDict::remove(const u16& reading, const u16& word) {
 
 void UserDict::save() {
     version_++;
-    std::string o = "[";
+    // 1 語 1 行 (手で読み書きしやすく。1 行に全部つなげていて見にくかった。ブログの報告 2026-10-18)
+    std::string o = "[\n";
     for (size_t i = 0; i < entries_.size(); i++) {
         auto& e = entries_[i];
-        if (i) o += ",";
-        o += "{\"r\":" + json::quote(to_utf8(e.reading)) + ",\"w\":" + json::quote(to_utf8(e.word)) +
+        if (i) o += ",\n";
+        o += "  {\"r\":" + json::quote(to_utf8(e.reading)) + ",\"w\":" + json::quote(to_utf8(e.word)) +
              ",\"p\":" + json::quote(e.pos) + ",\"g\":" + json::quote(e.group) + "}";
     }
-    o += "]";
+    o += entries_.empty() ? "]\n" : "\n]\n";
     if (write_file_atomic(file_, o)) stamp_of(file_, stamp_);
 }
 

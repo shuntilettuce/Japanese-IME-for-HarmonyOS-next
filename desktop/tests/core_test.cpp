@@ -209,7 +209,8 @@ int main(int argc, char** argv) {
         expect("datetime きょう[8]", at(ky, 8), u"2026-10-17");
         expect("datetime きょう[9]", at(ky, 9), u"令和8年10月17日");
         expect("datetime きょう[10]", at(ky, 10), u"令和8年10月17日(土)");
-        if (ky.size() != 11) { printf("FAIL datetime きょう count %zu\n", ky.size()); failures++; }
+        expect("datetime きょう 8 桁", at(ky, 11), u"20261017");
+        if (ky.size() != 12) { printf("FAIL datetime きょう count %zu\n", ky.size()); failures++; }   // 11 形 + 数字 8 桁
 
         expect("datetime あした", at(pred("あした"), 0), u"2026年10月18日");
         expect("datetime しあさって", at(pred("しあさって"), 0), u"2026年10月20日");
@@ -260,6 +261,8 @@ int main(int argc, char** argv) {
 
         // 年
         expect("datetime 2026ねん", at(pred("2026ねん"), 0), u"令和8年");
+        expect("datetime 20261018", at(pred("20261018"), 1), u"2026年10月18日(日)");
+        expect("datetime 20260230 (ありえない日)", u16(pred("20260230").empty() ? u"なし" : u"あり"), u"なし");
         expect("datetime れいわはちねん", at(pred("れいわはちねん"), 0), u"2026年");
         expect("datetime へいせいにねん", at(pred("へいせいにねん"), 0), u"1990年");
         expect("datetime しょうわごじゅうごねん", at(pred("しょうわごじゅうごねん"), 0), u"1980年");
@@ -577,8 +580,15 @@ int main(int argc, char** argv) {
     u16 second = c.view().text;
     keys(c, "{enter}");
     c.take_commit();
+    // 1 回だけ選んだ表記はモデルの 1 位を覆さない (2 位に上がる)。2 回選ぶと 1 位 (2026-10-20 学習の審査)
     keys(c, "kawa{sp}");
-    expect("learned", c.view().text, second);
+    expect("learned once: model top stays", c.view().text, first);
+    keys(c, "{sp}");
+    expect("learned once: next is the chosen one", c.view().text, second);
+    keys(c, "{enter}");
+    c.take_commit();
+    keys(c, "kawa{sp}");
+    expect("learned twice", c.view().text, second);
     printf("     (first was %s)\n", u8(first).c_str());
     keys(c, "{esc}{esc}");
 
@@ -602,7 +612,8 @@ int main(int argc, char** argv) {
         printf("     hide: %s -> %s\n", u8(top).c_str(), u8(after).c_str());
         if (after == top) { printf("FAIL hide candidate\n"); failures++; }
         keys(c, "{esc}{esc}{esc}");
-        learning.record(u"かわ", top);   // 自分で選び直すと戻る
+        learning.record(u"かわ", top);   // 自分で選び直すと戻る (2 回選ぶと 1 位)
+        learning.record(u"かわ", top);
         keys(c, "kawa{sp}");
         if (c.view().text != top) { printf("FAIL unhide by record\n"); failures++; }
         keys(c, "{esc}{esc}{esc}");

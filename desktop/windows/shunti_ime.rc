@@ -12,6 +12,8 @@
 203 ICON "mode_off_white.ico"
 204 ICON "mode_off_black.ico"
 
+STRINGS RCDATA "strings.json"
+
 VS_VERSION_INFO VERSIONINFO
  FILEVERSION 0,6,0,0
  PRODUCTVERSION 0,6,0,0

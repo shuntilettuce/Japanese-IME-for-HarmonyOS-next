@@ -87,10 +87,16 @@ export class KanaKanjiConverter {
   static applyLearnedOrder(kana: string, cands: string[]): string[] {
     const counts = KanaKanjiConverter.learned[kana];
     if (!counts || Object.keys(counts).length === 0) { return cands; }
-    const boosted = cands.filter((c: string) => (counts[c] ?? 0) > 0)
+    // 2 回以上選んだ表記は先頭へ (回数の多い順)。1 回だけのものはモデルの 1 位を覆さず 2 位へ
+    // (1 回の誤操作や特別な文脈の選択が、どの文でも 1 位になり続けた。PC 版と同じ。2026-10-20)
+    const boosted = cands.filter((c: string) => (counts[c] ?? 0) >= 2)
       .sort((a: string, b: string) => (counts[b] ?? 0) - (counts[a] ?? 0));
+    const once = cands.filter((c: string) => (counts[c] ?? 0) === 1);
     const rest = cands.filter((c: string) => (counts[c] ?? 0) === 0);
-    const out = [...boosted, ...rest];
+    if (once.length > 0 && boosted.length === 0 && rest.length > 0) {
+      boosted.push(rest.shift() as string);   // モデルの 1 位 (学習していない最初の候補) の後ろに
+    }
+    const out = [...boosted, ...once, ...rest];
     // 英カタカナ辞書の英単語 (全部小文字: いんじぇくしょん → injection) は、学習で上がっても 2 位まで (1 位はカタカナのまま)
     if (out.length >= 2 && /^[a-z][a-z-]+$/.test(out[0]) && /[^\u0000-\u007f]/.test(kana)) {
       return [out[1], out[0], ...out.slice(2)];

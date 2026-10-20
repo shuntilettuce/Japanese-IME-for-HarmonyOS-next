@@ -15,7 +15,25 @@ struct Word { u16 reading, surface; int lid = 0, rid = 0; bool pass = false; };
 // 文節 (自立語 + 付属語)。head_r・head_s = 自立語 (と接頭) の読みと表記の長さ。残りが付属語
 struct Phrase { u16 reading, surface; size_t head_r = 0, head_s = 0; };
 
+// 候補の木 (候補の窓の上の帯に出す)。上位の経路の点数を確率にして、1 位の語ごとの強さ・隣との結びつき・
+// 同じ読みの区間の別の表記・区切り方で迷う所 (別の区切りの道) を出す
+struct TreeWord {
+    u16 surface;
+    int rs = 0, re = 0;   // 読みの区間
+    float s = 1;          // この語の強さ (この語を通る経路の確率の和)
+    float link = 1;       // 前の語との結びつき (前の語を通る経路のうち、この語も通るものの割合)
+    std::vector<std::pair<u16, float>> alts;   // 同じ読みの区間の別の表記 (強い順)
+};
+struct TreeNode {
+    std::vector<TreeWord> main;   // 1 位の道
+    std::vector<TreeWord> fork;   // 区切り方で迷う所: 別の区切りの道 (空なら迷っていない)
+    float p = 1;                  // 1 位の区切りの確率 (fork があるとき)
+};
+// paths = 上位の経路 (コスト, 語)。cuts = 1 位の文節の終わりの位置 (読み)。語はこの位置で文節にまとめる
+std::vector<TreeNode> build_tree(const std::vector<std::pair<double, std::vector<TreeWord>>>& paths, const std::vector<int>& cuts);
+
 struct Conversion {
+    std::vector<TreeNode> tree;  // 候補の木 (分からなければ空)
     std::vector<u16> cands;      // 候補 (よい順)
     std::vector<Word> words;     // cands[0] の語の区切り (分からなければ空)
     // 提案 (set_suggest がオンのとき): 打ち間違いの直し・日付・住所・英単語・絵文字・顔文字・かっこ など、候補に混ぜないもの
