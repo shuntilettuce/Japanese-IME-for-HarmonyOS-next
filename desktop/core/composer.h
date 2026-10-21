@@ -199,6 +199,7 @@ private:
     u16 frozen_reading() const;
     u16 frozen_surface() const;
     u16 conv_ctx() const;
+    void prime_keys(const u16& reading);   // 打った鍵の列を変換に渡す (読みが打った鍵から作れるときだけ)
     bool unfreeze_last();
     void calibrate();
     bool live_shown() const;

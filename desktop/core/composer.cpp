@@ -695,6 +695,7 @@ void Composer::update_live() {
         c.sugg = t.sugg;
         c.sugg_kinds = t.sugg_kinds;
     } else {
+        prime_keys(kana_);
         c = conv_->convert(conv_ctx(), kana_, kCandidates);
     }
     live_words_ = c.words;
@@ -886,6 +887,43 @@ u16 Composer::frozen_surface() const {
 // 残りの読みを変換するときの文脈 (入力欄の左 + 固定した表記)
 u16 Composer::conv_ctx() const { return tail(ctx_ + frozen_surface(), CTX_MAX); }
 
+// 打った鍵の列 (raw_) を、学習 (kkcnative2 の kkn_type_keys) と同じ手順でローマ字に通し直して、読みの字ごとに「何打目までで
+// 決まったか」を作り、変換に渡す。読み (固定した前の方を除いた残り) がその終わりと一致するときだけ。
+// エンジンはこれで英字の語 (github) と、読みに英字が残ったローマ字の打ち間違い (arigstou → ありgsとう → ありがとう) を出す
+void Composer::prime_keys(const u16& reading) {
+    if (!conv_ || !raw_valid_ || raw_.empty() || reading.empty()) return;
+    // 読みに英字が残っているときだけ (学習も英字まじりの例と、ローマ字の打ち間違いの例でだけ鍵の列を見せている。
+    // かなだけの読みに渡すと、neko -> neko のように打ったままの英字を選んでしまった)
+    if (std::none_of(reading.begin(), reading.end(), [](char16_t ch) { return ch < 0x80 && ((ch | 0x20) >= u'a' && (ch | 0x20) <= u'z'); }))
+        return;
+    Romaji rom = romaji_;
+    rom.reset();
+    u16 sim;
+    std::vector<int32_t> span;
+    int k = 0;
+    auto emit = [&](const u16& out, int end) { for (char16_t ch : out) { sim.push_back(ch); span.push_back(end); } };
+    for (char16_t key : raw_) {
+        const char16_t lk = key >= u'A' && key <= u'Z' ? char16_t(key + 32) : key;
+        const bool romaji_key = (lk >= u'a' && lk <= u'z') || lk == u'-' || lk == u'\'';
+        if (!romaji_key) {
+            emit(rom.flush(), k);
+            k++;
+            emit(u16(1, key), k);
+            continue;
+        }
+        k++;
+        Romaji::Result r = rom.process(lk);
+        emit(r.committed, rom.pending().empty() ? k : k - 1);
+    }
+    emit(rom.flush(), k);
+    if (sim.size() < reading.size() || sim.compare(sim.size() - reading.size(), reading.size(), reading) != 0) return;
+    const size_t off = sim.size() - reading.size();
+    const int ks = off == 0 ? 0 : span[off - 1];
+    std::vector<int32_t> sp(span.begin() + long(off), span.end());
+    for (auto& x : sp) x -= ks;
+    conv_->set_keys(raw_.substr(size_t(ks)), sp, reading.size());
+}
+
 // 固定した最後の文節を読みに戻して、入力中の頭につなぐ (固定した所を Backspace・← で直すとき)。戻したら true
 bool Composer::unfreeze_last() {
     if (frozen_.empty()) return false;
@@ -913,6 +951,7 @@ void Composer::sync_user_dict() {
 
 std::vector<Composer::Seg> Composer::convert_phrases(const u16& ctx, const u16& reading, std::vector<u16>* whole) {
     std::vector<Seg> out;
+    if (conv_) prime_keys(reading);
     Conversion c = conv_ ? conv_->convert(ctx, reading, kCandidates) : Conversion();
     last_tree_ = std::move(c.tree);
     if (whole) {
@@ -962,6 +1001,23 @@ void Composer::convert_all() {
             tree_.clear();   // 木は AI の 1 位の形なので合わない
         }
         if (!live.empty()) whole_ = std::move(live);
+    }
+    // 固定した前の方を、後で打った文を後ろの文脈にして変換し直す (S8 から。後ろの文脈を学んだモデルだけ)。
+    // 打っている間は後ろがまだ無かったので、後ろを見れば直る語 (きしゃ → 記者/汽車) がある。選び直した文節があれば触らない
+    if (conv_ && !segs_.empty() && conv_->has_right_ctx() &&
+        std::none_of(segs_.begin(), segs_.end(), [](const Seg& s) { return s.changed; })) {
+        u16 fr_r, fr_s, rest_s;
+        for (auto& s : segs_) { fr_r += s.reading; fr_s += s.surface; }
+        for (auto& s : rest) rest_s += s.surface;
+        conv_->set_right_ctx(rest_s);
+        std::vector<Seg> again = convert_phrases(tail(ctx_, CTX_MAX), fr_r, nullptr);
+        u16 as;
+        for (auto& s : again) as += s.surface;
+        if (!again.empty() && as != fr_s) {
+            segs_ = std::move(again);
+            tree_off_ = 0;
+            for (auto& s : segs_) tree_off_ += int(s.reading.size());
+        }
     }
     size_t first_new = segs_.size();
     segs_.insert(segs_.end(), rest.begin(), rest.end());

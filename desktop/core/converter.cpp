@@ -280,6 +280,17 @@ Conversion Converter::convert(const u16& ctx, const u16& kana, int max) {
     return out;
 }
 
+void Converter::set_right_ctx(const u16& text) {
+    if (e_) kkc_set_right_ctx(e_, p16(text), int(text.size()));
+}
+
+void Converter::set_keys(const u16& keys, const std::vector<int32_t>& span_end, size_t reading_len) {
+    if (e_ && span_end.size() == reading_len)
+        kkc_set_keys(e_, p16(keys), int(keys.size()), span_end.data(), int(span_end.size()));
+}
+
+bool Converter::has_right_ctx() const { return e_ && kkc_has_right_ctx(e_) != 0; }
+
 void Converter::set_suggest(bool on) {
     suggest_ = on;
     if (e_) kkc_set_suggest(e_, on ? 1 : 0);

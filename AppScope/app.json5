@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.shunti.japaneseime",
     "vendor": "shunti",
-    "versionCode": 1070100,
-    "versionName": "1.7.1",
+    "versionCode": 1080000,
+    "versionName": "1.8.0",
     "icon": "$media:app_icon",
     "label": "$string:app_name"
   }

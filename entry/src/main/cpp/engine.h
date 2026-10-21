@@ -42,6 +42,8 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
 KKC_API void kkc_set_keys(kkc_engine* e, const uint16_t* keys, int nkeys, const int32_t* span_end, int nk);
 // カーソルの後ろの文 (後ろの文脈、80 字ほど)。直後の 1 回の kkc_convert にだけ効く。後ろの文脈を学んだモデル (S8 から) だけが使う
 KKC_API void kkc_set_right_ctx(kkc_engine* e, const uint16_t* text, int n);
+// モデルが後ろの文脈を学んでいるか (S8 から 1)。使わないモデルでは後ろの文脈を作る手間を省ける
+KKC_API int kkc_has_right_ctx(kkc_engine* e);
 
 // 直前の kkc_convert の 1 位と 2 位 (表記が違う最初の 2 つ) の経路のコストの差 (大きいほど迷いが少ない)。
 // 段階式 (辞書だけで決まるときはモデルを呼ばない) の判定に使う。2 位が無ければとても大きな値

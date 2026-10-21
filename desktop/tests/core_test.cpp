@@ -573,7 +573,8 @@ int main(int argc, char** argv) {
     expect("new input", c.view().text, u"が");
     keys(c, "{esc}");
 
-    // ---- 学習: 選び直した文節を覚える
+    // ---- 学習: 選び直した文節を覚える (前の文の文脈で 1 位が変わらないよう、毎回文脈を消す)
+    c.reset_history();
     keys(c, "kawa{sp}");
     u16 first = c.view().text;
     keys(c, "{sp}");
@@ -581,6 +582,7 @@ int main(int argc, char** argv) {
     keys(c, "{enter}");
     c.take_commit();
     // 1 回だけ選んだ表記はモデルの 1 位を覆さない (2 位に上がる)。2 回選ぶと 1 位 (2026-10-20 学習の審査)
+    c.reset_history();
     keys(c, "kawa{sp}");
     expect("learned once: model top stays", c.view().text, first);
     keys(c, "{sp}");
@@ -673,8 +675,10 @@ int main(int argc, char** argv) {
         keys(c, "{enter}");
         expect("numpad half", c.take_commit(), u"5");
     }
+    c.reset_history();   // 前の試験の確定 (数字など) を文脈にしない (モデルによって 1 位が揺れる)
     keys(c, "kaigiwotyuusisuru{sp}{enter}");
     u16 rc_text = c.take_commit();
+    c.reset_history();
     u16 back = c.reading_of(rc_text);
     printf("     reconvert: %s -> %s\n", u8(rc_text).c_str(), u8(back).c_str());
     if (back != u"かいぎをちゅうしする") { printf("FAIL reading_of\n"); failures++; }

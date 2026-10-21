@@ -801,11 +801,16 @@ struct Head {
     }
 };
 
-void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& base, const Ctx& ctx, std::vector<Edge>& out) {
+// rom_in: 打った鍵の列 (PC、kkc_set_keys)。あれば読みからローマ字を作らずにこれを使う (読みに英字が残った打ち間違い
+// ありgsとう も、鍵の列 arigstou から 1 打戻せば ありがとう になる)
+void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& base, const Ctx& ctx, std::vector<Edge>& out,
+               const std::string* rom_in = nullptr) {
     init();
     double t0 = now_ms();
     std::string rom;
-    if (r.size() < 2 || !to_romaji(r, rom)) return;
+    if (rom_in) rom = *rom_in;
+    else if (r.size() < 2 || !to_romaji(r, rom)) return;
+    if (r.size() < 2) return;
     std::vector<std::string> vars;
     const int R = int(rom.size());
     for (int i = 0; i < R; i++) {
@@ -2302,6 +2307,8 @@ KKC_API void kkc_set_right_ctx(kkc_engine* e, const uint16_t* text, int n) {
     if (n > 0) e->rctx.assign(text, text + n); else e->rctx.clear();
 }
 
+KKC_API int kkc_has_right_ctx(kkc_engine* e) { return e && e->m.n_seg > 3 ? 1 : 0; }
+
 // 打った鍵の列 (ローマ字の英字) を渡す。英字のまま打った語 (github) を候補にできるようにする。
 // keys = 打った鍵 (英字・記号そのまま)。span_end[i] = 読みの i 文字目が鍵の何文字目までで決まったか (単調増加)。
 // 直後の 1 回の kkc_convert にだけ効く (その変換の読みの長さが nk と合わなければ使わない)
@@ -2785,6 +2792,32 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
     if (!keys.empty()) {
         std::vector<Edge> lat;
         latin_edges(e->lex, keys, span_end, n, lat);
+        // 読みに英字が残った所 (ローマ字の打ち間違い: arigstou -> ありgsとう) は、鍵の列から 1 打戻した読みで打ち間違いの辺を作る。
+        // かなだけの区間の打ち間違いは edges() が読みから作っている
+        if (e->lex.typo) {
+            typo::Ctx tctx;
+            typo::build_ctx(e->lex, E, n, tctx);
+            std::vector<Edge> ty;
+            const int W = 6;   // 英字の前後 6 字まで
+            for (int i = 0; i < n;) {
+                if (is_kana(r[size_t(i)])) { i++; continue; }
+                int j = i;
+                while (j < n && !is_kana(r[size_t(j)])) j++;
+                const int w = std::max(0, i - W), we = std::min(n, j + W);
+                const int ks = w == 0 ? 0 : span_end[size_t(w - 1)], ke = we == n ? int(keys.size()) : span_end[size_t(we - 1)];
+                std::string rom;
+                bool ok = ke - ks >= 2;
+                for (int k = ks; ok && k < ke; k++) {
+                    uint16_t c = keys[size_t(k)];
+                    if (c >= u'A' && c <= u'Z') c = uint16_t(c + 32);
+                    if ((c >= u'a' && c <= u'z') || c == u'-') rom.push_back(char(c));
+                    else ok = false;   // 記号・数字の混じる所は見ない
+                }
+                if (ok) typo::add_edges(e->lex, r.substr(size_t(w), size_t(we - w)), w, E, tctx, ty, &rom);
+                i = j;
+            }
+            for (auto& ed : ty) lat.push_back(std::move(ed));
+        }
         for (auto& ed : lat) E.push_back(std::move(ed));
     }
     e->times[0] = ms_since(t0);

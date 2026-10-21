@@ -26,8 +26,8 @@ android {
         applicationId = "com.shunti.japaneseime.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "1.2.0"
+        versionCode = 5
+        versionName = "1.3.0"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
     // リリースの署名: android/keystore.properties (git には入れない) があれば使う
