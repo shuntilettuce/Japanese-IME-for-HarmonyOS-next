@@ -264,6 +264,7 @@ bool TextService::app_open_state(bool def) {
     const AppRow r = read_app_row(t, me);
     // 印の欄の無い古い行 (0.7.0 まで) のソフトも、Java のソフトなら使わないにする (前から使っていた Minecraft も直るように)
     no_shortcuts_ = r.has_flags ? r.flags.find("noshortcut") != std::string::npos : default_no_shortcut(app_name());
+    if (no_shortcuts_) return false;   // 常にオフ: いつもオフで始める
     return r.found ? r.open : def;
 }
 

@@ -187,7 +187,7 @@ void import_words() {
 // 記号ごとの全角/半角・テンキー・候補の数・無変換キー・再変換・プライベート・ローマ字の表・辞書の書き出し
 const wchar_t SYMS[] = L"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 enum { ADV_SYM0 = 500, ADV_NUMPAD = 600, ADV_PAGE, ADV_APPOPEN, ADV_PRIVATE, ADV_ROMAJI, ADV_EXPORT, ADV_CLOSE,
-       ADV_KEYMAP = 710, ADV_LAYOUT = 711, ADV_LAYOUT_NOTE = 712, ADV_LTHUMBS = 713, ADV_LCONT, ADV_LTAP, ADV_LREP, ADV_RLIST = 720, ADV_RKEY, ADV_RKANA, ADV_RADD, ADV_RDEL, ADV_ALIST = 730, ADV_ATOGGLE, ADV_ADEL, ADV_ASHORT,
+       ADV_KEYMAP = 710, ADV_LAYOUT = 711, ADV_LAYOUT_NOTE = 712, ADV_LTHUMBS = 713, ADV_LCONT, ADV_LTAP, ADV_LREP, ADV_RLIST = 720, ADV_RKEY, ADV_RKANA, ADV_RADD, ADV_RDEL, ADV_ALIST = 730, ADV_ATOGGLE, ADV_ADEL,
        ADV_SLIST = 800, ADV_SKEY, ADV_SFUNC, ADV_SADD, ADV_SCHG, ADV_SDEL, ADV_SUP, ADV_SDOWN, ADV_SRESET };
 // キー割り当ての型 (Google 日本語入力 = Mozc の keymap と同じ字)
 struct Keymap { const char* id; const wchar_t* name; };
@@ -309,9 +309,8 @@ void adv_layout_relayout() {
     const int list_h = std::max(130, ADV_RIGHT_BOTTOM - y - 64);
     place(g_agroup, 10, y, 460, list_h + 56, true);
     place(g_alist, 26, y + 20, 428, list_h, true);
-    place(GetDlgItem(g_adv, ADV_ATOGGLE), 26, y + 24 + list_h, 140, 25, true);
-    place(GetDlgItem(g_adv, ADV_ASHORT), 172, y + 24 + list_h, 180, 25, true);
-    place(GetDlgItem(g_adv, ADV_ADEL), 358, y + 24 + list_h, 96, 25, true);
+    place(GetDlgItem(g_adv, ADV_ATOGGLE), 26, y + 24 + list_h, 160, 25, true);
+    place(GetDlgItem(g_adv, ADV_ADEL), 194, y + 24 + list_h, 120, 25, true);
     y += list_h + 56;
     // 閉じるボタンと窓の高さ (右の列の下端より下)
     const int bottom = std::max(y, ADV_RIGHT_BOTTOM) + 10;
@@ -430,14 +429,14 @@ void apps_refresh() {
     for (auto& r : app_rows()) {
         // 窓の名前があれば先に (javaw.exe が Minecraft だと分かるように)
         std::wstring a = r.title.empty() ? r.name : W8(r.title) + L" (" + r.name + L")";
-        std::wstring b = r.open ? T(29) : T(30), c = app_no_shortcut(r) ? T(162) : T(161);
+        // オン / オフ / 常にオフ (オフにしてショートカットにも反応しない。ゲーム向け)
+        std::wstring b = app_no_shortcut(r) ? T(162) : r.open ? T(29) : T(30);
         LVITEMW it = {};
         it.mask = LVIF_TEXT;
         it.iItem = i;
         it.pszText = a.data();
         ListView_InsertItem(g_alist, &it);
         ListView_SetItemText(g_alist, i, 1, b.data());
-        ListView_SetItemText(g_alist, i, 2, c.data());
         i++;
     }
 }
@@ -448,21 +447,13 @@ void app_toggle() {
     const int k = app_selected();
     auto rows = app_rows();
     if (k < 0 || k >= int(rows.size())) return;
-    rows[size_t(k)].open = !rows[size_t(k)].open;
-    app_write(rows);
-    apps_refresh();
-    ListView_SetItemState(g_alist, k, LVIS_SELECTED, LVIS_SELECTED);
-}
-
-// そのソフトでショートカット (Ctrl+Space など) を使う・使わない (ゲームのキーとぶつかるとき)
-void app_shortcut_toggle() {
-    const int k = app_selected();
-    auto rows = app_rows();
-    if (k < 0 || k >= int(rows.size())) return;
+    // オン → オフ → 常にオフ → オン
     auto& r = rows[size_t(k)];
     if (app_no_shortcut(r)) {
-        const size_t p = r.flags.find("noshortcut");
-        r.flags.erase(p, 10);
+        r.flags.erase(r.flags.find("noshortcut"), 10);
+        r.open = true;
+    } else if (r.open) {
+        r.open = false;
     } else {
         r.flags += "noshortcut";
     }
@@ -470,6 +461,7 @@ void app_shortcut_toggle() {
     apps_refresh();
     ListView_SetItemState(g_alist, k, LVIS_SELECTED, LVIS_SELECTED);
 }
+
 
 void app_del() {
     const int k = app_selected();
@@ -671,7 +663,6 @@ LRESULT CALLBACK adv_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
         else if (id == ADV_RDEL) romaji_del();
         else if (id == ADV_ATOGGLE) app_toggle();
         else if (id == ADV_ADEL) app_del();
-        else if (id == ADV_ASHORT) app_shortcut_toggle();
         else if (id == ADV_SLIST && code == LBN_SELCHANGE) shortcut_select();
         else if (id == ADV_SADD) shortcut_add();
         else if (id == ADV_SCHG) shortcut_change();
@@ -826,9 +817,9 @@ void open_advanced() {
     g_alist = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 26, 20, 428, 64, ADV_ALIST);
     ListView_SetExtendedListViewStyle(g_alist, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
     {
-        const wchar_t* cols[] = {T(88), T(89), T(160)};
-        const int widths[] = {240, 80, 88};
-        for (int i = 0; i < 3; i++) {
+        const wchar_t* cols[] = {T(88), T(89)};
+        const int widths[] = {300, 100};
+        for (int i = 0; i < 2; i++) {
             LVCOLUMNW c = {};
             c.mask = LVCF_TEXT | LVCF_WIDTH;
             c.pszText = const_cast<wchar_t*>(cols[i]);
@@ -838,7 +829,6 @@ void open_advanced() {
     }
     make(L"BUTTON", T(90), BS_PUSHBUTTON | WS_TABSTOP, 26, 88, 160, 25, ADV_ATOGGLE);
     make(L"BUTTON", T(91), BS_PUSHBUTTON | WS_TABSTOP, 194, 88, 120, 25, ADV_ADEL);
-    make(L"BUTTON", T(163), BS_PUSHBUTTON | WS_TABSTOP, 172, 88, 180, 25, ADV_ASHORT);
     apps_refresh();
     g_loading = true;
     g_half = g_s.half_symbols;
