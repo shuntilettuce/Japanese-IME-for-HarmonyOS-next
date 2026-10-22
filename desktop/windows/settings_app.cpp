@@ -933,7 +933,7 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             int id = LOWORD(w), code = HIWORD(w);
             if ((id == ID_THEME || id == ID_PUNCT || id == ID_MODEL) && code == CBN_SELCHANGE) save();
             else if (id == IDCANCEL) DestroyWindow(h);   // 「閉じる」と Esc
-            else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_SUGGEST) && code == BN_CLICKED) save();
+            else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_SUGGEST || id == ID_CANDTREE) && code == BN_CLICKED) save();
             else if (id == ID_ADD) add_word();
             else if (id == ID_IMPORT) import_words();
             else if (id == ID_ADVANCED) open_advanced();

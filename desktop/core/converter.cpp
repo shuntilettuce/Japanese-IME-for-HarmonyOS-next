@@ -315,8 +315,18 @@ int Converter::set_user_words(const std::vector<UserDict::Form>& forms, int bonu
     kkc_user_clear(e_);
     int n = 0;
     for (auto& f : forms)
-        n += kkc_user_add_like(e_, p16(f.reading), int(f.reading.size()), p16(f.surface), int(f.surface.size()),
-                               p16(f.tmpl_reading), int(f.tmpl_reading.size()), p16(f.tmpl_surface), int(f.tmpl_surface.size()), bonus);
+    {
+        const int b = f.bonus >= 0 ? f.bonus : bonus;
+        // 代表語が空 = その語そのもの (学習で選んだ語)。辞書に無ければ名詞の代表語で (AI の知らない語)
+        const u16& tr = f.tmpl_reading.empty() ? f.reading : f.tmpl_reading;
+        const u16& ts = f.tmpl_reading.empty() ? f.surface : f.tmpl_surface;
+        int ok = kkc_user_add_like2(e_, p16(f.reading), int(f.reading.size()), p16(f.surface), int(f.surface.size()),
+                                    p16(tr), int(tr.size()), p16(ts), int(ts.size()), b, f.whole ? 1 : 0);
+        if (!ok && f.tmpl_reading.empty())
+            ok = kkc_user_add_like2(e_, p16(f.reading), int(f.reading.size()), p16(f.surface), int(f.surface.size()),
+                                    p16(u16(u"ねこ")), 2, p16(u16(u"猫")), 1, b, 0);
+        n += ok;
+    }
     return n;
 }
 

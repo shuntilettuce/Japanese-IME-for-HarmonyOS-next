@@ -53,6 +53,7 @@ void Learning::refresh() {
     loaded_ = true;
     stamp_ = t;
     entries_.clear();
+    version_++;
     std::string s;
     if (!exists || !read_file(file_, s)) return;
     json::Value v;
@@ -67,6 +68,7 @@ void Learning::refresh() {
 }
 
 void Learning::save() {
+    version_++;
     std::string o = "{";
     bool first = true;
     for (auto& e : entries_) {
@@ -207,6 +209,15 @@ u16 Learning::top(const u16& reading) {
     int n = 1;   // 2 回以上選んだものだけ (1 回だけの選択で文節の変換を覆さない)
     for (auto& c : e->counts) if (c.second > n) { n = c.second; best = c.first; }
     return best;
+}
+
+std::vector<Learning::Strong> Learning::strong(int min) {
+    refresh();
+    std::vector<Strong> out;
+    for (auto& e : entries_)
+        for (auto& c : e.counts)
+            if (c.second >= min) out.push_back({e.reading, c.first, c.second});
+    return out;
 }
 
 void Learning::clear() {
@@ -413,11 +424,12 @@ std::vector<UserDict::Form> UserDict::engine_forms() const {
                    : e.pos == "adverb" ? Tmpl{u"とても", u"とても"}
                    : e.pos == "interjection" ? Tmpl{u"こんにちは", u"こんにちは"}
                    : Tmpl{u"ねこ", u"猫"};
-            out.push_back({r, w, t.r, t.s});
+            const bool whole = e.pos == "abbrev";   // 短縮よみは、その読みだけを打ったときだけ
+            out.push_back({r, w, t.r, t.s, whole});
             // 読みに英数字・記号があれば、全角と半角の両方で引けるように
             const u16 rh = to_halfwidth_ascii(r), rf = to_fullwidth_ascii(r);
-            if (rh != r) out.push_back({rh, w, t.r, t.s});
-            if (rf != r && rf != rh) out.push_back({rf, w, t.r, t.s});
+            if (rh != r) out.push_back({rh, w, t.r, t.s, whole});
+            if (rf != r && rf != rh) out.push_back({rf, w, t.r, t.s, whole});
         }
     }
     return out;

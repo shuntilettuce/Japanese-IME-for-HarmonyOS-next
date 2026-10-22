@@ -87,7 +87,7 @@ struct PathInfo { double c; std::vector<std::pair<int, ustr>> w; };
 thread_local std::vector<PathInfo> tl_paths;
 
 // ユーザー辞書の語 (読み・表記・品詞の左右 ID・コスト)。辞書の語と同じく網に入れ、モデルが文脈で採点する
-struct UserWord { ustr r, s; int32_t lid, rid, cost; };
+struct UserWord { ustr r, s; int32_t lid, rid, cost; bool whole = false; };   // whole = 読み全体が一致したときだけ (短縮よみ)
 
 inline bool is_kana(char32_t c) { return (c >= 0x3041 && c <= 0x3096) || c == 0x30FC || c == 0x3094; }
 inline char32_t kata(char32_t c) { return (c >= 0x3041 && c <= 0x3096) ? c + 0x60 : c; }
@@ -1147,6 +1147,12 @@ std::vector<Edge> edges(const Lex& L, const ustr& r, const std::vector<UserWord>
     if (user) {
         for (const UserWord& w : *user) {
             if (w.r.empty()) continue;
+            // 短縮よみ (よ → よろしくお願いします) は、その読みだけを打ったときだけ。文の途中・打っている途中の変換に混ぜない
+            // (MS-IME と同じ。ブログの報告 2026-10-21: 「よろこんで」が「よろしくお願いします。ろこんで」に)
+            if (w.whole) {
+                if (r == w.r) out.push_back({0, n, w.s, w.lid, w.rid, w.cost, K_DICT});
+                continue;
+            }
             for (size_t i = r.find(w.r); i != ustr::npos; i = r.find(w.r, i + 1))
                 out.push_back({int(i), int(i + w.r.size()), w.s, w.lid, w.rid, w.cost, K_DICT});
         }
@@ -3396,6 +3402,13 @@ KKC_API int kkc_user_add_like(kkc_engine* e, const uint16_t* r, int nr, const ui
     if (!found) return 0;
     e->user.push_back({from16(r, size_t(nr)), from16(s, size_t(ns)), best.lid, best.rid, best.cost - bonus});
     return 1;
+}
+
+KKC_API int kkc_user_add_like2(kkc_engine* e, const uint16_t* r, int nr, const uint16_t* s, int ns, const uint16_t* tr, int ntr,
+                               const uint16_t* ts, int nts, int bonus, int flags) {
+    const int ok = kkc_user_add_like(e, r, nr, s, ns, tr, ntr, ts, nts, bonus);
+    if (ok && (flags & 1)) e->user.back().whole = true;
+    return ok;
 }
 
 #ifndef KKC_FRAG

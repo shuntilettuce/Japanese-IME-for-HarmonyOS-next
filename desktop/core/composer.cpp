@@ -942,9 +942,30 @@ bool Composer::unfreeze_last() {
 void Composer::sync_user_dict() {
     if (!dict_ || !conv_) return;
     dict_->refresh();
-    if (dict_->version() != dict_version_) {
-        conv_->set_user_words(dict_->engine_forms());
+    const uint64_t lv = learning_ && !options.private_mode ? learning_->version() : 0;
+    if (dict_->version() != dict_version_ || lv != learn_version_) {
+        std::vector<UserDict::Form> forms = dict_->engine_forms();
+        // 2 回以上選び直した語を、変換の網に候補として入れる (ライブ変換・文全体の変換でも AI が文脈で選べるように。
+        // 今までの学習は文節の候補を並べ替えるだけで、AI の 1 位には届かなかった: なに → 何 がいつまでも ひらがな、
+        // ブログの報告 2026-10-21)。重みは変えない。選んだ回数だけ少し安くする (どこで使うかは AI が決める)。
+        // 文節で覚えている (なにを → 何を) ので、後ろの同じかな (を) を外した自立語 (なに → 何) で入れる
+        if (lv)
+            for (auto& st : learning_->strong(2)) {
+                u16 r = st.reading, s = st.surface;
+                while (!r.empty() && !s.empty() && r.back() == s.back() && r.back() >= 0x3041 && r.back() <= 0x3096) {
+                    r.pop_back();
+                    s.pop_back();
+                }
+                if (r.empty() || s.empty() || r == s) continue;
+                UserDict::Form f;
+                f.reading = r;
+                f.surface = s;
+                f.bonus = st.count >= 3 ? 1000 : 600;
+                forms.push_back(std::move(f));
+            }
+        conv_->set_user_words(forms);
         dict_version_ = dict_->version();
+        learn_version_ = lv;
         live_key_.clear();
     }
 }

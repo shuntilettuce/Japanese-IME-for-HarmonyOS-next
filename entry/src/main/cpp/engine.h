@@ -72,6 +72,9 @@ KKC_API int kkc_last_segment_pos(kkc_engine* e, int32_t* lids, int32_t* rids, in
 // (例: 登録語 ぐぐら/ググら の代表に はしら/走ら)。コストは代表語より bonus だけ下げる (選ばれやすくする)。
 // 代表語が辞書に無ければ足さずに 0 を返す。kkc_convert と同じスレッドで呼ぶ
 KKC_API void kkc_user_clear(kkc_engine* e);
+// kkc_user_add_like と同じ。flags & 1 = 読み全体が一致したときだけ置く (短縮よみ)
+KKC_API int kkc_user_add_like2(kkc_engine* e, const uint16_t* r, int nr, const uint16_t* s, int ns, const uint16_t* tr, int ntr,
+                               const uint16_t* ts, int nts, int bonus, int flags);
 KKC_API int kkc_user_add_like(kkc_engine* e, const uint16_t* r, int nr, const uint16_t* s, int ns, const uint16_t* tr, int ntr,
                               const uint16_t* ts, int nts, int bonus);
 

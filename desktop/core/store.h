@@ -29,6 +29,10 @@ public:
     std::vector<u16> completions(const u16& prefix, size_t max);
     // その読みでいちばん多く選んだ表記 (無ければ空)
     u16 top(const u16& reading);
+    // min 回以上選んだ (読み, 表記, 回数)。変換の網に候補として入れる (AI が文脈で選ぶ。ブログの報告 2026-10-21)
+    struct Strong { u16 reading, surface; int count; };
+    std::vector<Strong> strong(int min);
+    uint64_t version() { refresh(); return version_; }   // 覚えた中身が変わるたびに増える
     void clear();
 
     static constexpr size_t MAX_READINGS = 500;
@@ -44,13 +48,15 @@ private:
     std::filesystem::file_time_type stamp_{};
     bool loaded_ = false;
     std::vector<Entry> entries_;
+    uint64_t version_ = 0;
 };
 
 class UserDict {
 public:
     struct Entry { u16 reading, word; std::string pos = "noun", group; };
     // 変換の網に入れる形: 読み・表記と、品詞を写す代表語の同じ形
-    struct Form { u16 reading, surface, tmpl_reading, tmpl_surface; };
+    // whole = 読み全体が一致したときだけ (短縮よみ)。bonus = 代表語より下げるコスト (-1 は Converter の既定)
+    struct Form { u16 reading, surface, tmpl_reading, tmpl_surface; bool whole = false; int bonus = -1; };
 
     explicit UserDict(std::filesystem::path file) : file_(std::move(file)) {}
 

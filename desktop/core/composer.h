@@ -255,6 +255,7 @@ private:
     std::vector<u16> first_cands_;   // 変換したときの文全体の候補 (記録用)
     std::vector<TreeNode> tree_;     // 直前のスペースの変換の候補の木 (convert_phrases が最後の変換のものを入れる)
     std::vector<TreeNode> last_tree_;
+    uint64_t learn_version_ = 0;     // 変換の網に入れた学習の版 (sync_user_dict)
     int tree_off_ = 0;               // 木の読みの位置 0 が kana_ のどこか (固定した前の方の読みの長さ)
     std::vector<Word> live_words_;   // 直前の打っている間の変換の 1 位の語の区切り (固定オフのとき、前の方を使い回す)
     std::vector<int> pred_tab_;      // Tab で予測の候補に入ったとき、候補の中の予測の位置 (Tab はこの中だけを回る)
