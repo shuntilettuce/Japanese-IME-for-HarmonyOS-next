@@ -1,7 +1,7 @@
 {
   "note": "AI 変換 (shuntelligence) の辞書とモデル。GitHub Releases に置き、ビルド前に tools/fetch_ai_assets.py で取得する",
-  "release": "shuntelligence-v5",
-  "url": "https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/download/shuntelligence-v5/",
+  "release": "shuntelligence-v6",
+  "url": "https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/download/shuntelligence-v6/",
   "dest": "entry/src/main/resources/rawfile",
   "files": {
     "kkc_lex.bin": {
@@ -11,10 +11,10 @@
       "license": "shuntorge: 全体は CC BY-SA 4.0 (Wikipedia 由来の語を含む)。独自部分 MIT + Mozc BSD-3-Clause / IPAdic + SudachiDict Apache-2.0 + NEologd Apache-2.0 + 日本郵便 + JMdict CC BY-SA 4.0 + Wikidata CC0 + Unicode License v3"
     },
     "kkc_model.bin": {
-      "src": "kkc_model_s7v5.bin",
-      "size": 8163728,
-      "sha256": "40b636802ce260c5ae455cebb7054efed1dceca7024ed1dbbee1457127d9eaa6",
-      "license": "shuntelligence S7 (標準、打ち間違いの直しつき。版 5: 8.2MB): CC BY 4.0"
+      "src": "kkc_model_s8pv5.bin",
+      "size": 8231312,
+      "sha256": "8f802b7c1659a56d00c5566dd03ea1c280fda58eb139cbf55393575e8cc84a41",
+      "license": "shuntelligence S8plus (標準、後ろの文脈・英字の打ち分け・ローマ字の打ち間違いの直しつき。版 5: 8.2MB): CC BY 4.0"
     },
     "kkc_model_light.bin": {
       "src": "kkc_model_xs5v5.bin",
