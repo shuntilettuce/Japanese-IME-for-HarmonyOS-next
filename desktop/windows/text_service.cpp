@@ -206,26 +206,72 @@ std::wstring TextService::app_name() {
     return name;
 }
 
-bool TextService::app_open_state(bool def) {
-    std::string t;
-    if (!read_file(user_dir() / L"app_open.tsv", t)) return def;
-    const std::string me = to_utf8(u16(reinterpret_cast<const char16_t*>(app_name().c_str())));
+// app_open.tsv の 1 行: 名前 	 オン(1)/オフ(0) [	 窓の名前 [	 印]]。印 "noshortcut" = このソフトではショートカットを使わない
+// (ゲームの Ctrl+Space など。ユーザー 2026-10-22: Minecraft で Ctrl+Space が日本語入力の切り替えとぶつかる)
+struct AppRow { std::string name, title, flags; bool open = false; bool found = false; bool has_flags = false; };   // has_flags = 印の欄がある (0.7.1 から)
+static std::vector<std::string> split_tab(const std::string& line) {
+    std::vector<std::string> f;
+    size_t a = 0;
+    for (;;) {
+        size_t b = line.find('\t', a);
+        f.push_back(line.substr(a, b == std::string::npos ? std::string::npos : b - a));
+        if (b == std::string::npos) break;
+        a = b + 1;
+    }
+    return f;
+}
+
+static AppRow read_app_row(const std::string& t, const std::string& me) {
+    AppRow r;
     size_t i = 0;
     while (i < t.size()) {
         size_t j = t.find('\n', i);
         if (j == std::string::npos) j = t.size();
         std::string line = t.substr(i, j - i);
         i = j + 1;
-        size_t tab = line.find('\t');
-        if (tab != std::string::npos && lower_ascii(line.substr(0, tab)) == me) return line.substr(tab + 1, 1) == "1";
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        auto f = split_tab(line);
+        if (f.size() < 2 || lower_ascii(f[0]) != me) continue;
+        r.found = true;
+        r.name = me;
+        r.open = f[1].substr(0, 1) == "1";
+        r.title = f.size() > 2 ? f[2] : "";
+        r.flags = f.size() > 3 ? f[3] : "";
+        r.has_flags = f.size() > 3;
     }
-    return def;
+    return r;
+}
+
+// このソフトの今の窓の名前 (一覧で javaw.exe が Minecraft だと分かるように)。前に出ている窓がこのソフトのものなら
+static std::string own_window_title() {
+    HWND h = GetForegroundWindow();
+    DWORD pid = 0;
+    if (!h || !GetWindowThreadProcessId(h, &pid) || pid != GetCurrentProcessId()) return "";
+    wchar_t buf[200] = L"";
+    GetWindowTextW(h, buf, 200);
+    std::string t = to_utf8(u16(reinterpret_cast<const char16_t*>(buf)));
+    for (auto& c : t) if (c == '\t' || c == '\n' || c == '\r') c = ' ';
+    return t;
+}
+
+// Java で動くソフト (Minecraft など) は、初めて使うときからショートカットを使わない (ゲームのキーとぶつかるので)
+static bool default_no_shortcut(const std::wstring& name) { return name == L"javaw.exe" || name == L"java.exe"; }
+
+bool TextService::app_open_state(bool def) {
+    std::string t;
+    read_file(user_dir() / L"app_open.tsv", t);
+    const std::string me = to_utf8(u16(reinterpret_cast<const char16_t*>(app_name().c_str())));
+    const AppRow r = read_app_row(t, me);
+    // 印の欄の無い古い行 (0.7.0 まで) のソフトも、Java のソフトなら使わないにする (前から使っていた Minecraft も直るように)
+    no_shortcuts_ = r.has_flags ? r.flags.find("noshortcut") != std::string::npos : default_no_shortcut(app_name());
+    return r.found ? r.open : def;
 }
 
 void TextService::remember_app_open(bool open) {
     std::string t, out;
     read_file(user_dir() / L"app_open.tsv", t);
     const std::string me = to_utf8(u16(reinterpret_cast<const char16_t*>(app_name().c_str())));
+    const AppRow old = read_app_row(t, me);
     size_t i = 0;
     while (i < t.size()) {
         size_t j = t.find('\n', i);
@@ -235,7 +281,10 @@ void TextService::remember_app_open(bool open) {
         if (line.empty() || lower_ascii(line.substr(0, line.find('\t'))) == me) continue;   // 大文字小文字の違う古い行も置き換える
         out += line + "\n";
     }
-    out += me + "\t" + (open ? "1" : "0") + "\n";
+    std::string title = own_window_title();
+    if (title.empty()) title = old.title;
+    std::string flags = old.has_flags ? old.flags : (no_shortcuts_ ? "noshortcut" : "");
+    out += me + "\t" + (open ? "1" : "0") + "\t" + title + "\t" + flags + "\n";
     write_file_atomic(user_dir() / L"app_open.tsv", out);
 }
 
@@ -546,6 +595,8 @@ TextService::Action TextService::classify(WPARAM vk, LPARAM lp, KeyEvent& ev, IT
     // ショートカットキー (既定も自分で追加も同じ一覧)。ほかの判定より先に、押したキーと修飾が合うかを見る。
     // 使えない状態 (入力中だけの機能を打っていないとき など) なら一致しなかったことにして、今までどおりに進む
     for (const auto& sc : core().settings.get().shortcuts) {
+        // このソフトではショートカットを使わない (ゲーム): 入力中の機能 (文節の伸び縮みなど) だけ残す
+        if (no_shortcuts_ && !composing) break;
         const ShortcutKey k = parse_shortcut_key(sc.first);
         if (!k.ok || k.vk != vk || k.ctrl != ctrl || k.shift != shift || k.alt != alt) continue;
         KeyEvent cev;

@@ -69,6 +69,7 @@ public:
     static std::wstring app_name();
     bool app_open_state(bool def);
     void remember_app_open(bool open);
+    bool no_shortcuts_ = false;   // このソフトではショートカットを使わない (app_open.tsv の印。Java のソフトは最初から)
     u16 reconvert_reading(ITfContext* ctx);
     std::filesystem::file_time_type romaji_stamp_{};   // romaji.tsv を読んだときの更新時刻
     // 候補の窓をマウスで選んだ
