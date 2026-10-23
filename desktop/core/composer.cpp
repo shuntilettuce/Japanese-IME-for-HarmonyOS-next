@@ -138,7 +138,9 @@ bool Composer::press(const KeyEvent& ev) {
                 commit_text(t);
                 handled = true;
             } else if (ev.key == Key::Space) {   // 何も打っていないときの空白: 全角 (Shift で半角)
-                commit_text(ev.shift != options.space_fullwidth ? u"　" : u" ");
+                bool full = ev.shift != options.space_fullwidth;
+                if (options.space_literal && !history_.empty()) full = history_.back() >= 0x80;   // 前の字に合わせる
+                commit_text(full ? u"　" : u" ");
                 handled = true;
             } else if (ev.key == Key::Char) {
                 start_input();
@@ -333,6 +335,15 @@ bool Composer::press_input(const KeyEvent& ev) {
             type_char(ev.ch, ev.raw);
             return true;
         case Key::Space:
+            if (options.space_literal && !ev.shift) {   // 空白を読みに入れて、変換を続ける (幅は確定・表示のときに前後で決める)
+                flush_romaji();
+                kana_.insert(caret_, 1, u' ');
+                caret_++;
+                if (raw_valid_ && caret_ == kana_.size()) raw_.push_back(u' ');
+                else raw_valid_ = false;
+                return true;
+            }
+            [[fallthrough]];
         case Key::Henkan:
             // 打ち間違いの直しがあるときは、文ごとの候補 (直しを 1 位に上げた・交互に混ぜた) のまま変換に入る。
             // 文節に分けると直しが候補に入らなかった (ユーザー 2026-10-14「win 版も訂正を普通の変換内に」)
@@ -368,8 +379,9 @@ bool Composer::press_input(const KeyEvent& ev) {
                 update_live();
                 if (!live_sugg_.empty()) { select_suggestion(0); return true; }
             }
-            if (live_shown()) {   // ライブ変換: 見えている変換をそのまま確定する
-                update_live();
+            // ライブ変換: 見えている変換をそのまま確定する (打ちかけのローマ字を今流し込んだので、先に変換し直してから見る)
+            if (options.live_display || options.space_literal) update_live();
+            if (live_shown()) {
                 u16 t = live_top_;
                 log({"commit", kana_, t, ctx_, live_cands_, 0, {}, "live"});
                 commit_text(frozen_surface() + t);
@@ -402,13 +414,24 @@ bool Composer::press_input(const KeyEvent& ev) {
             if (kana_.empty() && frozen_.empty()) to_idle();
             return true;
         case Key::Left:
+        case Key::Right:
+            // 空白キーで変換しない (space_literal) ときは、矢印キーで文節に分ける変換に入る (ユーザー 2026-10-23「変換変更は矢印キーで起動
+            // どうせ押すから」)。← は最後の文節、→ は最初の文節から。打っている字の中を動くのは Shift+矢印で
+            if (options.space_literal && !ev.shift) {
+                flush_romaji();
+                update_live();
+                convert_all();
+                if (ev.key == Key::Left && !segs_.empty()) focus_ = segs_.size() - 1;
+                return true;
+            }
+            if (ev.key == Key::Right) {
+                flush_romaji();
+                if (caret_ < kana_.size()) caret_++;
+                return true;
+            }
             flush_romaji();
             if (caret_ == 0) unfreeze_last();
             if (caret_ > 0) caret_--;
-            return true;
-        case Key::Right:
-            flush_romaji();
-            if (caret_ < kana_.size()) caret_++;
             return true;
         case Key::Home:
             flush_romaji();
@@ -457,6 +480,55 @@ void Composer::fork_merge(size_t i) {
     }
 }
 
+// 文節の候補を選び直したら、その後ろの文節を、選んだ表記を左の文脈にして変換し直す (ユーザー 2026-10-23「変換候補によって
+// その後の後 (対応する動詞など) が変わることがある」。汽車で|帰社した → 汽車で|来社した のように後ろが前に合わせて変わる)。
+// モデルに正しい文脈を渡し直すだけで、点の上書きはしない。後ろを一続きで変換し、区切りが今と同じ文節だけ表記を入れ替える
+// (区切りが変わる所は触らない)。選び直した文節 (changed) と別の区切りでまとめた文節より後ろは見ない (そこで止める)
+void Composer::follow_after(size_t i) {
+    if (!options.follow || !conv_ || i + 1 >= segs_.size()) return;
+    // 文節の自立語の読み (付属語を除いた所)
+    auto head_reading = [](const Seg& s) { return s.reading.substr(0, s.reading.size() - std::min(s.reading.size(), s.tail_r.size())); };
+    size_t end = i + 1;
+    while (end < segs_.size() && !segs_[end].changed && segs_[end].own_reading.empty()) end++;
+    if (end == i + 1) return;
+    // 前が全部、空白で変換した直後と同じ (選び直して元に戻した): 後ろも元の表記に戻す (変換し直すと元と違うことがある)
+    bool same = base_.size() == segs_.size();
+    for (size_t k = 0; same && k <= i; k++) same = base_[k].first == segs_[k].reading && base_[k].second == segs_[k].surface;
+    u16 rest;
+    for (size_t k = i + 1; k < end; k++) rest += segs_[k].reading;
+    if (same) {
+        for (size_t k = i + 1; k < end; k++) {
+            Seg& t = segs_[k];
+            if (base_[k].first != t.reading || base_[k].second == t.surface) continue;
+            t.surface = base_[k].second;
+            t.cands.clear();
+            t.scores.clear();
+            t.loaded = false;
+            t.sel = 0;
+        }
+        return;
+    }
+    std::vector<TreeNode> keep = std::move(last_tree_);   // 木は最初の変換のまま (表記の入れ替えは rebuild_view が木に映す)
+    std::vector<Seg> again = convert_phrases(left_context(i + 1), rest, nullptr);
+    last_tree_ = std::move(keep);
+    size_t k = i + 1;
+    for (auto& a : again) {
+        if (k >= end || a.reading != segs_[k].reading) break;   // 区切りが変わった所から先は触らない
+        Seg& t = segs_[k++];
+        // 選び直した文節と同じ読みの文節は触らない (化学と|かがく: 前をなぞって 化学と化学 にしがち。対比の文で壊れる)
+        if (a.surface == t.surface || head_reading(t) == head_reading(segs_[i])) continue;
+        t.surface = a.surface;
+        t.tail_r = a.tail_r;
+        t.tail_s = a.tail_s;
+        t.cands.clear();
+        t.scores.clear();
+        t.loaded = false;
+        t.sel = 0;
+        t.tree_k = 0;
+        t.fork_idx = -1;
+    }
+}
+
 void Composer::fork_unmerge(size_t i) {
     Seg& s = segs_[i];
     if (s.merged.empty() && s.own_reading.empty()) return;
@@ -485,6 +557,7 @@ bool Composer::press_convert(const KeyEvent& ev) {
         // 別の区切りの候補に入った・出た: 区間の文節をまとめる・戻す (s は前の文節なので、後ろを消したり足したりしても有効)
         if (s.fork_idx >= 0 && old == s.fork_idx && s.sel != s.fork_idx) fork_unmerge(focus_);
         if (s.fork_idx >= 0 && s.sel == s.fork_idx && old != s.fork_idx) fork_merge(focus_);
+        if (s.sel != old) follow_after(focus_);
     };
     switch (ev.key) {
         case Key::Char: {
@@ -643,9 +716,11 @@ void Composer::select_candidate(int index) {
     if (state_ != State::Convert) return;
     Seg& s = segs_[focus_];
     if (index < 0 || index >= int(s.cands.size())) return;
+    const bool moved = s.sel != index;
     s.sel = index;
     s.surface = s.cands[size_t(index)];
     s.changed = true;
+    if (moved) follow_after(focus_);
     log({"bseg", s.reading, s.surface, left_context(focus_), s.cands, index, {}, "mouse"});
     if (!options.always_cands) cand_open_ = false;
     rebuild_view();
@@ -1059,6 +1134,8 @@ void Composer::convert_all() {
         for (auto& x : first_cands_) x = fs + x;
     }
     first_via_ = "space";
+    base_.clear();
+    for (auto& s : segs_) base_.push_back({s.reading, s.surface});
     if (segs_.size() != 1) whole_.clear();
     focus_ = 0;
     cand_open_ = false;
@@ -1290,7 +1367,23 @@ void Composer::log(LogEvent e) {
     if (on_log) on_log(e);
 }
 
-void Composer::commit_text(const u16& t) {
+// 空白キーで変換しない (space_literal) ときの空白の幅: 前後どちらかが半角の英数字・記号なら半角、両側とも全角なら全角。
+// 文の終わりの空白は前の字に合わせる
+static u16 settle_spaces(u16 s) {
+    for (size_t i = 0; i < s.size(); i++) {
+        if (s[i] != u' ' && s[i] != u'　') continue;
+        size_t a = i, b = i + 1;
+        while (a > 0 && (s[a - 1] == u' ' || s[a - 1] == u'　')) a--;
+        while (b < s.size() && (s[b] == u' ' || s[b] == u'　')) b++;
+        const bool hp = a > 0 && s[a - 1] < 0x80, hn = b < s.size() && s[b] < 0x80;
+        const bool fp = a > 0 && s[a - 1] >= 0x80, fn = b < s.size() && s[b] >= 0x80;
+        s[i] = hp || hn ? u' ' : (fp && (fn || b == s.size())) || (a == 0 && fn) ? u'　' : u' ';
+    }
+    return s;
+}
+
+void Composer::commit_text(const u16& t0) {
+    const u16 t = options.space_literal ? settle_spaces(t0) : t0;
     commit_ += t;
     if (!t.empty() && !kana_.empty() && t != kana_) last_commit_ = {t, frozen_reading() + kana_};
     else last_commit_ = {};
@@ -1405,7 +1498,7 @@ void Composer::cancel() {
 // ライブ変換で変換した文を見せられるか: 設定がオンで、カーソルが読みの末尾にあり、今の読みの変換が出ている
 // (読みの途中にカーソルを動かして直しているときは、かなで見せる)
 bool Composer::live_shown() const {
-    return options.live_display && state_ == State::Input && !kana_.empty() && caret_ == kana_.size() &&
+    return (options.live_display || options.space_literal) && state_ == State::Input && !kana_.empty() && caret_ == kana_.size() &&
            !alpha_run_ && !live_top_.empty() && live_key_ == conv_ctx() + u'\x01' + kana_;
 }
 
@@ -1418,7 +1511,7 @@ void Composer::rebuild_view() {
         const int f = int(fz.size());
         if (f) v.spans.push_back({0, f, SpanKind::Converted});
         if (live_shown()) {   // ライブ変換: 変換した文 + 打ちかけのローマ字
-            v.text = fz + live_top_ + p;
+            v.text = fz + (options.space_literal ? settle_spaces(live_top_) : live_top_) + p;
             v.caret = int(v.text.size());
             if (!live_top_.empty()) v.spans.push_back({f, int(live_top_.size()), SpanKind::Converted});
             if (!p.empty()) v.spans.push_back({f + int(live_top_.size()), int(p.size()), SpanKind::Input});

@@ -61,6 +61,7 @@ public:
     bool has_right_ctx() const;
     // 提案を候補に混ぜず Conversion::sugg に分けて出すか (設定「提案を分けて表示する」)
     void set_suggest(bool on);
+    void set_latin(bool on);   // 英字の打ち分け (既定オン)
     // 予測: 読みが prefix で始まる辞書の語
     std::vector<u16> complete(const u16& prefix, int max, int max_extra = 6);
     // ユーザー辞書の語を網に入れ直す (前の分は消す)
@@ -74,6 +75,7 @@ private:
     std::vector<UserDict::Form> user_;   // 最後に入れたユーザー辞書の語 (モデルを替えて開き直したときに入れ直す)
     int user_bonus_ = 800;
     bool suggest_ = true;
+    bool latin_ = true;
 };
 
 // 語をつないで差別語になった候補か (HarmonyOS 版 AiConverter.SLURS と同じ)

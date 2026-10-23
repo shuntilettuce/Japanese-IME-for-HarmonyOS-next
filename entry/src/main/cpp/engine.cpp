@@ -1339,7 +1339,7 @@ void kanji_continuation_edges(const Lex& L, const ustr& ctx, const ustr& r, std:
 // 小文字にして英単語の一覧 (Lex::latin_words) を引く。当たれば正しい大文字小文字の表記の辺を足す。かなにするか
 // 英字のままにするかは採点器 (モデル) が文脈で決める (K_TYPO と同じ考え方)。コストに LATIN_BIAS を上乗せして日本語寄りにする
 void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vector<int32_t>& span_end, int n,
-                 std::vector<Edge>& out) {
+                 const ustr& r, std::vector<Edge>& out) {
     const int nkeys = int(keys.size());
     // かなの区間 [s, e) に、鍵の区間 [ks, ke) が英字だけの英単語に当たる辺を足す
     auto add = [&](int ks, int ke, int s, int e) {
@@ -1360,6 +1360,9 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
         // 辞書に無い英字の並び (略語・新しい語): 打ったまま (大文字小文字も打った通り) を、辞書の語より高い点で (名詞として)。
         // 大文字・頭だけ大文字も出すと、free shipping → Free Shipping のように勝手に大文字にした (2026-10-18 英字まじりベンチ)。
         // 大文字にしたい人は Shift で打つ
+        // かなだけの区間には作らない (M5 で鍵の列を常に渡すと、あらゆる区間に打ったままの辺ができて網が数倍に重くなった。2026-10-23)。
+        // 読みに英字が残った所 (辞書に無い英字を打った: minecraft) にだけ
+        if (std::all_of(r.begin() + s, r.begin() + e, is_kana)) return;
         ustr typed;
         for (int i = ks; i < ke; i++) typed.push_back(char32_t(keys[size_t(i)]));
         out.push_back({s, e, typed, L.noun, L.noun, LATIN_RAW_COST + LATIN_BIAS, K_LATIN});
@@ -1848,6 +1851,7 @@ struct kkc_engine {
     // 提案 (kkc_set_suggest でオン): 変換の域を超えるもの (打ち間違いの直し・日付・郵便番号の住所) を候補に混ぜず、
     // 別の出口 (kkc_last_suggest) に種類つきで出す。候補は打ったとおりの変換だけになる
     bool suggest_mode = false;
+    bool latin = true;   // 英字の辺 (ローマ字で打った英単語)。kkc_set_latin でオフにすると英字の打ち分けをしない (暴発が嫌な人向け)
     // 豆腐になる字の除外 (kkc_set_char_filter)。既定は全部除外 (HarmonyOS)。Android は Paint.hasGlyph、PC は字形の有無で
     // 端末側が調べるので切る (Android 15 から AOSP に Noto Serif Hentaigana が入り、変体仮名も出る端末がある)
     int char_filter = 7;   // 1 = 変体仮名・かなの拡張、2 = ヒエログリフ、4 = 麻雀牌・ドミノ・トランプ
@@ -2797,7 +2801,7 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
     kanji_continuation_edges(e->lex, from16(ctx, size_t(nctx)), r, E);   // 確定済みの漢字の語の続き (直滑 + こう)
     if (!keys.empty()) {
         std::vector<Edge> lat;
-        latin_edges(e->lex, keys, span_end, n, lat);
+        if (e->latin) latin_edges(e->lex, keys, span_end, n, r, lat);
         // 読みに英字が残った所 (ローマ字の打ち間違い: arigstou -> ありgsとう) は、鍵の列から 1 打戻した読みで打ち間違いの辺を作る。
         // かなだけの区間の打ち間違いは edges() が読みから作っている
         if (e->lex.typo) {
@@ -3310,6 +3314,7 @@ KKC_API double kkc_last_margin(kkc_engine* e) { return e ? e->last_cost[1] - e->
 
 // 直前の kkc_convert の提案 (kkc_set_suggest がオンのとき)。表記を 0 区切りで out に、種類を kinds に。返り値は数 (out が足りなければ -1)
 KKC_API void kkc_set_typo_promote(kkc_engine* e, double per_char) { if (e) e->typo_promote = per_char; }
+KKC_API void kkc_set_latin(kkc_engine* e, int on) { if (e) e->latin = on != 0; }
 KKC_API double kkc_last_typo_margin(kkc_engine* e) { return e ? e->typo_margin : 0; }
 
 KKC_API int kkc_last_suggest(kkc_engine* e, uint16_t* out, int cap, int32_t* kinds, int kcap) {

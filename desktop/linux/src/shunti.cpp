@@ -298,7 +298,7 @@ Core& ShuntiEngine::core() {
 void ShuntiEngine::useModel() {
     static const char* const NAMES[] = {"light", "standard", "standard"};   // 2 (高精度 M4) は廃止、標準 (S7) に (2026-10-14)
     if (core_) core_->use_model(NAMES[std::clamp(*config_.model, 0, 2)]);
-    if (core_) core_->conv.set_suggest(*config_.separateSuggest);
+    if (core_) core_->conv.set_suggest(true);   // 提案は候補に混ぜて種類を添える (分けて出す設定は廃止、2026-10-23)
 }
 
 void ShuntiEngine::applyConfig(Composer& c) const {

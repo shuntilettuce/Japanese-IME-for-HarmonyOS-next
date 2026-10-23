@@ -746,6 +746,36 @@ int main(int argc, char** argv) {
         keys(c, "{esc}{esc}");
     }
 
+    // ---- 空白キーで変換しない (space_literal): 空白も読みに入れて変換を続け、幅は前後の字で決める
+    {
+        Composer s(&conv, &learning, &dict);
+        s.options.live_commit = false;
+        s.options.private_mode = true;
+        s.options.space_literal = true;
+        // 英字の語の判定はモデル次第 (S8plus は空白で区切った英語の文を学んでいない: push -> puSH)。ここでは空白で途切れず、
+        // 英字の後の空白が半角になることだけ見る
+        keys(s, "git push{enter}");
+        {
+            u16 got = s.take_commit();
+            if (got.size() == 8 && got.compare(0, 4, u"git ") == 0) printf("ok   space literal latin: %s\n", u8(got).c_str());
+            else { printf("FAIL space literal latin: got [%s]\n", u8(got).c_str()); failures++; }
+        }
+        keys(s, "kyouha iitenki{enter}");
+        expect("space literal kana", s.take_commit(), u"今日は　いい天気");
+        keys(s, "kyouha{S-sp}");
+        if (s.view().spans.empty() || s.view().spans[0].kind != SpanKind::Focused) { printf("FAIL space literal: Shift+space does not convert\n"); failures++; }
+        else printf("ok   space literal: Shift+space converts\n");
+        keys(s, "{esc}{esc}");
+        keys(s, "kyouhaiitenki{left}");   // 矢印キーで文節に分ける変換に入る (← は最後の文節から)
+        {
+            const View& v = s.view();
+            const bool last = !v.spans.empty() && v.spans.back().kind == SpanKind::Focused && v.spans.size() >= 2;
+            if (last) printf("ok   space literal: left arrow enters phrases (%d)\n", int(v.spans.size()));
+            else { printf("FAIL space literal: left arrow did not enter phrases\n"); failures++; }
+        }
+        keys(s, "{esc}{esc}");
+    }
+
     printf(failures ? "\n%d FAILED\n" : "\nall ok\n", failures);
     return failures ? 1 : 0;
 }

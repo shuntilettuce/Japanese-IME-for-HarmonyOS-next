@@ -437,12 +437,14 @@ void TextService::apply_settings() {
     layout_.thumb_tap = s.layout_thumb_tap;
     layout_.repeat = s.layout_repeat;
     c.use_model(s.model);   // 変換モデルを替えた (同じなら何もしない)
-    c.conv.set_suggest(s.separate_suggest);
+    c.conv.set_suggest(true);   // 提案は候補に混ぜて種類を添える (Composer)。分けて出す設定は廃止 (ユーザー 2026-10-23「統合の方がわかりやすい」)
+    c.conv.set_latin(s.latin_auto);
     if (composer_) {
         composer_->options.live = s.live;
         composer_->options.live_commit = s.live_commit;
         composer_->options.live_display = s.live_display;
         composer_->options.cand_tree = s.cand_tree;
+        composer_->options.space_literal = s.space_literal;
         composer_->options.space_fullwidth = s.space_fullwidth;
         composer_->options.punct = s.punct;
         composer_->options.digits_fullwidth = s.digits_fullwidth;

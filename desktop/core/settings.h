@@ -63,9 +63,10 @@ struct Settings {
     bool live = true;                // 打っている間も候補を出す
     bool live_commit = true;         // リアルタイム確定
     bool live_display = false;       // ライブ変換: 入力中の文字を、空白を押す前から変換して見せる
+    bool latin_auto = true;          // 英字の打ち分け (ローマ字で打った英単語を文脈で英字にする)。暴発が嫌ならオフ
+    bool space_literal = false;      // 空白キーで変換しない (空白も読みに入れて変換を続ける。ComposerOptions::space_literal)
     bool cand_tree = false;          // 新デザインの候補バー (候補の木: 文節の札・強さの色・別の区切り)。既定はオフ
     bool ctrl_space = false;         // Ctrl+Space でも日本語入力のオン・オフ (shortcuts に移した。古い設定の読み替え用)
-    bool separate_suggest = true;    // 提案 (打ち間違いの直し・日付・住所・絵文字など) を候補に混ぜず、候補の窓の上の行に分けて出す
     std::string model = "standard";  // 変換モデル: light (XS3・メモリの少ない PC 向け)・standard (S7)
     // ---- 詳細設定 (2026-10-15。MS-IME・Beki IME などにある設定) ----
     std::string half_symbols;        // 半角で入れる記号 (! ? ( ) @ など。ここに無い記号は全角。, . / - [ ] は 、。・ー「」 の代わりに半角)

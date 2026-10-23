@@ -54,6 +54,7 @@ bool Converter::open(const void* lex, size_t lex_size, const void* model, size_t
     e_ = kkc_open(lex, lex_size, model, model_size);
     if (e_ && threads > 0) kkc_set_threads(e_, threads);
     if (e_) kkc_set_suggest(e_, suggest_ ? 1 : 0);
+    if (e_) kkc_set_latin(e_, latin_ ? 1 : 0);
     if (e_ && !user_.empty()) set_user_words(std::vector<UserDict::Form>(user_), user_bonus_);   // モデルを替えて開き直したとき
     return e_ != nullptr;
 }
@@ -290,6 +291,11 @@ void Converter::set_keys(const u16& keys, const std::vector<int32_t>& span_end, 
 }
 
 bool Converter::has_right_ctx() const { return e_ && kkc_has_right_ctx(e_) != 0; }
+
+void Converter::set_latin(bool on) {
+    latin_ = on;
+    if (e_) kkc_set_latin(e_, on ? 1 : 0);
+}
 
 void Converter::set_suggest(bool on) {
     suggest_ = on;

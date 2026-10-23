@@ -85,7 +85,12 @@ struct ComposerOptions {
     bool live_display = false; // ライブ変換: 入力中の文字を、空白を押す前から AI の 1 位で見せる (Enter でそのまま確定)
     bool always_cands = true;  // 変換中は候補の窓をいつも出す
     bool cand_tree = false;     // 変換中は候補の窓の上に候補の木 (文節の強さ・つながり・迷う区切り) を出す
+    bool follow = true;         // 文節を選び直したら、後ろのまだ選んでいない文節を新しい左の文脈で変換し直す
     bool space_fullwidth = true;   // 何も打っていないときの空白を全角に (Shift で逆)
+    // 空白キーで変換しない (ユーザー 2026-10-23「半角全角キーを押さなくていい IME」): 打っている間の空白は空白として読みに入れ、
+    // 変換は途切れない (git push・今日は いい天気)。変換はライブ変換で見せ、文節に分ける変換は変換キーか Shift+空白。
+    // 空白の幅は前後の字で決める (前後どちらかが半角の英数字なら半角、両側とも全角なら全角。settle_spaces)
+    bool space_literal = false;
     int punct = 0;                 // 句読点: 0 = 、。 1 = ，． 2 = 、． 3 = ，。
     bool digits_fullwidth = false; // 数字を全角で入れる
     u16 half_symbols;              // 半角で入れる記号 (詳細設定)
@@ -187,6 +192,7 @@ private:
     void resize_focus(int delta);
     void fork_merge(size_t i);     // 候補の木の二股: 文節 i から区間の終わりまでを 1 つにまとめる
     void fork_unmerge(size_t i);   // まとめたのを元の文節に戻す
+    void follow_after(size_t i);   // 選び直した文節の後ろを、新しい左の文脈で変換し直す
     void transform(Key f);
     u16 alpha_source(const u16& reading) const;
     void back_to_input();
@@ -251,6 +257,7 @@ private:
 
     // 変換
     std::vector<Seg> segs_;
+    std::vector<std::pair<u16, u16>> base_;   // 空白で変換した直後の文節 (読み, 表記)。選び直しを元に戻したら後ろも元に (follow_after)
     std::vector<u16> whole_;   // 文全体の候補 (文節が 1 つのとき、その候補に使う)
     std::vector<u16> first_cands_;   // 変換したときの文全体の候補 (記録用)
     std::vector<TreeNode> tree_;     // 直前のスペースの変換の候補の木 (convert_phrases が最後の変換のものを入れる)
