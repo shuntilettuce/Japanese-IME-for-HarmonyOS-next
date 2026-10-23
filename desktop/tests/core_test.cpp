@@ -765,7 +765,7 @@ int main(int argc, char** argv) {
         s.options.live_commit = false;
         s.options.private_mode = true;
         s.options.space_literal = true;
-        // 英字の語の判定はモデル次第 (S8plus は空白で区切った英語の文を学んでいない: push -> puSH)。ここでは空白で途切れず、
+        // 英字の語の判定はモデル次第 (S8 は空白で区切った英語の文を学んでいない: push -> puSH)。ここでは空白で途切れず、
         // 英字の後の空白が半角になることだけ見る
         keys(s, "git push{enter}");
         {

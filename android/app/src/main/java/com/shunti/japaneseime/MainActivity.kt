@@ -122,7 +122,7 @@ class MainActivity : Activity() {
 
         section("変換")
         col.addView(text("変換モデル", 14f, secondary = true))
-        col.addView(radios(listOf("標準 (S8plus)", "軽量 (XS5)"), if (settings.model == "light") 1 else 0) {
+        col.addView(radios(listOf("標準 (S8)", "軽量 (XS5)"), if (settings.model == "light") 1 else 0) {
             settings.model = if (it == 1) "light" else "standard"
         })
         col.addView(text("変換が遅いと感じる端末では軽量にしてください。次にキーボードを開いたときから変わります。", 12f, secondary = true))

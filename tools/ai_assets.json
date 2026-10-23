@@ -14,7 +14,7 @@
       "src": "kkc_model_s8pv5.bin",
       "size": 8231312,
       "sha256": "8f802b7c1659a56d00c5566dd03ea1c280fda58eb139cbf55393575e8cc84a41",
-      "license": "shuntelligence S8plus (標準、後ろの文脈・英字の打ち分け・ローマ字の打ち間違いの直しつき。版 5: 8.2MB): CC BY 4.0"
+      "license": "shuntelligence S8 (標準、後ろの文脈・英字の打ち分け・ローマ字の打ち間違いの直しつき。版 5: 8.2MB): CC BY 4.0"
     },
     "kkc_model_light.bin": {
       "src": "kkc_model_xs5v5.bin",

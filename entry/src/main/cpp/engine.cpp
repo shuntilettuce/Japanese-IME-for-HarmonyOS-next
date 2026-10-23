@@ -1890,7 +1890,7 @@ struct kkc_engine {
     // 英字の辺 (K_LATIN) を 1 位にするのに要る差 (1 字あたり、12 字まで)。英字の辺の点数から引いておくので、際どいときは日本語が 1 位、
     // 英字は 2 位以下 (候補の木の別の表記・別の区切り) に出る (ユーザー 2026-10-23「誤爆不安」「2 番目に文節分けを変えてでも英語」)。
     // KKC_LATIN_PROMOTE で調整 (測定用)
-    double latin_promote = [] { const char* v = getenv("KKC_LATIN_PROMOTE"); return v ? atof(v) : 0.0; }();   // S8plus では 0 (日本語の誤爆は増えず英文だけ落ちた、10/24 測定)。M5 で網を広げたら測り直す
+    double latin_promote = [] { const char* v = getenv("KKC_LATIN_PROMOTE"); return v ? atof(v) : 0.0; }();   // S8 では 0 (日本語の誤爆は増えず英文だけ落ちた、10/24 測定)。M5 で網を広げたら測り直す
     double typo_margin = 0;      // 直前の変換の差 (調整用)   // 打ち間違いの辺の点数から引く値 (kkc_set_typo。大きいほど直しが控えめ)
     // 提案 (kkc_set_suggest でオン): 変換の域を超えるもの (打ち間違いの直し・日付・郵便番号の住所) を候補に混ぜず、
     // 別の出口 (kkc_last_suggest) に種類つきで出す。候補は打ったとおりの変換だけになる

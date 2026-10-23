@@ -30,7 +30,7 @@ FCITX_CONFIGURATION(
     fcitx::Option<int, fcitx::IntConstrain> punct{this, "Punct", "句読点 (0 = 、。 1 = ，． 2 = 、． 3 = ，。)", 0,
                                                   fcitx::IntConstrain(0, 3)};
     fcitx::Option<int, fcitx::IntConstrain> model{this, "Model",
-                                                  "変換モデル (0 = 軽量 XS5: メモリの少ない PC 向け、1 = 標準 S7: より高精度)", 1,
+                                                  "変換モデル (0 = 軽量 XS5: メモリの少ない PC 向け、1 = 標準 S8: より高精度)", 1,
                                                   fcitx::IntConstrain(0, 2)};);
 
 // 変換エンジン・学習・ユーザー辞書 (Fcitx5 のプロセスに 1 つ)

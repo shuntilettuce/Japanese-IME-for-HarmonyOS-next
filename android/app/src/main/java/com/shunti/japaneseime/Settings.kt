@@ -96,7 +96,7 @@ class Settings(context: Context) {
         get() = false   // 設定は廃止 (2026-10-14)
         set(v) = p.edit().putBoolean("liveCommit", v).apply()
 
-    /** 変換モデル: "standard" (S8plus、既定) か "light" (XS5、性能の低い端末向け) */
+    /** 変換モデル: "standard" (S8、既定) か "light" (XS5、性能の低い端末向け) */
     var model: String
         get() = p.getString("model", "standard") ?: "standard"
         set(v) = p.edit().putString("model", v).apply()
