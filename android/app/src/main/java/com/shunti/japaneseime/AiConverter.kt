@@ -12,6 +12,9 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
     var lastMs = 0.0
         private set
 
+    /** 読み -> 打った鍵の列 (InputHandler が QWERTY・GODAN で打った分を覚えている。無ければ null) */
+    var keysFor: (String) -> Pair<String, IntArray>? = { null }
+
     // ---- 長い入力: 前の方を固定して、後ろだけを変換する ----
     // 変換 1 回が BUDGET_MS を超えて遅れを感じる長さになったら、1 位の候補の語の区切りのうち、最後の KEEP_WORDS 語より前にあって、
     // 2 回続けて同じ変換になったところ (または「、」「。」の後ろ) までを固定する。それより短いうちは文全体に AI をかけ続ける。
@@ -167,7 +170,7 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
     private var wantKana = ""
     private var wantCb: () -> Unit = {}
 
-    private fun key(context: String, kana: String) = "$context|$kana"
+    private fun key(context: String, kana: String) = "$context|$kana|${keysFor(kana)?.first ?: ""}"
 
     /** 変換中にまた頼まれたら、終わったあとで最新の 1 つだけを変換する (古い読みの変換を溜めない) */
     private fun request(context: String, kana: String, onDone: () -> Unit) {
@@ -184,9 +187,10 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
         val ctx = wantCtx
         val kana = wantKana
         val cb = wantCb
+        val keys = keysFor(kana)
         worker.execute {
             val t = DoubleArray(5)
-            val r = runCatching { engine.convertWithSegments(ctx, kana, CANDIDATES, true, t) }
+            val r = runCatching { engine.convertWithSegments(ctx, kana, CANDIDATES, true, t, keys) }
                 .getOrElse { Engine.Result(emptyList(), IntArray(0), IntArray(0)) }
             main.post {
                 lastMs = t.sum()

@@ -101,7 +101,7 @@ class QwertyKeyboardView(
                 canvas.drawRoundRect(rect, 7 * dp, 7 * dp, keyPaint)
                 val onAccent = (k.action == "enter" && h.inputState != InputHandler.InputState.IDLE) || (k.action == "shift" && shift > 0)
                 text.color = theme.getValue(if (onAccent) "onAccent" else "textPrimary")
-                val label = if (k.action.startsWith("char:") && !kana && shift > 0) k.label.uppercase() else k.label
+                val label = if (k.action.startsWith("char:") && shift > 0) k.label.uppercase() else k.label
                 text.textSize = (if (label.length > 1) 13 else if (ri == 0) 16 else 19) * dp
                 canvas.drawText(label, rect.centerX(), rect.centerY() - (text.descent() + text.ascent()) / 2, text)
                 x += k.w * unit
@@ -159,7 +159,7 @@ class QwertyKeyboardView(
         when {
             a.startsWith("char:") -> {
                 val c = a.substring(5)
-                h.handleKeyPress(if (!kana && shift > 0) c.uppercase() else c)
+                h.handleKeyPress(if (shift > 0) c.uppercase() else c)   // かなでも Shift で大文字 (そこから英字のまま、PC と同じ)
                 if (shift == 1) shift = 0
             }
             a.startsWith("digit:") || a.startsWith("punct:") -> {

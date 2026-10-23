@@ -101,7 +101,7 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
                 engine = e
                 e?.setSuggest(settings.separateSuggest)
                 e?.allowSlurs = settings.allowSlurs
-                ai = if (e != null) AiConverter(e, worker, main) else null
+                ai = if (e != null) AiConverter(e, worker, main).also { a -> a.keysFor = { k -> input.keysFor(k) } } else null
                 userSynced = -1   // 新しいエンジンにユーザー辞書を入れ直す
                 syncUserWords()
                 if (input.composingText.isNotEmpty()) input.updateCandidates()

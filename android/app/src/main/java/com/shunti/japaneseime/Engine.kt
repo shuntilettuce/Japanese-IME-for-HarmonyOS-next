@@ -17,8 +17,11 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
     fun convert(ctx: String, kana: String, max: Int = 10, model: Boolean = true, times: DoubleArray? = null): List<String> =
         convertWithSegments(ctx, kana, max, model, times).cands
 
-    fun convertWithSegments(ctx: String, kana: String, max: Int = 10, model: Boolean = true, times: DoubleArray? = null): Result {
+    /** keys = PC と同じくローマ字で打った鍵の列と、読みの字ごとの「その字までの鍵の数」(読みと同じ長さ)。次の変換 1 回だけに効く */
+    fun convertWithSegments(ctx: String, kana: String, max: Int = 10, model: Boolean = true, times: DoubleArray? = null,
+                            keys: Pair<String, IntArray>? = null): Result {
         if (handle == 0L || kana.isEmpty()) return Result(emptyList(), IntArray(0), IntArray(0))
+        if (keys != null && keys.second.size == kana.length) nativeSetKeys(handle, keys.first, keys.second)
         val raw = nativeConvert(handle, ctx, kana, max * 2, model, times)
         val seg = nativeSegments(handle)
         val sugg = nativeLastSuggest(handle).mapNotNull { s ->
@@ -82,6 +85,7 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
         @JvmStatic private external fun nativeClose(h: Long)
         @JvmStatic private external fun nativeConvert(h: Long, ctx: String, kana: String, max: Int, model: Boolean, times: DoubleArray?): Array<String>
         @JvmStatic private external fun nativeSetThreads(h: Long, n: Int)
+        @JvmStatic private external fun nativeSetKeys(h: Long, keys: String, spanEnd: IntArray)
         @JvmStatic private external fun nativeSetSuggest(h: Long, on: Boolean, charFilter: Int)
         @JvmStatic private external fun nativeLastSuggest(h: Long): Array<String>
         @JvmStatic private external fun nativeSegments(h: Long): IntArray

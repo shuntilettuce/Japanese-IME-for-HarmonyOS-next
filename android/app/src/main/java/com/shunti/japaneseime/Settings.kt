@@ -92,6 +92,11 @@ class Settings(context: Context) {
         get() = true   // 常に出す (設定は廃止、2026-10-13)
         set(v) = p.edit().putBoolean("allowSlurs", v).apply()
 
+    /** ライブ変換: 入力中の文字を、確定を押す前から AI の 1 位で見せる (確定でそのまま確定。PC 版と同じ、2026-10-24) */
+    var liveDisplay: Boolean
+        get() = p.getBoolean("liveDisplay", false)
+        set(v) = p.edit().putBoolean("liveDisplay", v).apply()
+
     var liveCommit: Boolean
         get() = false   // 設定は廃止 (2026-10-14)
         set(v) = p.edit().putBoolean("liveCommit", v).apply()

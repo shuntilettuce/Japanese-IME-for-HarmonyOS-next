@@ -74,6 +74,43 @@ class InputHandler(
     private var ctx = ""                           // 変換の文脈 (入力を始めたときのカーソルの左 + その後に確定した分)
     private val composingUndoStack = ArrayList<String>()
     private val romaji = JapaneseConverter(tables.ROMAJI_TABLE)   // QWERTY でかなを打つとき
+    // 打った鍵 (QWERTY・GODAN のローマ字、フリックのかなはその字のまま)。エンジンに渡して英字の打ち分けに使う (PC と同じ、2026-10-24)。
+    // 途中を書き換えたら (消す・小゛゜) 使えない
+    private val rawKeys = StringBuilder()
+    private var alphaRun = false   // 大文字で始めた英字の続き (かなにしない)
+    private var keysValid = true
+
+    /** 読み kana に合う打った鍵の列 (読みの字ごとの「その字までの鍵の数」つき)。読みに英字が残るときだけ (PC の prime_keys と同じ) */
+    fun keysFor(kana: String): Pair<String, IntArray>? {
+        if (!keysValid || rawKeys.isEmpty() || kana.none { it in 'a'..'z' || it in 'A'..'Z' }) return null
+        val conv = JapaneseConverter(tables.ROMAJI_TABLE)
+        val sim = StringBuilder()
+        val span = ArrayList<Int>()
+        var k = 0
+        for (ch in rawKeys) {
+            val lk = ch.lowercaseChar()
+            if (lk in 'a'..'z' || lk == '-' || lk == '\'') {
+                k++
+                val r = conv.processKey(ch.toString())
+                val end = if (conv.pending().isEmpty()) k else k - 1
+                for (c in r.committed) { sim.append(c); span.add(end) }
+            } else {
+                for (c in conv.flushPending()) { sim.append(c); span.add(k) }
+                k++
+                sim.append(ch); span.add(k)
+            }
+        }
+        for (c in conv.flushPending()) { sim.append(c); span.add(k) }
+        val s = sim.toString()
+        val off = when {
+            s.startsWith(kana) -> 0
+            s.endsWith(kana) -> s.length - kana.length
+            else -> return null
+        }
+        val ks = if (off == 0) 0 else span[off - 1]
+        val ke = span[off + kana.length - 1]
+        return rawKeys.substring(ks, ke) to IntArray(kana.length) { span[off + it] - ks }
+    }
 
     /** まだかなに決まっていないローマ字 (QWERTY) */
     val pendingRomaji get() = romaji.pending()
@@ -142,6 +179,8 @@ class InputHandler(
         if (inputState == InputState.SELECTING) commitTopCandidate()
         beginIfIdle()
         composingText += romaji.flushPending() + kana
+        rawKeys.append(kana)
+        alphaRun = false
         inputState = InputState.COMPOSING
         conversionEnd = 0
         updateCandidates()
@@ -151,6 +190,9 @@ class InputHandler(
     private fun beginIfIdle() {
         if (composingText.isEmpty() && romaji.pending().isEmpty()) {
             ctx = host.ic?.getTextBeforeCursor(40, 0)?.toString() ?: ""
+            rawKeys.setLength(0)   // 新しい入力: 打った鍵も始めから
+            keysValid = true
+            alphaRun = false
             predictions = emptyList()
         }
     }
@@ -176,7 +218,19 @@ class InputHandler(
         }
         if (inputState == InputState.SELECTING) commitTopCandidate()
         beginIfIdle()
+        // 大文字: そこから英字のまま (PC 版の caps_alpha と同じ。小文字の続きも英字、空白・記号・かなで終わる。2026-10-24)
+        if (key.length == 1 && (key[0] in 'A'..'Z' || (alphaRun && (key[0] in 'a'..'z' || key[0] in '0'..'9')))) {
+            composingText += romaji.flushPending() + key
+            rawKeys.append(key)
+            alphaRun = true
+            inputState = InputState.COMPOSING
+            conversionEnd = 0
+            updateCandidates()
+            return
+        }
+        alphaRun = false
         val r = romaji.processKey(key)
+        rawKeys.append(key)
         composingText += r.committed
         inputState = if (composingText.isNotEmpty() || r.pending.isNotEmpty()) InputState.COMPOSING else InputState.IDLE
         conversionEnd = 0
@@ -193,6 +247,7 @@ class InputHandler(
 
     /** 小゛゜ キー: 最後の 1 文字を順に切り替える */
     fun handleVariantCycle() {
+        keysValid = false
         if (inputState != InputState.COMPOSING || composingText.isEmpty()) return
         val next = tables.VARIANT_CYCLE[composingText.takeLast(1)] ?: return
         composingText = composingText.dropLast(1) + next
@@ -200,6 +255,7 @@ class InputHandler(
     }
 
     fun handleSpaceKey() {
+        alphaRun = false
         if (inputState == InputState.COMPOSING && flushRomaji()) updateCandidates()
         if (inputState == InputState.IDLE || composingText.isEmpty()) {
             insertText(if (inputMode == InputMode.ALPHANUMERIC) " " else "　")
@@ -227,7 +283,9 @@ class InputHandler(
             InputState.COMPOSING -> {
                 if (romaji.pending().isNotEmpty()) {
                     romaji.backspace()
+                    if (rawKeys.isNotEmpty()) rawKeys.setLength(rawKeys.length - 1)
                 } else if (composingText.isNotEmpty()) {
+                    keysValid = false
                     composingUndoStack.add(composingText.takeLast(1))
                     composingText = composingText.dropLast(1)
                 }
@@ -248,7 +306,7 @@ class InputHandler(
     fun handleEnterKey() {
         when (inputState) {
             InputState.SELECTING -> commitTopCandidate()
-            InputState.COMPOSING -> commitRaw()
+            InputState.COMPOSING -> if (liveTop() != null && romaji.pending().isEmpty()) commitTopCandidate() else commitRaw()   // ライブ変換は見えている変換で確定
             InputState.IDLE -> {
                 val ic = host.ic ?: return
                 val action = enterAction()
@@ -389,6 +447,8 @@ class InputHandler(
 
     private fun resetComposition() {
         romaji.reset()
+        rawKeys.setLength(0)
+        keysValid = true
         suggestions = emptyList()
         if (composingText.isNotEmpty() || inputState != InputState.IDLE) {
             host.ic?.setComposingText("", 1)
@@ -592,6 +652,11 @@ class InputHandler(
     }
 
     /** 入力中の文字列を入力欄に出す: 読み (変換範囲を縮めていればその部分に色) か、選んでいる候補 + 残りのかな */
+    /** ライブ変換で見せる 1 位 (読み全体を変換した候補があるとき)。無ければ null (かなのまま見せる) */
+    private fun liveTop(): String? =
+        if (settings.liveDisplay && inputState == InputState.COMPOSING && conversionEnd == 0 && composingText.isNotEmpty())
+            candidates.firstOrNull()?.takeIf { it.isNotEmpty() } else null
+
     private fun showComposing() {
         val ic = host.ic ?: return
         if (inputState == InputState.SELECTING) {
@@ -599,8 +664,9 @@ class InputHandler(
             ic.setComposingText((candidates.getOrNull(selectedCandidateIndex) ?: "") + tail, 1)
             return
         }
-        val shown = composingText + romaji.pending()   // 打ちかけのローマ字も後ろに出す
-        if (isRangeShrunk()) {
+        val live = liveTop()
+        val shown = (live ?: composingText) + romaji.pending()   // 打ちかけのローマ字も後ろに出す
+        if (live == null && isRangeShrunk()) {
             val s = SpannableString(shown)
             s.setSpan(BackgroundColorSpan(RANGE_BG), 0, conversionEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             ic.setComposingText(s, 1)

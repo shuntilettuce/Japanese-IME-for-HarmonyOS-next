@@ -117,6 +117,7 @@ class MainActivity : Activity() {
         col.addView(radios(listOf("QWERTY", "フリック"), if (settings.alphaLayout == "FLICK") 1 else 0) {
             settings.alphaLayout = if (it == 1) "FLICK" else "QWERTY"
         })
+        col.addView(switch("ライブ変換 (入力中の文字も変換して表示)", settings.liveDisplay) { settings.liveDisplay = it }, lp(top = 8))
         col.addView(switch("あA キーで数字パッドにも切り替える", settings.numericPad) { settings.numericPad = it }, lp(top = 8))
         col.addView(text("オンにすると、あA キーで 日本語 → 英字 → 数字 → 日本語 と回ります。", 12f, secondary = true))
 
