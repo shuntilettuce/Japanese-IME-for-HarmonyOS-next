@@ -26,7 +26,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr wchar_t VERSION[] = L"0.7.0";
+constexpr wchar_t VERSION[] = L"0.8.0";
 
 enum Id {
     ID_THEME = 100, ID_PUNCT, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,

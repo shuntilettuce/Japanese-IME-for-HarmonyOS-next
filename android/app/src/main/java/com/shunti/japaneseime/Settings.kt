@@ -53,7 +53,12 @@ class Settings(context: Context) {
         get() = p.getBoolean("flickHints", true)
         set(v) = p.edit().putBoolean("flickHints", v).apply()
 
-    /** かなの配列: "FLICK" (フリック) か "QWERTY" (ローマ字) */
+    /** GODAN の左右を逆にする (機能キーを左に) */
+    var godanMirror: Boolean
+        get() = p.getBoolean("godanMirror", false)
+        set(v) = p.edit().putBoolean("godanMirror", v).apply()
+
+    /** かなの配列: "FLICK" (フリック)・"QWERTY" (ローマ字)・"GODAN" (母音と子音、ローマ字) */
     var kanaLayout: String
         get() = p.getString("kanaLayout", "FLICK") ?: "FLICK"
         set(v) = p.edit().putString("kanaLayout", v).apply()

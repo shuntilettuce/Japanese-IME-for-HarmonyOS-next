@@ -1382,8 +1382,15 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
         if (it != L.latin_words.end()) {
             ustr surf = it->second.surf;
             // 英語の文の中 (空白・英字と隣り合う) では、大文字小文字は打った通り (the・you・it。辞書の The・YOU・IT にしない)。
-            // 2 字目以降に大文字の混ざる書き方 (OpenAI・iPhone) だけは辞書の表記。日本語の文の中では辞書の表記 (OS・IT)
-            if (english && !camel(surf)) {
+            // 2 字目以降に大文字があり小文字も混ざる書き方 (OpenAI・iPhone) だけは辞書の表記。日本語の文の中では辞書の表記 (OS・IT)。
+            // ただし普通の英単語 (SCOWL の語、辞書の読み U+0002 + 綴り。will・call) は、辞書に変わった書き方 (WiLL) があっても打った通り
+            auto common = [&] {
+                std::u16string k16(1, u'');
+                for (char ch : lower) k16.push_back(char16_t(ch));
+                uint32_t a0, b0;
+                return L.find(reinterpret_cast<const uint16_t*>(k16.data()), int(k16.size()), a0, b0);
+            };
+            if (english && (!camel(surf) || common())) {
                 surf.clear();
                 for (int i = ks; i < ke; i++) surf.push_back(char32_t(keys[size_t(i)]));
             }
@@ -1880,6 +1887,10 @@ struct kkc_engine {
     // 直しを候補の 1 位にする差 (1 字あたりのコスト)。kkc_set_typo_promote。200 で web の文 400 のうち 1 位を替えたのは 0、
     // キーの打ち間違いの 53%・フリックの隣の 43% を 1 位で直す (0 なら 62%・54% だが web で 9 文を替えた。2026-10-14 測定)
     double typo_promote = 200;
+    // 英字の辺 (K_LATIN) を 1 位にするのに要る差 (1 字あたり、12 字まで)。英字の辺の点数から引いておくので、際どいときは日本語が 1 位、
+    // 英字は 2 位以下 (候補の木の別の表記・別の区切り) に出る (ユーザー 2026-10-23「誤爆不安」「2 番目に文節分けを変えてでも英語」)。
+    // KKC_LATIN_PROMOTE で調整 (測定用)
+    double latin_promote = [] { const char* v = getenv("KKC_LATIN_PROMOTE"); return v ? atof(v) : 0.0; }();   // S8plus では 0 (日本語の誤爆は増えず英文だけ落ちた、10/24 測定)。M5 で網を広げたら測り直す
     double typo_margin = 0;      // 直前の変換の差 (調整用)   // 打ち間違いの辺の点数から引く値 (kkc_set_typo。大きいほど直しが控えめ)
     // 提案 (kkc_set_suggest でオン): 変換の域を超えるもの (打ち間違いの直し・日付・郵便番号の住所) を候補に混ぜず、
     // 別の出口 (kkc_last_suggest) に種類つきで出す。候補は打ったとおりの変換だけになる
@@ -2937,6 +2948,11 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
         if (e->typo_bias != 0)
             for (size_t i = 0; i < E.size(); i++)
                 if (E[i].kind == K_TYPO) e->last_u[i] -= e->typo_bias;
+        if (e->latin_promote > 0) {   // 点数の単位はコスト 1000 = 1
+            const float pen = float(e->latin_promote * std::clamp(n, 1, 12) / 1000.0);
+            for (size_t i = 0; i < E.size(); i++)
+                if (E[i].kind == K_LATIN) e->last_u[i] -= pen;
+        }
         e->times[3] = ms_since(t0);
         t0 = std::chrono::steady_clock::now();
         bool has_typo = false;

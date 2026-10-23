@@ -108,9 +108,11 @@ class MainActivity : Activity() {
 
         section("入力")
         col.addView(text("かなの配列", 14f, secondary = true))
-        col.addView(radios(listOf("フリック", "QWERTY (ローマ字)"), if (settings.kanaLayout == "QWERTY") 1 else 0) {
-            settings.kanaLayout = if (it == 1) "QWERTY" else "FLICK"
+        val kanaLayouts = listOf("FLICK", "QWERTY", "GODAN")
+        col.addView(radios(listOf("フリック", "QWERTY (ローマ字)", "GODAN (ローマ字)"), kanaLayouts.indexOf(settings.kanaLayout).coerceAtLeast(0)) {
+            settings.kanaLayout = kanaLayouts[it]
         })
+        col.addView(switch("GODAN を左右反転", settings.godanMirror) { settings.godanMirror = it }, lp(top = 4))
         col.addView(text("英字の配列", 14f, secondary = true), lp(top = 8))
         col.addView(radios(listOf("QWERTY", "フリック"), if (settings.alphaLayout == "FLICK") 1 else 0) {
             settings.alphaLayout = if (it == 1) "FLICK" else "QWERTY"

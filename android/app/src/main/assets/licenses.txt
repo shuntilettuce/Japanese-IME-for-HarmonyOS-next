@@ -17,6 +17,7 @@ Wikipedia 由来の語を含むため、辞書ファイル (kkc_lex.bin) 全体�
 ・日本郵便 郵便番号データ (郵便番号 → 住所、地名の照合。著作権を主張しない・自由に配布してよいとされています)
 ・Unicode CLDR の絵文字の日本語名と emoji-test.txt (Unicode License v3、Copyright © 1991-2026 Unicode, Inc.)
 ・mecab-ipadic-NEologd (Toshinori Sato、Apache License 2.0。英字の語 (Win・GitHub など) の読み。NEologd ははてなキーワード一覧ファイル (株式会社はてな) ほかの表記と読みを使用)
+・SCOWL (Spell Checker Oriented Word Lists、Copyright 2000-2026 Kevin Atkinson。英単語の一覧 (よく使う語、大きさ 35)。MIT に近い許諾: 著作権表示とこの許諾の表示を残せば自由に使える)
 ・The CEFR-J Wordlist Version 1.5 (投野由紀夫・東京外国語大学 投野研究室。英単語の選定に使用。読みは独自)
 
 ■ キー配置・記号・絵文字・顔文字の表
@@ -206,3 +207,13 @@ Public Domain Dataです。使用・変更・配布に関しては一切の制�
 ```
 
 Source: http://sourceforge.jp/projects/o-dic/
+
+---- SCOWL ----
+Copyright 2000-2026 by Kevin Atkinson
+
+Permission to use, copy, modify, distribute, and sell any part of SCOWLv2, or
+word lists created from it, is hereby granted without fee, provided that the
+above copyright notice appears in all copies and that both the above
+copyright notice and this notice appear in supporting documentation.  Kevin
+Atkinson makes no representations about the suitability of this database for
+any purpose.  It is provided "as is" without express or implied warranty.

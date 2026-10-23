@@ -57,6 +57,7 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
     private var scroll: HorizontalScrollView? = null
     private var flick: KeyboardView? = null
     private var qwerty: QwertyKeyboardView? = null
+    private var godan: GodanKeyboardView? = null
     private var palette: PaletteView? = null
     private var menu: MenuView? = null
     private var root: FrameLayout? = null
@@ -147,11 +148,13 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
             it.rowH = rowH
         }
         val qw = QwertyKeyboardView(this, input, tables, ::tick, ::special).also { it.theme = theme; it.totalH = kbH }
+        val gd = GodanKeyboardView(this, input, tables, ::tick).also { it.theme = theme; it.totalH = kbH; it.mirror = settings.godanMirror }
         val pal = PaletteView(this, input, tables, recent, ::tick).also { it.theme = theme; it.totalH = kbH }
         val mv = MenuView(this, this, ::tick).also { it.theme = theme; it.totalH = kbH }
         val frame = FrameLayout(this).apply {
             addView(kb)
             addView(qw)
+            addView(gd)
             addView(pal)
             addView(mv)
         }
@@ -255,6 +258,7 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
         suggKey = ""
         flick = kb
         qwerty = qw
+        godan = gd
         palette = pal
         menu = mv
         block = blk
@@ -611,14 +615,19 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
     override fun render() {
         val b = bar ?: return
         val sub = input.subMode
-        val showQwerty = sub == InputHandler.SubMode.KANA &&
-            (if (input.inputMode == InputHandler.InputMode.HIRAGANA) settings.kanaLayout else settings.alphaLayout) == "QWERTY"
+        val layout = if (input.inputMode == InputHandler.InputMode.HIRAGANA) settings.kanaLayout else settings.alphaLayout
         val shown: View? = when (sub) {
             InputHandler.SubMode.MENU -> menu
             InputHandler.SubMode.SYMBOL, InputHandler.SubMode.EMOJI -> palette
-            else -> if (showQwerty) qwerty else flick
+            InputHandler.SubMode.KANA -> when (layout) {
+                "QWERTY" -> qwerty
+                "GODAN" -> godan
+                else -> flick
+            }
+            else -> flick
         }
-        for (v in listOf(flick, qwerty, palette, menu)) {
+        godan?.mirror = settings.godanMirror   // 設定の変更を毎回読む (キーボードを作り直さなくても効くように)
+        for (v in listOf(flick, qwerty, godan, palette, menu)) {
             v?.visibility = if (v === shown) View.VISIBLE else if (v === flick) View.INVISIBLE else View.GONE
             if (v === shown) v?.invalidate()
         }

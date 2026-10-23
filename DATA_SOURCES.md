@@ -172,6 +172,7 @@ AI変換（設定 → 変換エンジン → AI変換）のモデル **shuntelli
 | ネットの読み・技術用語・【速報】等の定型 | 本プロジェクトで作成（定型の読みは SudachiDict） | MIT / SudachiDict（Apache 2.0） |
 | 文章から拾った名詞 | 上記の教材に30回以上出て mozc に無い名詞（読みは SudachiDict） | MIT / SudachiDict（Apache 2.0） |
 | 英字の語の読み（Win・GitHub・Excel など） | mecab-ipadic-NEologd（`mecab-user-dict-seed.20200910`。はてなキーワード一覧ファイルほかの表記と読み）。FineWeb-2 に30回以上出る英字の名詞のみ。英字を先に出すかは教材の回数で決定 | Apache License 2.0 |
+| 英単語の一覧（each・other・hello など、ローマ字で英字のまま打ったときの英字の語） | SCOWL（en-wl/wordlist rel-2026.02.25、Copyright 2000-2026 Kevin Atkinson）の大きさ 35 の語 | MIT に近い許諾（著作権表示と許諾の表示を残す） |
 
 差別語は辞書と候補から除いている。
 
