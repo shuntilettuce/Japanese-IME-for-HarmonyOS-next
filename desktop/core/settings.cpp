@@ -33,6 +33,7 @@ bool load_settings(const fs::path& p, Settings& s) {
     boolean("cand_tree", s.cand_tree);
     boolean("space_literal", s.space_literal);
     boolean("latin_auto", s.latin_auto);
+    boolean("caps_alpha", s.caps_alpha);
     boolean("ctrl_space", s.ctrl_space);
     str("model", s.model);
     if (const json::Value* x = v.get("punct"); x && x->type == json::Value::Number) s.punct = int(x->num) & 3;
@@ -97,6 +98,7 @@ bool save_settings(const fs::path& p, const Settings& s) {
     o += std::string("  \"cand_tree\": ") + b(s.cand_tree) + ",\n";
     o += std::string("  \"space_literal\": ") + b(s.space_literal) + ",\n";
     o += std::string("  \"latin_auto\": ") + b(s.latin_auto) + ",\n";
+    o += std::string("  \"caps_alpha\": ") + b(s.caps_alpha) + ",\n";
     o += "  \"model\": " + json::quote(s.model) + ",\n";
     o += "  \"half_symbols\": " + json::quote(s.half_symbols) + ",\n";
     o += "  \"numpad\": " + std::to_string(s.numpad) + ",\n";

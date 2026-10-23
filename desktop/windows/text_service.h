@@ -119,7 +119,7 @@ private:
     DWORD conv_cookie_ = TF_INVALID_COOKIE;
     ITfComposition* comp_ = nullptr;
     ITfContext* comp_ctx_ = nullptr;
-    TfGuidAtom atom_input_ = TF_INVALID_GUIDATOM, atom_converted_ = TF_INVALID_GUIDATOM, atom_focused_ = TF_INVALID_GUIDATOM;
+    TfGuidAtom atom_input_ = TF_INVALID_GUIDATOM, atom_converted_ = TF_INVALID_GUIDATOM, atom_focused_ = TF_INVALID_GUIDATOM, atom_corrected_ = TF_INVALID_GUIDATOM;
     std::unique_ptr<Composer> composer_;
     bool ensure_composer();
     void place_fallback(bool ok, RECT& rc, HWND hwnd);   // 候補の窓の位置が取れないとき

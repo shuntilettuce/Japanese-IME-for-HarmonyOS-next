@@ -446,6 +446,19 @@ int main(int argc, char** argv) {
     // ---- 明らかな打ち間違いは直した形が 1 位 (よろしくおねぎあします)
     keys(c, "yorosikuonegiasimasu{sp}{enter}");
     expect("typo promoted", c.take_commit(), u"よろしくお願いします");
+    {   // ライブ変換で直したときは、直した所に印 (SpanKind::Corrected)
+        Composer s(&conv, &learning, &dict);
+        s.options.live_commit = false;
+        s.options.private_mode = true;
+        s.options.live_display = true;
+        keys(s, "yorosikuonegiasimasu");
+        u16 marked;
+        for (auto& sp : s.view().spans)
+            if (sp.kind == SpanKind::Corrected) marked = s.view().text.substr(size_t(sp.start), size_t(sp.len));
+        printf("     live: %s  corrected: [%s]\n", u8(s.view().text).c_str(), u8(marked).c_str());
+        if (marked.empty()) { printf("FAIL live typo correction not marked\n"); failures++; }
+        keys(s, "{esc}");
+    }
 
     // ---- 提案 (日付など): 候補と交互に ✦ を付けて混ぜる (2 位の後ろから)。Shift+Enter で 1 つ目を確定
     keys(c, "kyou");
@@ -774,6 +787,74 @@ int main(int argc, char** argv) {
             else { printf("FAIL space literal: left arrow did not enter phrases\n"); failures++; }
         }
         keys(s, "{esc}{esc}");
+    }
+
+    // ---- ユーザー辞書の英字の語: 読みを空にして登録すると、綴りどおりに打ったとき候補の 2 番目に出る
+    {
+        std::string err = dict.add(u"", u"ShuntiLettuce", "noun", "");
+        if (!err.empty()) { printf("FAIL latin user word add: %s\n", err.c_str()); failures++; }
+        Composer s(&conv, &learning, &dict);
+        s.options.live_commit = false;
+        s.options.private_mode = true;
+        keys(s, "shuntilettuce");
+        const auto& cs = s.view().cands;
+        if (cs.size() >= 2 && (cs[0] == u"ShuntiLettuce" || cs[1] == u"ShuntiLettuce")) printf("ok   latin user word top 2: %s / %s\n", u8(cs[0]).c_str(), u8(cs[1]).c_str());
+        else { printf("FAIL latin user word not 2nd (%d cands)\n", int(cs.size())); failures++; }
+        keys(s, "{esc}");
+        dict.remove(u"shuntilettuce", u"ShuntiLettuce");
+        keys(s, "openai");   // 辞書の大文字の混ざる英字の語も 2 番目に
+        const auto& c2 = s.view().cands;
+        if (c2.size() >= 2 && (c2[0] == u"OpenAI" || c2[1] == u"OpenAI")) printf("ok   dict latin word top 2: %s / %s\n", u8(c2[0]).c_str(), u8(c2[1]).c_str());
+        else { printf("FAIL dict latin word not 2nd (%d cands)\n", int(c2.size())); failures++; }
+        keys(s, "{esc}");
+        keys(s, "openainohougaii");   // 文の途中の英字の語: 鍵の列を渡して網に入れる (順位はモデル次第なので表示だけ)
+        {
+            int at = -1;
+            const auto& c3 = s.view().cands;
+            for (size_t i = 0; i < c3.size(); i++) if (c3[i].find(u"OpenAI") != u16::npos) { at = int(i); break; }
+            printf("     probe openai in sentence: 1st %s, OpenAI at %d\n", c3.empty() ? "" : u8(c3[0]).c_str(), at);
+        }
+        keys(s, "{esc}");
+    }
+
+    // ---- 打ちすぎた字を消しても鍵の列を使い続ける (英字が出なくならない) / 長く打っても前の打ち間違いの直しが消えない
+    {
+        Composer s(&conv, &learning, &dict);
+        s.options.live_commit = false;
+        s.options.private_mode = true;
+        s.options.live_display = true;
+        keys(s, "minecraftt{bs}{enter}");
+        expect("latin after backspace", s.take_commit(), u"minecraft");
+        keys(s, "yorosikuonegaisimasu{enter}");
+        u16 base = s.take_commit();
+        keys(s, "yorisikuonegaisimasu{enter}");
+        u16 short_typo = s.take_commit();
+        keys(s, "yorisikuonegaisimasukyouhaiitenkidesunesanponiikimasenka{enter}");
+        u16 long_typo = s.take_commit();
+        printf("     typo short: %s / long: %s\n", u8(short_typo).c_str(), u8(long_typo).c_str());
+        if (short_typo.compare(0, 4, u"よろしく") == 0 && long_typo.compare(0, 4, u"よろしく") != 0) {
+            printf("FAIL typo correction lost when typing longer\n");
+            failures++;
+        }
+        (void)base;
+    }
+
+    // ---- 大文字で英字のまま (caps_alpha) を切ると、大文字も小文字と同じくローマ字になる
+    {
+        Composer s(&conv, &learning, &dict);
+        s.options.live_commit = false;
+        s.options.private_mode = true;
+        keys(s, "Kyou{enter}");
+        expect("caps alpha on", s.take_commit(), u"Kyou");
+        s.options.caps_alpha = false;
+        keys(s, "IMEwotukau{enter}");
+        expect("caps alpha off", s.take_commit(), u"IMEをつかう");
+        keys(s, "IMEwotukau{sp}{enter}");   // 変換しても大文字の英字は変わらない
+        {
+            u16 got = s.take_commit();
+            if (got.compare(0, 4, u"IMEを") == 0) printf("ok   caps alpha off convert: %s\n", u8(got).c_str());
+            else { printf("FAIL caps alpha off convert: %s\n", u8(got).c_str()); failures++; }
+        }
     }
 
     printf(failures ? "\n%d FAILED\n" : "\nall ok\n", failures);

@@ -173,6 +173,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* tm, TfClientId cid, DWORD) {
         cat->RegisterGUID(GUID_AttrInput, &atom_input_);
         cat->RegisterGUID(GUID_AttrConverted, &atom_converted_);
         cat->RegisterGUID(GUID_AttrFocused, &atom_focused_);
+        cat->RegisterGUID(GUID_AttrCorrected, &atom_corrected_);
     }
 
     advise_compartment(GUID_COMPARTMENT_KEYBOARD_OPENCLOSE, open_cookie_);
@@ -445,6 +446,7 @@ void TextService::apply_settings() {
         composer_->options.live_display = s.live_display;
         composer_->options.cand_tree = s.cand_tree;
         composer_->options.space_literal = s.space_literal;
+        composer_->options.caps_alpha = s.caps_alpha;
         composer_->options.space_fullwidth = s.space_fullwidth;
         composer_->options.punct = s.punct;
         composer_->options.digits_fullwidth = s.digits_fullwidth;
@@ -946,7 +948,8 @@ void TextService::set_attributes(TfEditCookie ec, ITfContext* ctx, ITfRange* com
     if (FAILED(ctx->GetProperty(GUID_PROP_ATTRIBUTE, &prop))) return;
     prop->Clear(ec, comp_range);
     for (auto& sp : v.spans) {
-        TfGuidAtom atom = sp.kind == SpanKind::Input ? atom_input_ : sp.kind == SpanKind::Converted ? atom_converted_ : atom_focused_;
+        TfGuidAtom atom = sp.kind == SpanKind::Input ? atom_input_ : sp.kind == SpanKind::Converted ? atom_converted_
+                        : sp.kind == SpanKind::Corrected ? atom_corrected_ : atom_focused_;
         if (atom == TF_INVALID_GUIDATOM) continue;
         ComPtr<ITfRange> r;
         if (FAILED(comp_range->Clone(&r))) continue;

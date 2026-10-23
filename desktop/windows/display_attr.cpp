@@ -6,28 +6,31 @@ namespace shunti {
 namespace win {
 
 namespace {
-TF_DISPLAYATTRIBUTE attr(TF_DA_LINESTYLE line, BOOL bold, TF_DA_ATTR_INFO info) {
+TF_DISPLAYATTRIBUTE attr(TF_DA_LINESTYLE line, BOOL bold, TF_DA_ATTR_INFO info, COLORREF line_color = CLR_INVALID) {
     TF_DISPLAYATTRIBUTE a = {};
     a.crText.type = TF_CT_NONE;
     a.crBk.type = TF_CT_NONE;
     a.lsStyle = line;
     a.fBoldLine = bold;
-    a.crLine.type = TF_CT_NONE;
+    a.crLine.type = line_color == CLR_INVALID ? TF_CT_NONE : TF_CT_COLORREF;
+    if (line_color != CLR_INVALID) a.crLine.cr = line_color;
     a.bAttr = info;
     return a;
 }
 
-struct Item { const GUID* guid; TF_DA_LINESTYLE line; BOOL bold; TF_DA_ATTR_INFO info; const wchar_t* desc; };
+struct Item { const GUID* guid; TF_DA_LINESTYLE line; BOOL bold; TF_DA_ATTR_INFO info; const wchar_t* desc; COLORREF color = CLR_INVALID; };
 const Item ITEMS[] = {
     {&GUID_AttrInput, TF_LS_DOT, FALSE, TF_ATTR_INPUT, L"shunti IME 入力中"},
     {&GUID_AttrConverted, TF_LS_SOLID, FALSE, TF_ATTR_CONVERTED, L"shunti IME 変換済み"},
     {&GUID_AttrFocused, TF_LS_SOLID, TRUE, TF_ATTR_TARGET_CONVERTED, L"shunti IME 選んでいる文節"},
+    // ライブ変換で打ち間違いを直して 1 位にした所 (ユーザー 2026-10-23「一発で直ってるときはわかるように」)。赤橙の波線
+    {&GUID_AttrCorrected, TF_LS_SQUIGGLE, FALSE, TF_ATTR_CONVERTED, L"shunti IME 打ち間違いを直した所", RGB(230, 90, 30)},
 };
 }  // namespace
 
 DisplayAttributeInfo* make_display_attribute(const GUID& guid) {
     for (auto& it : ITEMS)
-        if (IsEqualGUID(*it.guid, guid)) return new DisplayAttributeInfo(guid, attr(it.line, it.bold, it.info), it.desc);
+        if (IsEqualGUID(*it.guid, guid)) return new DisplayAttributeInfo(guid, attr(it.line, it.bold, it.info, it.color), it.desc);
     return nullptr;
 }
 

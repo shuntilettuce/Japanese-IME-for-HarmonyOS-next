@@ -553,6 +553,7 @@ constexpr int32_t LATIN_WORD_BONUS = 500;
 // 英カタカナ辞書の印 (kkc/latin/add_words.py の eng)。このコスト以上の語は変換の網に入れず、読み全体がこの語のときだけ候補に足す
 // (くらいあんと → client。網に入れると普通の外来語を乗っ取った)
 constexpr int32_t ENG_COST = 32000;
+constexpr int32_t ENG_LATIN_COST = 9000;   // 英カタカナ辞書の語を英字の辺に使うときのコスト (kkcnative2 と同じ)
 // 英字の辺 (K_LATIN) のコストに上乗せする値。かな・カタカナの語より英字の語を出にくくする (日本語寄りにする)
 constexpr int32_t LATIN_BIAS = 3000;
 // 辞書に無い英字の並び (打ったまま・大文字・頭だけ大文字) の語のコスト (学習の網 kkcnative2 と同じ)
@@ -1338,23 +1339,55 @@ void kanji_continuation_edges(const Lex& L, const ustr& ctx, const ustr& r, std:
 // 打った鍵の列 (kkc_set_keys) の、かなの区間 [s, e) に対応する鍵の区間 [span_start(s), span_end[e-1]) が英字だけのとき、
 // 小文字にして英単語の一覧 (Lex::latin_words) を引く。当たれば正しい大文字小文字の表記の辺を足す。かなにするか
 // 英字のままにするかは採点器 (モデル) が文脈で決める (K_TYPO と同じ考え方)。コストに LATIN_BIAS を上乗せして日本語寄りにする
+// user_latin: ユーザー辞書の英字の語 (小文字・空白なしの綴り -> 語。ShuntiLettuce)。空白を挟んで打った区間 (shunti lettuce) も当てる
 void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vector<int32_t>& span_end, int n,
-                 const ustr& r, std::vector<Edge>& out) {
+                 const ustr& r, const std::unordered_map<std::string, LatinWord>& user_latin, std::vector<Edge>& out) {
     const int nkeys = int(keys.size());
     // かなの区間 [s, e) に、鍵の区間 [ks, ke) が英字だけの英単語に当たる辺を足す
     auto add = [&](int ks, int ke, int s, int e) {
         if (ke - ks < 2) return;   // 2 字以上だけ
         std::string lower;
         lower.reserve(size_t(ke - ks));
+        bool spaced = false;
         for (int i = ks; i < ke; i++) {
             const uint16_t c = keys[size_t(i)];
             if (c >= u'a' && c <= u'z') lower.push_back(char(c));
             else if (c >= u'A' && c <= u'Z') lower.push_back(char(c + 32));
+            else if (c == u' ' && i > ks && i + 1 < ke) spaced = true;   // 間の空白はユーザーの英字の語を引くときだけ飛ばす
             else return;   // 英字だけの区間だけ (記号は見ない)
         }
+        if (lower.size() < 2) return;
+        auto ut = user_latin.find(lower);
+        if (ut != user_latin.end()) {   // ユーザー辞書の英字の語 (いちばん強い)
+            out.push_back({s, e, ut->second.surf, ut->second.lid, ut->second.rid, ut->second.cost, K_LATIN});
+            return;
+        }
+        if (spaced) return;
+        // 読みが全部かなの区間 (おぺない) には、2 字目以降に大文字があり小文字も混ざる語 (OpenAI・YouTube) だけ。
+        // 全部大文字 (ZETTON・AKASHI)・頭だけ大文字 (Radon)・小文字 (same) は日本語の読みとぶつかって誤爆した (2026-10-23)
+        // ただし空白・英字と隣り合う区間 (空白で区切って打った英語の文: hello my name) は英語の続きなので、辞書の英字の語を全部使う
+        const auto latin_side = [&](int i) { return i >= 0 && i < n && (r[size_t(i)] == U' ' || (r[size_t(i)] < 0x80 && std::isalpha(int(r[size_t(i)])))); };
+        const bool english = latin_side(s - 1) || latin_side(e);
+        const bool kana_span = std::all_of(r.begin() + s, r.begin() + e, is_kana) && !english;
+        auto camel = [](const ustr& w) {
+            bool up = false, low = false;
+            for (size_t i = 0; i < w.size(); i++) {
+                if (w[i] >= U'A' && w[i] <= U'Z') { if (i > 0) up = true; }
+                else if (w[i] >= U'a' && w[i] <= U'z') low = true;
+            }
+            return up && low;
+        };
         auto it = L.latin_words.find(lower);
+        if (it != L.latin_words.end() && kana_span && !camel(it->second.surf)) return;
         if (it != L.latin_words.end()) {
-            out.push_back({s, e, it->second.surf, it->second.lid, it->second.rid, it->second.cost + LATIN_BIAS, K_LATIN});
+            ustr surf = it->second.surf;
+            // 英語の文の中 (空白・英字と隣り合う) では、大文字小文字は打った通り (the・you・it。辞書の The・YOU・IT にしない)。
+            // 2 字目以降に大文字の混ざる書き方 (OpenAI・iPhone) だけは辞書の表記。日本語の文の中では辞書の表記 (OS・IT)
+            if (english && !camel(surf)) {
+                surf.clear();
+                for (int i = ks; i < ke; i++) surf.push_back(char32_t(keys[size_t(i)]));
+            }
+            out.push_back({s, e, surf, it->second.lid, it->second.rid, it->second.cost + LATIN_BIAS, K_LATIN});
             return;
         }
         // 辞書に無い英字の並び (略語・新しい語): 打ったまま (大文字小文字も打った通り) を、辞書の語より高い点で (名詞として)。
@@ -1864,6 +1897,7 @@ struct kkc_engine {
     std::vector<PathInfo> last_paths; // 直前の変換の上位の経路 (kkc_last_paths)
     double last_cost[2] = {0, 0};     // 直前の変換の 1 位・2 位 (表記が違う最初の 2 つ) の経路のコスト。2 位が無ければ大きな値
     std::vector<UserWord> user;                   // ユーザー辞書の語 (kkc_user_add_like で足す)
+    std::unordered_map<std::string, LatinWord> user_latin;   // ユーザー辞書の英字の語 (表記が英字だけ。小文字・空白なしの綴り -> 語)
     // 打った鍵の列 (kkc_set_keys)。直後の 1 回の変換で英字の辺 (K_LATIN) を作るのに使う
     std::vector<uint16_t> keys;
     std::vector<int32_t> span_end;
@@ -2246,8 +2280,12 @@ KKC_API kkc_engine* kkc_open(const void* lex, size_t lex_size, const void* model
                 else { ok = false; break; }
             }
             if (!ok) continue;
-            e->lex.latin_words.emplace(std::move(lower),
-                                       LatinWord{from16(s, en.slen), int32_t(en.lid), int32_t(en.rid), en.cost});
+            // 英カタカナ辞書の印 (ENG_COST) の語 (カタカナの題名の英字の綴り: ぱり → Paris・ゆにくろ → UNIQLO) も、ローマ字で英字のまま
+            // 打ったときは英単語として使う (ユーザー 2026-10-23)。コストは辞書に無い英字よりは安く。同じ綴りはコストの安い表記
+            const int32_t cost = en.cost >= ENG_COST ? ENG_LATIN_COST : en.cost;
+            auto it = e->lex.latin_words.find(lower);
+            if (it == e->lex.latin_words.end() || cost < it->second.cost)
+                e->lex.latin_words[lower] = LatinWord{from16(s, en.slen), int32_t(en.lid), int32_t(en.rid), cost};
         }
     }
     {   // 略語の品詞は、辞書の「じーでぃーぴー → GDP」から写す (無ければ略語の候補は作らない)
@@ -2801,7 +2839,7 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
     kanji_continuation_edges(e->lex, from16(ctx, size_t(nctx)), r, E);   // 確定済みの漢字の語の続き (直滑 + こう)
     if (!keys.empty()) {
         std::vector<Edge> lat;
-        if (e->latin) latin_edges(e->lex, keys, span_end, n, r, lat);
+        if (e->latin) latin_edges(e->lex, keys, span_end, n, r, e->user_latin, lat);
         // 読みに英字が残った所 (ローマ字の打ち間違い: arigstou -> ありgsとう) は、鍵の列から 1 打戻した読みで打ち間違いの辺を作る。
         // かなだけの区間の打ち間違いは edges() が読みから作っている
         if (e->lex.typo) {
@@ -2914,7 +2952,9 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
             nbest(e->lex, E, n, lit.data(), M.beta, M.gamma, 10, maxout, res, &e->last_segs, e->last_cost);
             // 打ったままの道より直した道がはっきり良い (1 字あたり typo_promote 以上) なら、明らかな打ち間違い: 直した形を候補の 1 位に
             // (打ったままの形は 2 位に残る)。そうでなければ提案に (ユーザー 2026-10-14「明らかに間違ってる誤字は 1 位に」)
-            e->typo_margin = (e->last_cost[0] - tyc[0]) / std::max(1, n);
+            // 1 字あたりの差。長い読みで割ると、前の方の明らかな打ち間違いが、後ろを打ち足すほど薄まって直らなくなった
+            // (ユーザー 2026-10-23「長く打ちすぎると前の方の誤字訂正が戻ってしまう」)。割るのは 12 字まで
+            e->typo_margin = (e->last_cost[0] - tyc[0]) / std::clamp(n, 1, 12);
             if (!ty.empty() && !res.empty() && ty[0] != res[0]) {
                 if (e->typo_margin >= e->typo_promote) {
                     res.erase(std::remove(res.begin(), res.end(), ty[0]), res.end());
@@ -3315,6 +3355,20 @@ KKC_API double kkc_last_margin(kkc_engine* e) { return e ? e->last_cost[1] - e->
 // 直前の kkc_convert の提案 (kkc_set_suggest がオンのとき)。表記を 0 区切りで out に、種類を kinds に。返り値は数 (out が足りなければ -1)
 KKC_API void kkc_set_typo_promote(kkc_engine* e, double per_char) { if (e) e->typo_promote = per_char; }
 KKC_API void kkc_set_latin(kkc_engine* e, int on) { if (e) e->latin = on != 0; }
+
+// 綴り (英字・数字、小文字) の辞書の英字の語の表記を out に。無い・英字の打ち分けがオフなら 0。返り値は表記の長さ (UTF-16)
+KKC_API int kkc_latin_word(kkc_engine* e, const uint16_t* key, int nk, uint16_t* out, int cap) {
+    if (!e || !e->latin || nk <= 0) return 0;
+    std::string k;
+    for (int i = 0; i < nk; i++) {
+        if (key[i] >= 0x80) return 0;
+        k.push_back(char(key[i] >= u'A' && key[i] <= u'Z' ? key[i] + 32 : key[i]));
+    }
+    auto it = e->lex.latin_words.find(k);
+    if (it == e->lex.latin_words.end() || int(it->second.surf.size()) > cap) return 0;
+    for (size_t i = 0; i < it->second.surf.size(); i++) out[i] = uint16_t(it->second.surf[i]);
+    return int(it->second.surf.size());
+}
 KKC_API double kkc_last_typo_margin(kkc_engine* e) { return e ? e->typo_margin : 0; }
 
 KKC_API int kkc_last_suggest(kkc_engine* e, uint16_t* out, int cap, int32_t* kinds, int kcap) {
@@ -3389,7 +3443,7 @@ KKC_API int kkc_last_segment_pos(kkc_engine* e, int32_t* lids, int32_t* rids, in
 }
 
 KKC_API void kkc_user_clear(kkc_engine* e) {
-    if (e) e->user.clear();
+    if (e) { e->user.clear(); e->user_latin.clear(); }
 }
 
 KKC_API int kkc_user_add_like(kkc_engine* e, const uint16_t* r, int nr, const uint16_t* s, int ns, const uint16_t* tr, int ntr,
@@ -3406,6 +3460,19 @@ KKC_API int kkc_user_add_like(kkc_engine* e, const uint16_t* r, int nr, const ui
     }
     if (!found) return 0;
     e->user.push_back({from16(r, size_t(nr)), from16(s, size_t(ns)), best.lid, best.rid, best.cost - bonus});
+    {   // 表記が英字 (と数字・間の空白) だけの語は、ローマ字で英字のまま打ったときの英字の辺にも (ShuntiLettuce、2026-10-23)
+        std::string lower;
+        bool latin = true;
+        for (int i = 0; i < ns && latin; i++) {
+            const uint16_t c = s[i];
+            if (c >= u'a' && c <= u'z') lower.push_back(char(c));
+            else if (c >= u'A' && c <= u'Z') lower.push_back(char(c + 32));
+            else if (c >= u'0' && c <= u'9') lower.push_back(char(c));
+            else if (c != u' ') latin = false;
+        }
+        if (latin && lower.size() >= 2)
+            e->user_latin[lower] = LatinWord{from16(s, size_t(ns)), best.lid, best.rid, best.cost - bonus};
+    }
     return 1;
 }
 

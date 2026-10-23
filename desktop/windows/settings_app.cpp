@@ -30,7 +30,7 @@ constexpr wchar_t VERSION[] = L"0.7.0";
 
 enum Id {
     ID_THEME = 100, ID_PUNCT, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
-    ID_LIST, ID_READING, ID_WORD, ID_POS, ID_ADD, ID_REMOVE, ID_IMPORT, ID_ADVANCED, ID_UPDATE, ID_RESET, ID_LICENSE, ID_GITHUB, ID_ICON, ID_MODEL, ID_CANDTREE, ID_SPACELIT, ID_LATIN,
+    ID_LIST, ID_READING, ID_WORD, ID_POS, ID_ADD, ID_REMOVE, ID_IMPORT, ID_ADVANCED, ID_UPDATE, ID_RESET, ID_LICENSE, ID_GITHUB, ID_ICON, ID_MODEL, ID_CANDTREE, ID_SPACELIT, ID_LATIN, ID_CAPS,
 };
 
 // 変換モデル (settings.json の model の値と、画面の表示)。名前は配布の呼び名 (開発名は出さない)
@@ -40,7 +40,7 @@ struct PosItem { const wchar_t* label; const char* pos; const char* group; };
 // 品詞は MS-IME の分類にそろえる (MS-IME の一覧の出力をそのまま読み込めるように)
 const std::vector<PosItem>& pos_items() {
     static const std::vector<PosItem> POS = {
-        {T(1), "noun", ""}, {T(2), "abbrev", ""}, {T(3), "kaomoji", ""}, {T(4), "person", ""},
+        {T(1), "noun", ""}, {T(164), "latin", ""}, {T(2), "abbrev", ""}, {T(3), "kaomoji", ""}, {T(4), "person", ""},
         {T(5), "place", ""}, {T(6), "org", ""},
         {T(7), "verb", "godan"}, {T(8), "verb", "ichidan"}, {T(9), "adjective", ""},
         {T(10), "adverb", ""}, {T(11), "interjection", ""},
@@ -102,6 +102,7 @@ void save() {
     g_s.cand_tree = checked(ID_CANDTREE);
     g_s.space_literal = checked(ID_SPACELIT);
     g_s.latin_auto = checked(ID_LATIN);
+    g_s.caps_alpha = checked(ID_CAPS);
     g_s.live_commit = checked(ID_LIVECOMMIT);
     g_s.model = MODELS[std::clamp(selected(ID_MODEL), 0, 1)];
     if (!save_settings(g_dir / L"settings.json", g_s))
@@ -131,9 +132,18 @@ void refresh_list() {
     }
 }
 
+// 品詞が「英字の語」のときは読みの欄を使わない (灰色にして空に)
+void update_reading_box() {
+    const int p = std::max(0, selected(ID_POS));
+    const bool latin = std::string(pos_items()[size_t(p)].pos) == "latin";
+    HWND r = GetDlgItem(g_wnd, ID_READING);
+    if (latin) SetWindowTextW(r, L"");
+    EnableWindow(r, !latin);
+}
+
 void add_word() {
-    std::wstring r = text_of(ID_READING), w = text_of(ID_WORD);
     int p = std::max(0, selected(ID_POS));
+    std::wstring r = std::string(pos_items()[size_t(p)].pos) == "latin" ? L"" : text_of(ID_READING), w = text_of(ID_WORD);
     std::string err = g_dict->add(U(r), U(w), pos_items()[size_t(p)].pos, pos_items()[size_t(p)].group);
     if (!err.empty()) {
         MessageBoxW(g_wnd, W8(err).c_str(), T(13), MB_ICONINFORMATION);
@@ -883,7 +893,7 @@ void build() {
     combo(200, y + 23, 250, ID_MODEL, {T(102), T(103)});
     y += 68;
 
-    group(T(50), y, 260);
+    group(T(50), y, 285);
     make(L"STATIC", T(104), 0, 24, y + 27, 170, 20, 0);
     combo(200, y + 23, 120, ID_PUNCT, {T(105), T(106), T(107), T(108)});
     make(L"BUTTON", T(109), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 54, 430, 22, ID_SPACE);
@@ -894,7 +904,8 @@ void build() {
     make(L"BUTTON", T(159), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 179, 430, 22, ID_CANDTREE);
     make(L"BUTTON", T(160), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 204, 430, 22, ID_SPACELIT);
     make(L"BUTTON", T(161), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 229, 430, 22, ID_LATIN);
-    y += 268;
+    make(L"BUTTON", T(163), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 254, 430, 22, ID_CAPS);
+    y += 293;
 
     group(T(13), y, 216);
     g_list = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 24, y + 22, 432, 90, ID_LIST);
@@ -950,6 +961,7 @@ void build() {
     check(ID_CANDTREE, g_s.cand_tree);
     check(ID_SPACELIT, g_s.space_literal);
     check(ID_LATIN, g_s.latin_auto);
+    check(ID_CAPS, g_s.caps_alpha);
     check(ID_LIVECOMMIT, g_s.live_commit);
     g_loading = false;
     refresh_list();
@@ -964,8 +976,9 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             int id = LOWORD(w), code = HIWORD(w);
             if ((id == ID_THEME || id == ID_PUNCT || id == ID_MODEL) && code == CBN_SELCHANGE) save();
             else if (id == IDCANCEL) DestroyWindow(h);   // 「閉じる」と Esc
-            else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_CANDTREE || id == ID_SPACELIT || id == ID_LATIN) && code == BN_CLICKED) save();
+            else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_CANDTREE || id == ID_SPACELIT || id == ID_LATIN || id == ID_CAPS) && code == BN_CLICKED) save();
             else if (id == ID_ADD) add_word();
+            else if (id == ID_POS && code == CBN_SELCHANGE) update_reading_box();
             else if (id == ID_IMPORT) import_words();
             else if (id == ID_ADVANCED) open_advanced();
             else if (id == ID_UPDATE) check_update(true);

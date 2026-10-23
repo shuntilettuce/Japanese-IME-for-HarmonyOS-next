@@ -251,11 +251,12 @@ class InputHandler(
             InputState.COMPOSING -> commitRaw()
             InputState.IDLE -> {
                 val ic = host.ic ?: return
-                val ei = host.editorInfo
-                val action = (ei?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION
-                val noAction = ((ei?.imeOptions ?: 0) and EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0
-                if (!noAction && action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED) {
+                val action = enterAction()
+                if (action != null) {
                     ic.performEditorAction(action)
+                } else if (multiLine()) {
+                    // 複数行の欄: 改行の字を入れる (Enter のキーを送っても改行しない欄があった。ユーザー 2026-10-23)
+                    ic.commitText("\n", 1)
                 } else {
                     ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
                     ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
@@ -267,12 +268,24 @@ class InputHandler(
         }
     }
 
+    private fun multiLine(): Boolean =
+        ((host.editorInfo?.inputType ?: 0) and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0
+
+    /** Enter で行う動作 (送信・検索など)。null なら改行。複数行の欄では、送信・検索・移動のはっきりした指定のときだけ動作にし、
+     *  ほかの指定 (完了・次へ) は改行にする (メモ帳などで Enter が改行にならなかった) */
+    private fun enterAction(): Int? {
+        val ei = host.editorInfo ?: return null
+        if ((ei.imeOptions and EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0) return null
+        val action = ei.imeOptions and EditorInfo.IME_MASK_ACTION
+        if (action == EditorInfo.IME_ACTION_NONE || action == EditorInfo.IME_ACTION_UNSPECIFIED) return null
+        if (multiLine() && action != EditorInfo.IME_ACTION_SEND && action != EditorInfo.IME_ACTION_SEARCH && action != EditorInfo.IME_ACTION_GO) return null
+        return action
+    }
+
     /** 確定キーの表示 (入力中は「確定」、そうでなければ入力欄の指定に合わせる) */
     fun enterLabel(): String {
         if (inputState != InputState.IDLE) return "確定"
-        val ei = host.editorInfo
-        if (((ei?.imeOptions ?: 0) and EditorInfo.IME_FLAG_NO_ENTER_ACTION) != 0) return "改行"
-        return when ((ei?.imeOptions ?: 0) and EditorInfo.IME_MASK_ACTION) {
+        return when (enterAction()) {
             EditorInfo.IME_ACTION_SEND -> "送信"
             EditorInfo.IME_ACTION_SEARCH -> "検索"
             EditorInfo.IME_ACTION_GO -> "移動"

@@ -38,7 +38,7 @@ struct KeyEvent {
     bool raw = false;    // かなにせず打ったまま入れる (テンキー)
 };
 
-enum class SpanKind { Input, Converted, Focused };
+enum class SpanKind { Input, Converted, Focused, Corrected };   // Corrected = ライブ変換で打ち間違いを直した所
 struct Span { int start, len; SpanKind kind; };
 
 // 入力中の文字の見せ方と候補の窓
@@ -91,6 +91,7 @@ struct ComposerOptions {
     // 変換は途切れない (git push・今日は いい天気)。変換はライブ変換で見せ、文節に分ける変換は変換キーか Shift+空白。
     // 空白の幅は前後の字で決める (前後どちらかが半角の英数字なら半角、両側とも全角なら全角。settle_spaces)
     bool space_literal = false;
+    bool caps_alpha = true;     // 大文字で打ち始めたら、そこから英字のまま (オフなら大文字の字だけ英字で、小文字はローマ字に戻る)
     int punct = 0;                 // 句読点: 0 = 、。 1 = ，． 2 = 、． 3 = ，。
     bool digits_fullwidth = false; // 数字を全角で入れる
     u16 half_symbols;              // 半角で入れる記号 (詳細設定)
@@ -192,6 +193,9 @@ private:
     void resize_focus(int delta);
     void fork_merge(size_t i);     // 候補の木の二股: 文節 i から区間の終わりまでを 1 つにまとめる
     void fork_unmerge(size_t i);   // まとめたのを元の文節に戻す
+    bool has_latin_word(const u16& raw) const;
+    void simulate_raw(u16& sim, std::vector<int32_t>& span) const;
+    bool undo_last_key();   // 最後に打った鍵を抜いてローマ字を打ち直す (Backspace)   // 打った鍵を Romaji に通し直した読みと字ごとの鍵の数   // 打った鍵の中に英字の語 (大文字の混ざる辞書の語・ユーザーの語) の綴りがあるか
     void follow_after(size_t i);   // 選び直した文節の後ろを、新しい左の文脈で変換し直す
     void transform(Key f);
     u16 alpha_source(const u16& reading) const;

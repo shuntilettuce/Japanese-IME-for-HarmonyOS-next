@@ -51,6 +51,9 @@ private:
     uint64_t version_ = 0;
 };
 
+// 英字の語の綴り (英字・数字を小文字に、間の空白は除く)。英字・数字・空白以外を含めば空
+u16 latin_key(const u16& w);
+
 class UserDict {
 public:
     struct Entry { u16 reading, word; std::string pos = "noun", group; };
@@ -74,6 +77,8 @@ public:
     // 書き出し (MS-IME の「一覧の出力」と同じ形: 読み<TAB>語句<TAB>品詞)
     u16 export_text() const;
     std::vector<Form> engine_forms() const;
+    // 英字の語 (表記が英字・数字・間の空白だけ): (小文字・空白なしの綴り, 表記)
+    std::vector<std::pair<u16, u16>> latin_words() const;
     // 変わるたびに増える
     uint32_t version() const { return version_; }
 

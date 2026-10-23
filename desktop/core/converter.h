@@ -62,6 +62,7 @@ public:
     // 提案を候補に混ぜず Conversion::sugg に分けて出すか (設定「提案を分けて表示する」)
     void set_suggest(bool on);
     void set_latin(bool on);   // 英字の打ち分け (既定オン)
+    u16 latin_word(const u16& key) const;   // 綴り (小文字) の辞書の英字の語の表記 (無ければ空)
     // 予測: 読みが prefix で始まる辞書の語
     std::vector<u16> complete(const u16& prefix, int max, int max_extra = 6);
     // ユーザー辞書の語を網に入れ直す (前の分は消す)

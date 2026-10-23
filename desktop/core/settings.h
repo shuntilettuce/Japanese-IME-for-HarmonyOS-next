@@ -63,6 +63,7 @@ struct Settings {
     bool live = true;                // 打っている間も候補を出す
     bool live_commit = true;         // リアルタイム確定
     bool live_display = false;       // ライブ変換: 入力中の文字を、空白を押す前から変換して見せる
+    bool caps_alpha = true;          // 大文字で打ち始めたら英字のまま (ComposerOptions::caps_alpha)
     bool latin_auto = true;          // 英字の打ち分け (ローマ字で打った英単語を文脈で英字にする)。暴発が嫌ならオフ
     bool space_literal = false;      // 空白キーで変換しない (空白も読みに入れて変換を続ける。ComposerOptions::space_literal)
     bool cand_tree = false;          // 新デザインの候補バー (候補の木: 文節の札・強さの色・別の区切り)。既定はオフ

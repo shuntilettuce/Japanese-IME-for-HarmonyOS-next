@@ -348,6 +348,26 @@ std::pair<int, std::vector<std::string>> UserDict::import_text(const u16& text) 
     return {ok, bad};
 }
 
+// 英字の語の綴り: 英字・数字だけ (間の空白は除く) を小文字にしたもの。英字・数字・空白以外を含めば空
+u16 latin_key(const u16& w) {
+    u16 k;
+    for (char16_t c : w) {
+        if ((c >= u'a' && c <= u'z') || (c >= u'0' && c <= u'9')) k += c;
+        else if (c >= u'A' && c <= u'Z') k += char16_t(c + 32);
+        else if (c != u' ') return u16();
+    }
+    return k;
+}
+
+std::vector<std::pair<u16, u16>> UserDict::latin_words() const {
+    std::vector<std::pair<u16, u16>> out;
+    for (auto& e : entries_) {
+        u16 k = latin_key(e.word);
+        if (k.size() >= 2) out.push_back({k, e.word});
+    }
+    return out;
+}
+
 std::string UserDict::add(const u16& reading0, const u16& word0, const std::string& pos, const std::string& group) {
     refresh();
     auto trim = [](u16 s) {
@@ -357,6 +377,14 @@ std::string UserDict::add(const u16& reading0, const u16& word0, const std::stri
         return s.substr(i);
     };
     u16 r = to_hiragana(trim(reading0)), w = trim(word0);
+    // 英字の語 (ShuntiLettuce・shuntIME): 読みを空にすると、打ったままの綴り (小文字・空白なし) を読みにする。
+    // ローマ字で英字のまま打つと出る (エンジンの英字の辺・打ち切った綴りが同じなら候補の 2 番目。2026-10-23)
+    std::string p = pos;
+    if (p == "latin" || (r.empty() && latin_key(w).size() >= 2)) {
+        if (latin_key(w).size() < 2) return "英字の語は、英字・数字 (と語の間の空白) で 2 字以上入れてください (例: ShuntiLettuce)";
+        r = latin_key(w);
+        p = "latin";
+    }
     if (r.empty() || w.empty()) return "読みと単語を入れてください";
     // 読みには、ひらがなのほか英数字・記号も使える (＠ほーむ・ｗｗ・１ばん)。漢字は不可 (打てない)
     for (char16_t c : r) {
@@ -373,7 +401,7 @@ std::string UserDict::add(const u16& reading0, const u16& word0, const std::stri
         if (!ends_with(r, u"い") || !ends_with(w, u"い")) return "形容詞は「い」で終わる形で入れてください (例: えもい / エモい)";
     }
     for (auto& e : entries_) if (e.reading == r && e.word == w) return "もう登録してあります";
-    entries_.push_back({r, w, pos, pos == "verb" ? group : ""});
+    entries_.push_back({r, w, p, p == "verb" ? group : ""});
     save();
     return "";
 }

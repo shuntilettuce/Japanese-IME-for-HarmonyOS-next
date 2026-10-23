@@ -8,6 +8,7 @@
 #include "tables.h"
 
 namespace shunti {
+static bool camel(const u16& w);   // 2 字目以降に大文字があり小文字も混ざる英字の語 (下で)
 
 // 変換で受け取る候補の数。10 では短い読み (き・かん) の単漢字が足りない (期・季・記が 11 位より後ろにある)
 constexpr int kCandidates = 30;
@@ -249,6 +250,11 @@ void Composer::type_char(char16_t c, bool raw) {
         return;
     }
     char16_t prev = caret_ > 0 ? kana_[caret_ - 1] : 0;
+    if (is_upper(c) && !options.caps_alpha) {   // 大文字はその字だけ英字のまま入れ、続く小文字はローマ字に戻る (IMEwo → IMEを)
+        flush_romaji();
+        insert(u16(1, c));
+        return;
+    }
     if (is_upper(c)) {                                     // 大文字: ここから英字のまま
         flush_romaji();
         alpha_run_ = true;
@@ -398,7 +404,12 @@ bool Composer::press_input(const KeyEvent& ev) {
             return true;
         case Key::Backspace:
             if (romaji_.pending().empty() && caret_ == 0) unfreeze_last();   // 固定した所を消す: 最後の文節を読みに戻す
-            if (!romaji_.pending().empty()) {
+            // 最後に打った鍵を取り消す: 打った鍵 (raw_) から 1 鍵抜いて、ローマ字を打ち直した形にする。鍵の列を使い続けられる
+            // (英字の打ち分け・ローマ字の打ち間違いの直し)。以前は消すと鍵の列を捨てていて、それ以降英字が出なくなった。
+            // minecraftt → minecraftっt の t を消すと minecraft に戻る (っ も t の分なので消える)。2026-10-23
+            if (caret_ == kana_.size() && undo_last_key()) {
+                // 打ち直しで戻せた
+            } else if (!romaji_.pending().empty()) {
                 romaji_.backspace();
                 if (raw_valid_ && !raw_.empty()) raw_.pop_back();
             } else if (caret_ > 0) {
@@ -864,6 +875,22 @@ void Composer::update_live() {
         sugg_set_.push_back(s);
     }
     add_datetime(kana_, cands);   // 日付・時刻の候補は最後の方に (きょう→今日 は 1 位のまま)
+    // ユーザー辞書の英字の語: 打った鍵 (小文字・空白なし) が綴りと同じなら 2 番目に (sakura → さくら・Sakura。2026-10-23)。
+    // 綴りが全部かなに読めると (sakura・shuntilettuce) 英字の辺ができないので、ここで出す
+    if (dict_ && raw_valid_ && !raw_.empty() && frozen_.empty()) {
+        const u16 k = latin_key(raw_);
+        u16 hit;
+        if (k.size() >= 2)
+            for (auto& [key, word] : dict_->latin_words())
+                if (key == k) { hit = word; break; }
+        // 辞書の英字の語も、2 字目以降に大文字があり小文字も混ざる書き方 (OpenAI・YouTube・iPhone) なら同じく 2 番目に。
+        // 全部小文字 (same)・頭だけ大文字 (Radon)・全部大文字 (ZETTON・AKASHI) は日本語の読みとぶつかって誤爆した (camel)
+        if (hit.empty() && k.size() >= 2 && conv_) {
+            u16 w = conv_->latin_word(k);
+            if (camel(w)) hit = w;
+        }
+        if (!hit.empty() && !contains(cands, hit)) cands.insert(cands.begin() + long(std::min<size_t>(1, cands.size())), hit);
+    }
     live_cands_ = std::move(cands);
 }
 
@@ -965,16 +992,89 @@ u16 Composer::conv_ctx() const { return tail(ctx_ + frozen_surface(), CTX_MAX); 
 // 打った鍵の列 (raw_) を、学習 (kkcnative2 の kkn_type_keys) と同じ手順でローマ字に通し直して、読みの字ごとに「何打目までで
 // 決まったか」を作り、変換に渡す。読み (固定した前の方を除いた残り) がその終わりと一致するときだけ。
 // エンジンはこれで英字の語 (github) と、読みに英字が残ったローマ字の打ち間違い (arigstou → ありgsとう → ありがとう) を出す
+// 2 字目以降に大文字があり、小文字も混ざる英字の語 (OpenAI・YouTube・iPhone・ChatGPT)。全部大文字 (ZETTON・AKASHI)・
+// 頭だけ大文字 (Radon) は、日本語の読み (ぜっとん・あかし・らどん) とぶつかって英字の誤爆になった (2026-10-23 測定)
+static bool camel(const u16& w) {
+    bool up = false, low = false;
+    for (size_t i = 0; i < w.size(); i++) {
+        if (w[i] >= u'A' && w[i] <= u'Z') { if (i > 0) up = true; }
+        else if (w[i] >= u'a' && w[i] <= u'z') low = true;
+    }
+    return up && low;
+}
+
+// 打った鍵の中に、大文字の混ざる辞書の英字の語か、ユーザー辞書の英字の語の綴り (4 字以上) があるか
+bool Composer::has_latin_word(const u16& raw) const {
+    u16 low;
+    for (char16_t c : raw) low += c >= u'A' && c <= u'Z' ? char16_t(c + 32) : c;
+    std::vector<std::pair<u16, u16>> user = dict_ ? dict_->latin_words() : std::vector<std::pair<u16, u16>>();
+    for (size_t i = 0; i < low.size(); i++)
+        for (size_t n = 4; i + n <= low.size() && n <= 24; n++) {
+            const u16 k = low.substr(i, n);
+            if (std::any_of(k.begin(), k.end(), [](char16_t c) { return !((c >= u'a' && c <= u'z') || (c >= u'0' && c <= u'9')); })) break;
+            for (auto& u : user) if (u.first == k) return true;
+            if (camel(conv_ ? conv_->latin_word(k) : u16())) return true;
+        }
+    return false;
+}
+
 void Composer::prime_keys(const u16& reading) {
     if (!conv_ || !raw_valid_ || raw_.empty() || reading.empty()) return;
     // 読みに英字が残っているときだけ (学習も英字まじりの例と、ローマ字の打ち間違いの例でだけ鍵の列を見せている。
     // かなだけの読みに渡すと、neko -> neko のように打ったままの英字を選んでしまった)
-    if (std::none_of(reading.begin(), reading.end(), [](char16_t ch) { return ch < 0x80 && ((ch | 0x20) >= u'a' && (ch | 0x20) <= u'z'); }))
+    // 読みが全部かなでも、打った鍵の中に、大文字の混ざる辞書の英字の語・ユーザー辞書の英字の語の綴りがあれば渡す
+    // (openai の → おぺないの でも OpenAI の辺を網に入れる。2026-10-23)
+    if (std::none_of(reading.begin(), reading.end(), [](char16_t ch) { return ch < 0x80 && ((ch | 0x20) >= u'a' && (ch | 0x20) <= u'z'); }) &&
+        !has_latin_word(raw_))
         return;
-    Romaji rom = romaji_;
-    rom.reset();
     u16 sim;
     std::vector<int32_t> span;
+    simulate_raw(sim, span);
+    if (sim.size() < reading.size() || sim.compare(sim.size() - reading.size(), reading.size(), reading) != 0) return;
+    const size_t off = sim.size() - reading.size();
+    const int ks = off == 0 ? 0 : span[off - 1];
+    std::vector<int32_t> sp(span.begin() + long(off), span.end());
+    for (auto& x : sp) x -= ks;
+    conv_->set_keys(raw_.substr(size_t(ks)), sp, reading.size());
+}
+
+// 打った鍵を最後の 1 つ抜いて打ち直す (Backspace)。打ち直した読み (と打ちかけのローマ字) が今の形と合うとき (= 鍵がそのまま
+// 読みになっている) だけ。合わなければ false (呼ぶ側が 1 字消す)
+bool Composer::undo_last_key() {
+    if (!raw_valid_ || raw_.empty()) return false;
+    auto replay = [&](const u16& keys, u16& kana, Romaji& rom) {
+        rom.reset();
+        for (char16_t key : keys) {
+            const char16_t lk = key >= u'A' && key <= u'Z' ? char16_t(key + 32) : key;
+            if ((lk >= u'a' && lk <= u'z') || lk == u'-' || lk == u'\'') {
+                if (key != lk) { kana += rom.flush(); kana += key; continue; }   // 大文字は英字のまま (caps_alpha の続きは合わないので下で弾く)
+                kana += rom.process(lk).committed;
+            } else {
+                kana += rom.flush();
+                kana += key;
+            }
+        }
+    };
+    const u16 fr = frozen_reading();
+    u16 all;
+    Romaji rom = romaji_;
+    replay(raw_, all, rom);
+    if (all != fr + kana_ || rom.pending() != romaji_.pending()) return false;
+    u16 shorter;
+    Romaji rom2 = romaji_;
+    replay(raw_.substr(0, raw_.size() - 1), shorter, rom2);
+    if (shorter.size() < fr.size() || shorter.compare(0, fr.size(), fr) != 0) return false;
+    raw_.pop_back();
+    kana_ = shorter.substr(fr.size());
+    caret_ = kana_.size();
+    romaji_ = rom2;
+    return true;
+}
+
+// 打った鍵 (raw_) を PC 版の Romaji に通し直した読みと、読みの字ごとの「その字までの鍵の数」
+void Composer::simulate_raw(u16& sim, std::vector<int32_t>& span) const {
+    Romaji rom = romaji_;
+    rom.reset();
     int k = 0;
     auto emit = [&](const u16& out, int end) { for (char16_t ch : out) { sim.push_back(ch); span.push_back(end); } };
     for (char16_t key : raw_) {
@@ -991,12 +1091,6 @@ void Composer::prime_keys(const u16& reading) {
         emit(r.committed, rom.pending().empty() ? k : k - 1);
     }
     emit(rom.flush(), k);
-    if (sim.size() < reading.size() || sim.compare(sim.size() - reading.size(), reading.size(), reading) != 0) return;
-    const size_t off = sim.size() - reading.size();
-    const int ks = off == 0 ? 0 : span[off - 1];
-    std::vector<int32_t> sp(span.begin() + long(off), span.end());
-    for (auto& x : sp) x -= ks;
-    conv_->set_keys(raw_.substr(size_t(ks)), sp, reading.size());
 }
 
 // 固定した最後の文節を読みに戻して、入力中の頭につなぐ (固定した所を Backspace・← で直すとき)。戻したら true
@@ -1513,7 +1607,28 @@ void Composer::rebuild_view() {
         if (live_shown()) {   // ライブ変換: 変換した文 + 打ちかけのローマ字
             v.text = fz + (options.space_literal ? settle_spaces(live_top_) : live_top_) + p;
             v.caret = int(v.text.size());
-            if (!live_top_.empty()) v.spans.push_back({f, int(live_top_.size()), SpanKind::Converted});
+            if (!live_top_.empty()) {
+                // 打ち間違いを直して 1 位にしたときは、直した所 (打ったままの変換 = 次の候補と違う所) を別の印で見せる
+                // (ユーザー 2026-10-23「一瞬 打ち間違えた? と思う。一発で直ってるときはわかるように」)
+                const int n = int(live_top_.size());
+                int a = 0, b = n;
+                if (!typo_top_.empty() && live_top_ == typo_top_) {
+                    u16 lit;
+                    for (auto& x : live_cands_) if (x != typo_top_) { lit = x; break; }
+                    if (!lit.empty()) {
+                        while (a < n && size_t(a) < lit.size() && live_top_[size_t(a)] == lit[size_t(a)]) a++;
+                        int q = 0;
+                        while (q < n - a && size_t(q) < lit.size() - size_t(a) && live_top_[size_t(n - 1 - q)] == lit[lit.size() - 1 - size_t(q)]) q++;
+                        b = n - q;
+                        if (a >= b) { a = 0; b = n; }
+                    }
+                    if (a > 0) v.spans.push_back({f, a, SpanKind::Converted});
+                    v.spans.push_back({f + a, b - a, SpanKind::Corrected});
+                    if (b < n) v.spans.push_back({f + b, n - b, SpanKind::Converted});
+                } else {
+                    v.spans.push_back({f, n, SpanKind::Converted});
+                }
+            }
             if (!p.empty()) v.spans.push_back({f + int(live_top_.size()), int(p.size()), SpanKind::Input});
         } else {
             u16 in = kana_.substr(0, caret_) + p + kana_.substr(caret_);

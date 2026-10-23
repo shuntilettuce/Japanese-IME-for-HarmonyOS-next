@@ -292,6 +292,13 @@ void Converter::set_keys(const u16& keys, const std::vector<int32_t>& span_end, 
 
 bool Converter::has_right_ctx() const { return e_ && kkc_has_right_ctx(e_) != 0; }
 
+u16 Converter::latin_word(const u16& key) const {
+    if (!e_ || key.empty()) return u16();
+    uint16_t buf[128];
+    const int n = kkc_latin_word(e_, p16(key), int(key.size()), buf, 128);
+    return n > 0 ? u16(reinterpret_cast<const char16_t*>(buf), size_t(n)) : u16();
+}
+
 void Converter::set_latin(bool on) {
     latin_ = on;
     if (e_) kkc_set_latin(e_, on ? 1 : 0);
