@@ -1340,12 +1340,39 @@ void kanji_continuation_edges(const Lex& L, const ustr& ctx, const ustr& r, std:
 // 小文字にして英単語の一覧 (Lex::latin_words) を引く。当たれば正しい大文字小文字の表記の辺を足す。かなにするか
 // 英字のままにするかは採点器 (モデル) が文脈で決める (K_TYPO と同じ考え方)。コストに LATIN_BIAS を上乗せして日本語寄りにする
 // user_latin: ユーザー辞書の英字の語 (小文字・空白なしの綴り -> 語。ShuntiLettuce)。空白を挟んで打った区間 (shunti lettuce) も当てる
+// ローマ字としてありえない鍵の並びがあるか (大文字、または js・ml・ck のような子音の続き)。かなだけに読める区間でも、こういう並びなら
+// 英字を打ったとみなして打ったままの辺を作る (json・yaml・AzuYahi が網に入らなかった。2026-10-24)。普通のローマ字には出ないので網は重くならない
+bool unromaji(const uint16_t* k, int n) {
+    auto cons = [](uint16_t c) { return c >= u'a' && c <= u'z' && c != u'a' && c != u'i' && c != u'u' && c != u'e' && c != u'o'; };
+    for (int i = 0; i < n; i++) {
+        if (k[i] >= u'A' && k[i] <= u'Z') return true;
+        if (i + 1 < n && cons(k[i]) && cons(k[i + 1])) {
+            const uint16_t a = k[i], b = k[i + 1];
+            if (a == b || a == u'n' || b == u'y' || (b == u'h' && (a == u's' || a == u'c' || a == u'd' || a == u't' || a == u'w')) ||
+                (a == u't' && b == u's') || (b == u'w' && (a == u'k' || a == u'g')) || (a == u'x' || a == u'l'))
+                continue;   // ローマ字にある並び (っ・ん・きゃ・しゃ・つ・くゎ・小さい字)
+            return true;
+        }
+    }
+    return false;
+}
+
+// left_latin・right_latin: 読みの前 (確定した左の文脈の終わり)・後ろ (後ろの文脈の頭) が英字か空白 = 英語の文の続き
 void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vector<int32_t>& span_end, int n,
-                 const ustr& r, const std::unordered_map<std::string, LatinWord>& user_latin, std::vector<Edge>& out) {
+                 const ustr& r, const std::unordered_map<std::string, LatinWord>& user_latin, std::vector<Edge>& out,
+                 bool left_latin = false, bool right_latin = false) {
     const int nkeys = int(keys.size());
     // かなの区間 [s, e) に、鍵の区間 [ks, ke) が英字だけの英単語に当たる辺を足す
     auto add = [&](int ks, int ke, int s, int e) {
-        if (ke - ks < 2) return;   // 2 字以上だけ
+        if (ke - ks < 2) {   // 1 字の語は英語の文の中の i・a だけ (前後が空白か英語の文脈。学習の網と同じ)
+            if (ke - ks != 1) return;
+            const uint16_t c = keys[size_t(ks)];
+            const bool sp = (s > 0 ? r[size_t(s - 1)] == U' ' : left_latin) || (e < n ? r[size_t(e)] == U' ' : right_latin);
+            // 大文字 1 字は Shift で打った = その字のつもり (リカルド・A・、東京D)
+            if ((sp && (c == u'i' || c == u'a' || c == u'I' || c == u'A')) || (c >= u'A' && c <= u'Z'))
+                out.push_back({s, e, ustr(1, char32_t(c)), L.noun, L.noun, LATIN_RAW_COST, K_LATIN});
+            return;
+        }
         std::string lower;
         lower.reserve(size_t(ke - ks));
         bool spaced = false;
@@ -1366,7 +1393,11 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
         // 読みが全部かなの区間 (おぺない) には、2 字目以降に大文字があり小文字も混ざる語 (OpenAI・YouTube) だけ。
         // 全部大文字 (ZETTON・AKASHI)・頭だけ大文字 (Radon)・小文字 (same) は日本語の読みとぶつかって誤爆した (2026-10-23)
         // ただし空白・英字と隣り合う区間 (空白で区切って打った英語の文: hello my name) は英語の続きなので、辞書の英字の語を全部使う
-        const auto latin_side = [&](int i) { return i >= 0 && i < n && (r[size_t(i)] == U' ' || (r[size_t(i)] < 0x80 && std::isalpha(int(r[size_t(i)])))); };
+        const auto latin_side = [&](int i) {
+            if (i < 0) return left_latin;    // 読みの頭: 左の文脈が英語なら英語の文の続き (英語の文を区切って打ったとき)
+            if (i >= n) return right_latin;
+            return r[size_t(i)] == U' ' || (r[size_t(i)] < 0x80 && std::isalpha(int(r[size_t(i)])));
+        };
         const bool english = latin_side(s - 1) || latin_side(e);
         const bool kana_span = std::all_of(r.begin() + s, r.begin() + e, is_kana) && !english;
         auto camel = [](const ustr& w) {
@@ -1378,7 +1409,12 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
             return up && low;
         };
         auto it = L.latin_words.find(lower);
-        if (it != L.latin_words.end() && kana_span && !camel(it->second.surf)) return;
+        // Shift で大文字を打った区間は、打った書き方のつもり (辞書の書き方で止めず、打ったままの辺に回す。（Luke）
+        const bool upper = std::any_of(keys.begin() + ks, keys.begin() + ke, [](uint16_t c) { return c >= u'A' && c <= u'Z'; });
+        if (it != L.latin_words.end() && kana_span && !camel(it->second.surf)) {
+            if (!upper) return;
+            it = L.latin_words.end();
+        }
         if (it != L.latin_words.end()) {
             ustr surf = it->second.surf;
             // 英語の文の中 (空白・英字と隣り合う) では、大文字小文字は打った通り (the・you・it。辞書の The・YOU・IT にしない)。
@@ -1390,7 +1426,7 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
                 uint32_t a0, b0;
                 return L.find(reinterpret_cast<const uint16_t*>(k16.data()), int(k16.size()), a0, b0);
             };
-            if (english && (!camel(surf) || common())) {
+            if (upper || (english && (!camel(surf) || common()))) {   // Shift で大文字を打ったら打った書き方
                 surf.clear();
                 for (int i = ks; i < ke; i++) surf.push_back(char32_t(keys[size_t(i)]));
             }
@@ -1402,7 +1438,7 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
         // 大文字にしたい人は Shift で打つ
         // かなだけの区間には作らない (M5 で鍵の列を常に渡すと、あらゆる区間に打ったままの辺ができて網が数倍に重くなった。2026-10-23)。
         // 読みに英字が残った所 (辞書に無い英字を打った: minecraft) にだけ
-        if (std::all_of(r.begin() + s, r.begin() + e, is_kana)) return;
+        if (std::all_of(r.begin() + s, r.begin() + e, is_kana) && !unromaji(keys.data() + ks, ke - ks)) return;
         ustr typed;
         for (int i = ks; i < ke; i++) typed.push_back(char32_t(keys[size_t(i)]));
         out.push_back({s, e, typed, L.noun, L.noun, LATIN_RAW_COST + LATIN_BIAS, K_LATIN});
@@ -2850,7 +2886,9 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
     kanji_continuation_edges(e->lex, from16(ctx, size_t(nctx)), r, E);   // 確定済みの漢字の語の続き (直滑 + こう)
     if (!keys.empty()) {
         std::vector<Edge> lat;
-        if (e->latin) latin_edges(e->lex, keys, span_end, n, r, e->user_latin, lat);
+        auto latin_ch = [](uint16_t c) { return c == u' ' || (c < 0x80 && std::isalpha(int(c))); };
+        const bool left_latin = nctx > 0 && latin_ch(ctx[nctx - 1]), right_latin = !rctx.empty() && latin_ch(rctx[0]);
+        if (e->latin) latin_edges(e->lex, keys, span_end, n, r, e->user_latin, lat, left_latin, right_latin);
         // 読みに英字が残った所 (ローマ字の打ち間違い: arigstou -> ありgsとう) は、鍵の列から 1 打戻した読みで打ち間違いの辺を作る。
         // かなだけの区間の打ち間違いは edges() が読みから作っている
         if (e->lex.typo) {
