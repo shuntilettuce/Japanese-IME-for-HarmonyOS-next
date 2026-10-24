@@ -21,6 +21,14 @@ bool read_file(const fs::path& p, std::string& out) {
     return true;
 }
 
+// 読めなかった (壊れた) ファイルを、上書きで消さないように別名で残す (learned.json.broken-<秒>)。
+// 以前は空のまま動き、次の保存で中身を全部消していた (2026-10-24 の監査)
+void keep_broken(const fs::path& p) {
+    std::error_code ec;
+    const auto t = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    fs::rename(p, fs::path(p.wstring() + L".broken-" + std::to_wstring(t)), ec);
+}
+
 bool write_file_atomic(const fs::path& p, const std::string& data) {
     std::error_code ec;
     fs::create_directories(p.parent_path(), ec);
@@ -58,7 +66,7 @@ void Learning::refresh() {
     std::string s;
     if (!exists || !read_file(file_, s)) return;
     json::Value v;
-    if (!json::Parser(s).parse(v) || v.type != json::Value::Object) return;
+    if (!json::Parser(s).parse(v) || v.type != json::Value::Object) { keep_broken(file_); return; }
     for (auto& r : v.obj) {
         if (r.second.type != json::Value::Object) continue;
         Entry e{from_utf8(r.first), {}};
@@ -136,10 +144,18 @@ void Learning::record(const u16& reading, const u16& surface) {
     for (auto& c : e->counts) {
         if (c.first == surface) { c.second = c.second < 0 ? 1 : c.second + 1; save(); return; }   // 消した表記を自分で選んだら戻す
     }
-    if (e->counts.size() < MAX_SURFACES) {
-        e->counts.push_back({surface, 1});
-        save();
+    // 表記は 5 つまで。数えるのは選んだ表記だけ (消した表記 = 回数 -1 は枠を食わない。2026-10-24 の監査)。
+    // 埋まっていたら、いちばん少なく選んだ表記と入れ替える (以前は 6 つ目を黙って覚えなかった)
+    size_t n = 0;
+    for (auto& c : e->counts) n += c.second > 0;
+    if (n >= MAX_SURFACES) {
+        auto weakest = e->counts.end();
+        for (auto it = e->counts.begin(); it != e->counts.end(); ++it)
+            if (it->second > 0 && (weakest == e->counts.end() || it->second < weakest->second)) weakest = it;
+        if (weakest != e->counts.end()) e->counts.erase(weakest);
     }
+    e->counts.push_back({surface, 1});
+    save();
 }
 
 void Learning::hide(const u16& reading, const u16& surface) {
@@ -224,7 +240,7 @@ std::vector<u16> Learning::completions(const u16& prefix, size_t max) {
     std::vector<std::pair<u16, int>> all;
     for (auto& e : entries_)
         if (e.reading.size() > prefix.size() && e.reading.compare(0, prefix.size(), prefix) == 0)
-            for (auto& c : e.counts) if (c.second > 0) all.push_back(c);
+            for (auto& c : e.counts) if (c.second >= 2) all.push_back(c);   // 2 回以上だけ (1 回きりの長い文が続きに出ないように。スマホ版と同じ)
     std::stable_sort(all.begin(), all.end(), [](auto& a, auto& b) { return a.second > b.second; });
     for (auto& c : all) {
         if (out.size() >= max) break;
@@ -293,7 +309,7 @@ bool UserDict::refresh() {
     std::string s;
     if (!exists || !read_file(file_, s)) return true;
     json::Value v;
-    if (!json::Parser(s).parse(v) || v.type != json::Value::Array) return true;
+    if (!json::Parser(s).parse(v) || v.type != json::Value::Array) { keep_broken(file_); return true; }
     for (auto& o : v.arr) {
         if (o.type != json::Value::Object) continue;
         Entry e{from_utf8(o.get_str("r")), from_utf8(o.get_str("w")), o.get_str("p", "noun"), o.get_str("g")};

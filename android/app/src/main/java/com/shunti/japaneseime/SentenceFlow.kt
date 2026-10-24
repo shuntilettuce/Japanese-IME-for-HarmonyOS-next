@@ -25,7 +25,7 @@ object SentenceFlow {
         if (file != null) return
         val f = File(context.filesDir, "flow.json")
         file = f
-        runCatching {
+        if (f.exists()) runCatching {
             val o = JSONObject(f.readText())
             for (k in o.keys()) {
                 val m = HashMap<String, Int>()
@@ -33,20 +33,15 @@ object SentenceFlow {
                 for (x in v.keys()) m[x] = v.getInt(x)
                 table[k] = m
             }
-        }
+        }.onFailure { table.clear(); keepBroken(f) }
     }
 
     fun save() {
         if (!dirty) return
-        dirty = false
         val f = file ?: return
         val o = JSONObject()
         for ((k, m) in table) o.put(k, JSONObject().apply { for ((x, n) in m) put(x, n) })
-        runCatching {
-            val tmp = File(f.path + ".tmp")
-            tmp.writeText(o.toString())
-            tmp.renameTo(f)
-        }
+        dirty = !writeAtomic(f, o.toString())   // 書けなければ次の機会にもう一度
     }
 
     fun clear() {

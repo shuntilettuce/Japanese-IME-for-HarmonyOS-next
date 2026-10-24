@@ -344,6 +344,26 @@ int main(int argc, char** argv) {
         if (kept && day) printf("ok   learning keeps 1200 readings and the last day\n");
         else { printf("FAIL learning: kept %d day %d\n", int(kept), int(day)); failures++; }
         big.clear();
+        // 消した表記は学習の枠を食わない・6 つ目の表記はいちばん少ないものと入れ替える
+        for (int i = 0; i < 4; i++) big.hide(u"かい", u"消" + from_utf8(std::to_string(i)));
+        for (int i = 0; i < 6; i++) big.record(u"かい", u"表" + from_utf8(std::to_string(i)));
+        big.record(u"かい", u"表5");
+        if (big.top(u"かい") == u"表5") printf("ok   learning: hidden words do not take slots, 6th word replaces\n");
+        else { printf("FAIL learning slots: top [%s]\n", u8(big.top(u"かい")).c_str()); failures++; }
+        big.clear();
+        // 壊れたファイルは別名で残す (空で上書きしない)
+        {
+            std::ofstream(work / "learned_broken.json") << "{ broken";
+            Learning br(work / "learned_broken.json");
+            br.record(u"てすと", u"テスト");
+            bool kept = false;
+            for (auto& f : std::filesystem::directory_iterator(work))
+                kept |= f.path().filename().string().rfind("learned_broken.json.broken-", 0) == 0;
+            if (kept) printf("ok   learning: broken file kept aside\n");
+            else { printf("FAIL learning: broken file not kept\n"); failures++; }
+            for (auto& f : std::filesystem::directory_iterator(work))
+                if (f.path().filename().string().rfind("learned_broken.json", 0) == 0) std::filesystem::remove(f.path());
+        }
     }
     Learning learning(work / "learned.json");
     UserDict dict(work / "userdict.json");

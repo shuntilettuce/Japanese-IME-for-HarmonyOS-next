@@ -3,6 +3,18 @@ package com.shunti.japaneseime
 import org.json.JSONObject
 import java.io.File
 
+/** 読めなかった (壊れた) ファイルを、上書きで消さないように別名で残す (learned.json.broken-<秒>。2026-10-24 の監査) */
+internal fun keepBroken(file: File) {
+    if (file.exists()) runCatching { file.renameTo(File(file.path + ".broken-" + System.currentTimeMillis() / 1000)) }
+}
+
+/** 一時ファイルに書いてから置き換える。うまくいったら true (失敗を黙って「保存済み」にしない) */
+internal fun writeAtomic(file: File, text: String): Boolean = runCatching {
+    val tmp = File(file.path + ".tmp")
+    tmp.writeText(text)
+    tmp.renameTo(file) || run { file.delete(); tmp.renameTo(file) }
+}.getOrDefault(false)
+
 /**
  * 変換の学習 (HarmonyOS 版 KanaKanjiConverter の recordChoice / applyLearnedOrder と同じ決まり)。
  * 読み → {選んだ表記: 回数, "@day": 最後に選んだ日}。読みは 2 万個まで (あふれたら、回数が少なく長く使っていない読みから捨てる。
@@ -16,7 +28,7 @@ class Learning(private val file: File) {
     private var dirty = false
 
     init {
-        runCatching {
+        if (file.exists()) runCatching {
             val o = JSONObject(file.readText())
             for (r in o.keys()) {
                 val e = o.getJSONObject(r)
@@ -24,7 +36,7 @@ class Learning(private val file: File) {
                     for (s in e.keys()) if (s == DAY) days[r] = e.getInt(s) else put(s, e.getInt(s))
                 }
             }
-        }
+        }.onFailure { learned.clear(); days.clear(); keepBroken(file) }
     }
 
     fun recordChoice(kana: String, candidate: String) {
@@ -33,10 +45,10 @@ class Learning(private val file: File) {
             if (learned.size >= MAX_READINGS) evictWeakestLearnedReading()
             LinkedHashMap<String, Int>().also { learned[kana] = it }
         }
-        if (entry.containsKey(candidate) || entry.size < MAX_SURFACES) {
-            entry[candidate] = (entry[candidate] ?: 0) + 1
-            dirty = true
-        }
+        // 表記は 5 つまで。埋まっていたら、いちばん少なく選んだ表記と入れ替える (以前は 6 つ目を黙って覚えなかった)
+        if (!entry.containsKey(candidate) && entry.size >= MAX_SURFACES) entry.minByOrNull { it.value }?.key?.let { entry.remove(it) }
+        entry[candidate] = (entry[candidate] ?: 0) + 1
+        dirty = true
         days[kana] = today()
     }
 
@@ -60,8 +72,13 @@ class Learning(private val file: File) {
     fun applyLearnedOrder(kana: String, cands: List<String>): List<String> {
         val counts = learned[kana]
         if (counts.isNullOrEmpty()) return cands
-        val boosted = cands.filter { (counts[it] ?: 0) > 0 }.sortedByDescending { counts[it] ?: 0 }
-        return capEnglish(kana, boosted + cands.filter { (counts[it] ?: 0) == 0 })
+        // 2 回以上選んだ表記は先頭へ (回数の多い順)。1 回だけのものはモデルの 1 位を覆さず 2 位へ (PC・HarmonyOS と同じ。
+        // 1 回の誤選択がずっと 1 位になり続けた。2026-10-24 の監査で Android だけ古いままだった)
+        val boosted = cands.filter { (counts[it] ?: 0) >= 2 }.sortedByDescending { counts[it] ?: 0 }.toMutableList()
+        val once = cands.filter { counts[it] == 1 }
+        val rest = cands.filter { (counts[it] ?: 0) == 0 }.toMutableList()
+        if (once.isNotEmpty() && boosted.isEmpty() && rest.isNotEmpty()) boosted.add(rest.removeAt(0))
+        return capEnglish(kana, boosted + once + rest)
     }
 
     /** 英カタカナ辞書の英単語 (全部小文字: いんじぇくしょん → injection) は、学習で上がっても 2 位まで (1 位はカタカナのまま) */
@@ -101,14 +118,9 @@ class Learning(private val file: File) {
     /** 変わっていれば保存する (書き込みを減らすため、入力欄を離れたときなどにまとめて) */
     fun save() {
         if (!dirty) return
-        dirty = false
         val o = JSONObject()
         for ((r, e) in learned) o.put(r, JSONObject().apply { for ((s, n) in e) put(s, n); days[r]?.let { put(DAY, it) } })
-        runCatching {
-            val tmp = File(file.path + ".tmp")
-            tmp.writeText(o.toString())
-            tmp.renameTo(file)
-        }
+        dirty = !writeAtomic(file, o.toString())   // 書けなければ次の機会にもう一度
     }
 
     companion object {

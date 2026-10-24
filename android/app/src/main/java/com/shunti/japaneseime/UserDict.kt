@@ -27,13 +27,13 @@ class UserDict private constructor(private val file: File) {
         private set
 
     init {
-        runCatching {
+        if (file.exists()) runCatching {
             val a = JSONArray(file.readText())
             for (i in 0 until a.length()) {
                 val o = a.getJSONObject(i)
                 entries.add(Entry(o.getString("r"), o.getString("w"), o.optString("p", "noun"), o.optString("g", "")))
             }
-        }
+        }.onFailure { entries.clear(); keepBroken(file) }
     }
 
     @Synchronized
@@ -71,11 +71,7 @@ class UserDict private constructor(private val file: File) {
         version++
         val a = JSONArray()
         for (e in entries) a.put(JSONObject().put("r", e.reading).put("w", e.word).put("p", e.pos).put("g", e.group))
-        runCatching {
-            val tmp = File(file.path + ".tmp")
-            tmp.writeText(a.toString())
-            tmp.renameTo(file)
-        }
+        writeAtomic(file, a.toString())
     }
 
     companion object {
