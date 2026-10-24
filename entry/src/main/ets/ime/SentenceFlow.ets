@@ -11,7 +11,7 @@
 
 const BOUNDARY = '。．！？!?、，\n';
 const MAX_CLAUSE = 40;      // これより長い節は覚えない (一度きりの長文)
-const MAX_KEYS = 1500;
+const MAX_KEYS = 10000;   // 以前は 1500 (2026-10-24)
 const MIN_COUNT = 2;
 
 export class SentenceFlow {

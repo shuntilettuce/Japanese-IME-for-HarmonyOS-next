@@ -11,7 +11,7 @@ import java.io.File
 object SentenceFlow {
     private const val BOUNDARY = "。．！？!?、，\n"
     private const val MAX_CLAUSE = 40
-    private const val MAX_KEYS = 1500
+    private const val MAX_KEYS = 10000   // 以前は 1500 (2026-10-24)
     private const val MIN_COUNT = 2
 
     private val table = HashMap<String, HashMap<String, Int>>()   // "P" + 節 -> 句読点、"N" + 節 -> 次の節

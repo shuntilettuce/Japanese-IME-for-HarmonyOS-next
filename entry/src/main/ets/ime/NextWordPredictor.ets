@@ -24,7 +24,7 @@
 // never becomes a junk bigram key.
 
 const MAX_KEY_LEN = 8;
-const MAX_LEARNED_KEYS = 800;
+const MAX_LEARNED_KEYS = 5000;   // 以前は 800 (2026-10-24)
 const MAX_LEARNED_VALS_PER_KEY = 12;
 const MAX_PREDICTIONS = 6;
 

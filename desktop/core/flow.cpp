@@ -19,7 +19,7 @@ static int to_int(const char* p) {
 namespace {
 const u16 BOUNDARY = u"。．！？!?、，\n";
 const size_t MAX_CLAUSE = 40;
-const size_t MAX_KEYS = 1500;
+const size_t MAX_KEYS = 10000;   // 以前は 1500 (2026-10-24)
 const int MIN_COUNT = 2;
 
 u16 trim(const u16& s) {

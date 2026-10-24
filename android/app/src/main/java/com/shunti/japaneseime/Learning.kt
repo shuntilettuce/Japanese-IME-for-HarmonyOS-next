@@ -5,12 +5,14 @@ import java.io.File
 
 /**
  * 変換の学習 (HarmonyOS 版 KanaKanjiConverter の recordChoice / applyLearnedOrder と同じ決まり)。
- * 読み → {選んだ表記: 回数}。読みは 500 個まで (あふれたら、いちばん使われていない読みを捨てる)、
+ * 読み → {選んだ表記: 回数, "@day": 最後に選んだ日}。読みは 2 万個まで (あふれたら、回数が少なく長く使っていない読みから捨てる。
+ * 以前は 500 個で、普段使いだとすぐ押し出されていた。2026-10-24)、
  * 1 つの読みに表記は 5 個まで。候補の列は、選んだ回数の多い表記を前に寄せる。
  * 端末の中のファイル (filesDir/learned.json) にだけ保存する。
  */
 class Learning(private val file: File) {
     private var learned = LinkedHashMap<String, LinkedHashMap<String, Int>>()
+    private val days = HashMap<String, Int>()   // 読み -> 最後に選んだ日 (1970-01-01 からの日数。M5 の「使う人の印」の時期に使う)
     private var dirty = false
 
     init {
@@ -18,7 +20,9 @@ class Learning(private val file: File) {
             val o = JSONObject(file.readText())
             for (r in o.keys()) {
                 val e = o.getJSONObject(r)
-                learned[r] = LinkedHashMap<String, Int>().apply { for (s in e.keys()) put(s, e.getInt(s)) }
+                learned[r] = LinkedHashMap<String, Int>().apply {
+                    for (s in e.keys()) if (s == DAY) days[r] = e.getInt(s) else put(s, e.getInt(s))
+                }
             }
         }
     }
@@ -33,19 +37,23 @@ class Learning(private val file: File) {
             entry[candidate] = (entry[candidate] ?: 0) + 1
             dirty = true
         }
+        days[kana] = today()
     }
 
     /** 候補を消したときなど: その読みでその表記を選んだ記録を消す */
     fun forgetChoice(kana: String, candidate: String) {
         val entry = learned[kana] ?: return
         if (entry.remove(candidate) == null) return
-        if (entry.isEmpty()) learned.remove(kana)
+        if (entry.isEmpty()) { learned.remove(kana); days.remove(kana) }
         dirty = true
     }
 
     private fun evictWeakestLearnedReading() {
-        val weakest = learned.minByOrNull { (_, e) -> e.values.maxOrNull() ?: 0 }?.key ?: return
+        // 回数が少なく長く使っていない読みから (回数 1 は 30 日ぶん。20 回以上は同じ扱い。PC 版と同じ)
+        val t = today()
+        val weakest = learned.minByOrNull { (r, e) -> minOf(e.values.maxOrNull() ?: 0, 20) * 30 - (days[r]?.let { t - it } ?: 365) }?.key ?: return
         learned.remove(weakest)
+        days.remove(weakest)
     }
 
     /** 出来上がった候補の列のうち、選んだことのある表記を回数の多い順に前へ (他の並びはそのまま) */
@@ -86,6 +94,7 @@ class Learning(private val file: File) {
 
     fun clear() {
         learned.clear()
+        days.clear()
         dirty = true
     }
 
@@ -94,7 +103,7 @@ class Learning(private val file: File) {
         if (!dirty) return
         dirty = false
         val o = JSONObject()
-        for ((r, e) in learned) o.put(r, JSONObject().apply { for ((s, n) in e) put(s, n) })
+        for ((r, e) in learned) o.put(r, JSONObject().apply { for ((s, n) in e) put(s, n); days[r]?.let { put(DAY, it) } })
         runCatching {
             val tmp = File(file.path + ".tmp")
             tmp.writeText(o.toString())
@@ -113,7 +122,9 @@ class Learning(private val file: File) {
         fun get(context: android.content.Context): Learning =
             instance ?: Learning(java.io.File(context.filesDir, "learned.json")).also { instance = it }
 
-        private const val MAX_READINGS = 500
+        private const val MAX_READINGS = 20000
+        private const val DAY = "@day"
+        fun today(): Int = (System.currentTimeMillis() / 86_400_000L).toInt()
         private const val MAX_SURFACES = 5
     }
 }

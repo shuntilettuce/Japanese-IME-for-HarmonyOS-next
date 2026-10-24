@@ -1,6 +1,7 @@
 #include "store.h"
 
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <sstream>
 #include <system_error>
@@ -61,10 +62,29 @@ void Learning::refresh() {
     for (auto& r : v.obj) {
         if (r.second.type != json::Value::Object) continue;
         Entry e{from_utf8(r.first), {}};
-        for (auto& c : r.second.obj)
-            if (c.second.type == json::Value::Number) e.counts.push_back({from_utf8(c.first), int(c.second.num)});
+        for (auto& c : r.second.obj) {
+            if (c.second.type != json::Value::Number) continue;
+            if (c.first == "@day") e.day = int(c.second.num);   // 最後に選んだ日 (前の版のファイルには無い)
+            else e.counts.push_back({from_utf8(c.first), int(c.second.num)});
+        }
         if (!e.counts.empty()) entries_.push_back(std::move(e));
     }
+    reindex();
+}
+
+void Learning::reindex() {
+    idx_.clear();
+    for (size_t i = 0; i < entries_.size(); i++) idx_[entries_[i].reading] = i;
+}
+
+int Learning::today() {
+    return int(std::chrono::duration_cast<std::chrono::hours>(std::chrono::system_clock::now().time_since_epoch()).count() / 24);
+}
+
+int Learning::last_day(const u16& reading) {
+    refresh();
+    Entry* e = find(reading);
+    return e ? e->day : 0;
 }
 
 void Learning::save() {
@@ -79,6 +99,7 @@ void Learning::save() {
             if (i) o += ",";
             o += json::quote(to_utf8(e.counts[i].first)) + ":" + std::to_string(e.counts[i].second);
         }
+        if (e.day > 0) o += ",\"@day\":" + std::to_string(e.day);
         o += "}";
     }
     o += "}";
@@ -86,8 +107,8 @@ void Learning::save() {
 }
 
 Learning::Entry* Learning::find(const u16& reading) {
-    for (auto& e : entries_) if (e.reading == reading) return &e;
-    return nullptr;
+    auto it = idx_.find(reading);
+    return it == idx_.end() ? nullptr : &entries_[it->second];
 }
 
 void Learning::record(const u16& reading, const u16& surface) {
@@ -95,16 +116,23 @@ void Learning::record(const u16& reading, const u16& surface) {
     refresh();
     Entry* e = find(reading);
     if (!e) {
-        if (entries_.size() >= MAX_READINGS) {   // いちばん使われていない読みを捨てる
-            auto weakest = std::min_element(entries_.begin(), entries_.end(), [](const Entry& a, const Entry& b) {
-                auto mx = [](const Entry& x) { int m = 0; for (auto& c : x.counts) m = std::max(m, c.second); return m; };
-                return mx(a) < mx(b);
-            });
+        if (entries_.size() >= MAX_READINGS) {
+            // 回数が少なく長く使っていない読みを捨てる (回数 1 は 30 日ぶん。20 回以上は同じ扱い)
+            const int t = today();
+            auto score = [&](const Entry& x) {
+                int m = 0;
+                for (auto& c : x.counts) m = std::max(m, c.second);
+                return std::min(m, 20) * 30 - (x.day > 0 ? t - x.day : 365);
+            };
+            auto weakest = std::min_element(entries_.begin(), entries_.end(), [&](const Entry& a, const Entry& b) { return score(a) < score(b); });
             entries_.erase(weakest);
+            reindex();
         }
         entries_.push_back({reading, {}});
+        idx_[reading] = entries_.size() - 1;
         e = &entries_.back();
     }
+    e->day = today();
     for (auto& c : e->counts) {
         if (c.first == surface) { c.second = c.second < 0 ? 1 : c.second + 1; save(); return; }   // 消した表記を自分で選んだら戻す
     }
@@ -120,6 +148,7 @@ void Learning::hide(const u16& reading, const u16& surface) {
     Entry* e = find(reading);
     if (!e) {
         entries_.push_back({reading, {}});
+        idx_[reading] = entries_.size() - 1;
         e = &entries_.back();
     }
     for (auto& c : e->counts)
@@ -145,7 +174,10 @@ void Learning::forget(const u16& reading, const u16& surface) {
         auto it = std::find_if(cs.begin(), cs.end(), [&](auto& c) { return c.first == surface; });
         if (it == cs.end()) return;
         cs.erase(it);
-        if (cs.empty()) entries_.erase(entries_.begin() + long(i));
+        if (cs.empty()) {
+            entries_.erase(entries_.begin() + long(i));
+            reindex();
+        }
         save();
         return;
     }
@@ -222,6 +254,7 @@ std::vector<Learning::Strong> Learning::strong(int min) {
 
 void Learning::clear() {
     entries_.clear();
+    idx_.clear();
     loaded_ = true;
     save();
 }

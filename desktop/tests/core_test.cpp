@@ -333,6 +333,18 @@ int main(int argc, char** argv) {
     if (!conv.open(lex.data(), lex.size(), model.data(), model.size(), th ? atoi(th) : 1)) { printf("engine open failed\n"); return 2; }
     printf("     engine open %.1f ms (threads %d)\n",
            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_open).count(), th ? atoi(th) : 1);
+    {   // 学習は読み 500 個を超えても消えない (以前は 500 で押し出されていた)・最後に選んだ日を覚えて、読み直しても残る
+        Learning big(work / "learned_big.json");
+        big.clear();
+        for (int k = 0; k < 2; k++)   // top は 2 回以上選んだ表記だけ
+            for (int i = 0; i < 1200; i++) big.record(u"よみ" + from_utf8(std::to_string(i)), u"読" + from_utf8(std::to_string(i)));
+        Learning again(work / "learned_big.json");
+        const bool kept = again.top(u"よみ0") == u"読0" && again.top(u"よみ1199") == u"読1199";
+        const bool day = again.last_day(u"よみ0") == Learning::today();
+        if (kept && day) printf("ok   learning keeps 1200 readings and the last day\n");
+        else { printf("FAIL learning: kept %d day %d\n", int(kept), int(day)); failures++; }
+        big.clear();
+    }
     Learning learning(work / "learned.json");
     UserDict dict(work / "userdict.json");
     Composer c(&conv, &learning, &dict);

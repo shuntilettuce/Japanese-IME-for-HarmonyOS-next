@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <string>
 #include <utility>
+#include <unordered_map>
 #include <vector>
 
 #include "text.h"
@@ -35,14 +36,22 @@ public:
     uint64_t version() { refresh(); return version_; }   // 覚えた中身が変わるたびに増える
     void clear();
 
-    static constexpr size_t MAX_READINGS = 500;
+    // その読みを最後に選んだ日 (1970-01-01 からの日数。分からなければ 0)。M5 の「使う人の印」の時期に使う
+    int last_day(const u16& reading);
+    static int today();
+
+    // 読みは 2 万まで (以前は 500 で、普段使いだとすぐ押し出されて学習が消えていた。2026-10-24 ユーザーの指摘)。
+    // あふれたら、回数が少なく長く使っていない読みから捨てる
+    static constexpr size_t MAX_READINGS = 20000;
     static constexpr size_t MAX_SURFACES = 5;
 
 private:
-    struct Entry { u16 reading; std::vector<std::pair<u16, int>> counts; };
+    struct Entry { u16 reading; std::vector<std::pair<u16, int>> counts; int day = 0; };
     void refresh();
     void save();
+    void reindex();
     Entry* find(const u16& reading);
+    std::unordered_map<u16, size_t> idx_;   // 読み -> entries_ の位置
 
     std::filesystem::path file_;
     std::filesystem::file_time_type stamp_{};

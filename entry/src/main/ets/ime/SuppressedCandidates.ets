@@ -17,7 +17,7 @@
 
 import dataPreferences from '@ohos.data.preferences';
 
-const MAX_READINGS = 500;
+const MAX_READINGS = 5000;   // 以前は 500 (2026-10-24)
 const MAX_PER_READING = 20;
 
 // Shared by both processes: the IME extension writes here as candidates are

@@ -23,9 +23,9 @@ export class KanaKanjiConverter {
   static recordChoice(kana: string, candidate: string): void {
     if (kana.length === 0 || candidate.length === 0 || candidate === kana) { return; }
     if (!KanaKanjiConverter.learned[kana]) {
-      // 500 読みに達したら、いちばん使われていない読みを捨てて新しい読みを入れる
+      // 2 万読みに達したら、いちばん使われていない読みを捨てて新しい読みを入れる (以前は 500 で、すぐ押し出されていた。2026-10-24)
       // (断ると、毎日使っているうちに学習が黙って止まる)
-      if (Object.keys(KanaKanjiConverter.learned).length >= 500) {
+      if (Object.keys(KanaKanjiConverter.learned).length >= 20000) {
         KanaKanjiConverter.evictWeakestLearnedReading();
       }
       KanaKanjiConverter.learned[kana] = {};
