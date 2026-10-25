@@ -9,6 +9,9 @@ import { AiConverter } from './AiConverter';
 export class KanaKanjiConverter {
   // 読み -> (選んだ表記 -> 回数)。KeyboardController が shunti_learning に保存する
   private static learned: Record<string, Record<string, number>> = {};
+  // 読み -> 最後に選んだ日 (1970 年からの日数)。追い出しで古い読みから捨てる (PC 版の @day と同じ。2026-10-25)
+  // learned に混ぜると予測が日付を回数と取り違えるので別の表 (shunti_learning の 'day')
+  private static learnedDay: Record<string, number> = {};
   // 直前に確定した文字列 (最大 15 個)。AI 変換に左の文脈として渡す
   private static contextBuffer: string[] = [];
 
@@ -18,6 +21,27 @@ export class KanaKanjiConverter {
 
   static getLearned(): Record<string, Record<string, number>> {
     return KanaKanjiConverter.learned;
+  }
+
+  static setLearnedDay(data: Record<string, number>): void {
+    KanaKanjiConverter.learnedDay = data;
+  }
+
+  static getLearnedDay(): Record<string, number> {
+    return KanaKanjiConverter.learnedDay;
+  }
+
+  private static dropDay(kana: string): void {
+    if (KanaKanjiConverter.learnedDay[kana] === undefined) { return; }
+    const next: Record<string, number> = {};
+    for (const r of Object.keys(KanaKanjiConverter.learnedDay)) {
+      if (r !== kana) { next[r] = KanaKanjiConverter.learnedDay[r]; }
+    }
+    KanaKanjiConverter.learnedDay = next;
+  }
+
+  private static today(): number {
+    return Math.floor(Date.now() / 86400000);
   }
 
   static recordChoice(kana: string, candidate: string): void {
@@ -34,20 +58,25 @@ export class KanaKanjiConverter {
     if (entry[candidate] !== undefined || Object.keys(entry).length < 5) {
       entry[candidate] = (entry[candidate] ?? 0) + 1;
     }
+    KanaKanjiConverter.learnedDay[kana] = KanaKanjiConverter.today();
   }
 
-  // いちばん選ばれた表記の回数が最も少ない読みを捨てる
+  // 点 (いちばん選ばれた表記の回数 (20 まで) × 30 − 最後に選んでからの日数) が最も低い読みを捨てる。
+  // 日付の無い (前の版の) 読みは今日選んだものとして扱う。PC 版と同じ
   private static evictWeakestLearnedReading(): void {
     const readings = Object.keys(KanaKanjiConverter.learned);
     if (readings.length === 0) { return; }
     let weakest = readings[0];
     let weakestScore = Number.MAX_SAFE_INTEGER;
+    const today = KanaKanjiConverter.today();
     for (const r of readings) {
       const entry = KanaKanjiConverter.learned[r];
       let best = 0;
       for (const c of Object.keys(entry)) { if (entry[c] > best) { best = entry[c]; } }
-      if (best < weakestScore) { weakestScore = best; weakest = r; }
+      const score = Math.min(best, 20) * 30 - (today - (KanaKanjiConverter.learnedDay[r] ?? today));
+      if (score < weakestScore) { weakestScore = score; weakest = r; }
     }
+    KanaKanjiConverter.dropDay(weakest);
     const remaining: Record<string, Record<string, number>> = {};
     for (const r of readings) {
       if (r !== weakest) { remaining[r] = KanaKanjiConverter.learned[r]; }
@@ -72,6 +101,7 @@ export class KanaKanjiConverter {
       if (r !== kana) { remaining[r] = KanaKanjiConverter.learned[r]; }
     }
     KanaKanjiConverter.learned = remaining;
+    KanaKanjiConverter.dropDay(kana);
   }
 
   // 文の確定を語ごとに学習する (文全体の読みはほぼ二度と同じものが来ないので、語に分けないと次に効かない)。

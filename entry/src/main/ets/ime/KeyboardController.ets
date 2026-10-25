@@ -420,6 +420,7 @@ export class InputHandler {
   private suppressedPrefs: dataPreferences.Preferences | undefined = undefined;
   // 前回の書き込み以降に中身が変わったか。変化が無いのに閉じるたび4本
   // 書きに行かないため (flushPendingSaves のコメント参照)。
+  private flowDirty: boolean = false;
   private learningDirty: boolean = false;
   private nextWordDirty: boolean = false;
   private unknownWordDirty: boolean = false;
@@ -470,7 +471,12 @@ export class InputHandler {
         try {
           const data = JSON.parse(String(val)) as Record<string, Record<string, number>>;
           KanaKanjiConverter.setLearned(data);
-        } catch (_e) {}
+        } catch (_e) {
+          InputHandler.keepBroken(this.learningPrefs, val);
+        }
+        this.learningPrefs?.get('day', '{}').then((v: dataPreferences.ValueType) => {
+          try { KanaKanjiConverter.setLearnedDay(JSON.parse(String(v)) as Record<string, number>); } catch (_e) {}
+        });
       })
       .catch((e: Error) => { InputLog.recordInit('shunti_learning', e); });
     // 文の流れの予測 (SentenceFlow) の覚えた流れ
@@ -482,7 +488,9 @@ export class InputHandler {
       .then((val: dataPreferences.ValueType) => {
         try {
           SentenceFlow.setLearned(JSON.parse(String(val)) as Record<string, Record<string, number>>);
-        } catch (_e) {}
+        } catch (_e) {
+          InputHandler.keepBroken(this.flowPrefs, val);
+        }
         this.flowPrefs?.get('sugg', '{}').then((v: dataPreferences.ValueType) => {
           try { AiConverter.suggUse = JSON.parse(String(v)) as Record<string, number>; } catch (_e) {}
         });
@@ -491,15 +499,12 @@ export class InputHandler {
     AiConverter.onSuggUse = () => {
       const prefs = this.flowPrefs;
       if (!prefs) { return; }
-      prefs.put('sugg', JSON.stringify(AiConverter.suggUse)).then(() => prefs.flush());
+      prefs.put('sugg', JSON.stringify(AiConverter.suggUse)).then(() => prefs.flush()).catch((_e: Error) => {});
     };
     SentenceFlow.onChange = () => {
+      this.flowDirty = true;
       clearTimeout(this.flowSaveTimer);
-      this.flowSaveTimer = setTimeout(() => {
-        const prefs = this.flowPrefs;
-        if (!prefs) { return; }
-        prefs.put('v1', JSON.stringify(SentenceFlow.getLearned())).then(() => prefs.flush());
-      }, 1000);
+      this.flowSaveTimer = setTimeout(() => { this.writeFlow(); }, 1000);
     };
     dataPreferences.getPreferences(this.imeContext, 'shunti_nextword')
       .then((prefs: dataPreferences.Preferences) => {
@@ -513,7 +518,9 @@ export class InputHandler {
           // decides which shape it is (by checking `.v`) and migrates the old one.
           const data = JSON.parse(String(val)) as Record<string, Record<string, number>>;
           NextWordPredictor.setLearned(data);
-        } catch (_e) {}
+        } catch (_e) {
+          InputHandler.keepBroken(this.nextWordPrefs, val);
+        }
       })
       .catch((e: Error) => { InputLog.recordInit('shunti_nextword', e); });
     dataPreferences.getPreferences(this.imeContext, 'shunti_unknownword')
@@ -525,7 +532,9 @@ export class InputHandler {
         try {
           const data = JSON.parse(String(val)) as Record<string, Record<string, number>>;
           UnknownWordLearner.setLearned(data);
-        } catch (_e) {}
+        } catch (_e) {
+          InputHandler.keepBroken(this.unknownWordPrefs, val);
+        }
       })
       .catch((e: Error) => { InputLog.recordInit('shunti_unknownword', e); });
     dataPreferences.getPreferences(this.imeContext, SUPPRESSED_STORE)
@@ -537,7 +546,9 @@ export class InputHandler {
         try {
           const data = JSON.parse(String(val)) as Record<string, string[]>;
           SuppressedCandidates.setSuppressed(data);
-        } catch (_e) {}
+        } catch (_e) {
+          InputHandler.keepBroken(this.suppressedPrefs, val);
+        }
       })
       .catch((e: Error) => { InputLog.recordInit('shunti_suppressed', e); });
     dataPreferences.getPreferences(this.imeContext, 'shunti_symbol_freq')
@@ -1207,7 +1218,29 @@ export class InputHandler {
     if (!prefs) { return; }
     this.learningDirty = false;
     prefs.put('v1', JSON.stringify(KanaKanjiConverter.getLearned()))
+      .then(() => prefs.put('day', JSON.stringify(KanaKanjiConverter.getLearnedDay())))
       .then(() => prefs.flush())
+      // 書けなかったら次の機会に書き直す (前は dirty を先に落として学習が消えた。2026-10-25)
+      .catch((_e: Error) => { this.learningDirty = true; });
+  }
+
+  // 読めなかった保存 (壊れた JSON) を、次の保存で上書きする前に別の鍵へ写して残す (PC 版の .broken と同じ。2026-10-25)
+  private static keepBroken(prefs: dataPreferences.Preferences | undefined, val: dataPreferences.ValueType): void {
+    if (!prefs) { return; }
+    const raw = String(val);
+    if (raw.length === 0 || raw === '{}') { return; }
+    prefs.put('broken-' + Math.floor(Date.now() / 1000), raw).then(() => prefs.flush()).catch((_e: Error) => {});
+  }
+
+  // 文の流れ (SentenceFlow) も同じ形で。前は flushPendingSaves の外で、閉じると 1 秒待ちの分が消えた (2026-10-25)
+  private writeFlow(): void {
+    if (!this.flowDirty) { return; }
+    const prefs = this.flowPrefs;
+    if (!prefs) { return; }
+    this.flowDirty = false;
+    prefs.put('v1', JSON.stringify(SentenceFlow.getLearned()))
+      .then(() => prefs.flush())
+      .catch((_e: Error) => { this.flowDirty = true; });
   }
 
   private saveLearning(): void {
@@ -1223,6 +1256,8 @@ export class InputHandler {
     this.nextWordDirty = false;
     prefs.put('v1', JSON.stringify(NextWordPredictor.getLearned()))
       .then(() => prefs.flush())
+      // 書けなかったら次の機会に書き直す (前は dirty を先に落として学習が消えた。2026-10-25)
+      .catch((_e: Error) => { this.nextWordDirty = true; });
   }
 
   private saveNextWord(): void {
@@ -1238,6 +1273,8 @@ export class InputHandler {
     this.unknownWordDirty = false;
     prefs.put('v1', JSON.stringify(UnknownWordLearner.getLearned()))
       .then(() => prefs.flush())
+      // 書けなかったら次の機会に書き直す (前は dirty を先に落として学習が消えた。2026-10-25)
+      .catch((_e: Error) => { this.unknownWordDirty = true; });
   }
 
   private saveUnknownWords(): void {
@@ -1618,6 +1655,8 @@ export class InputHandler {
     this.suppressedDirty = false;
     prefs.put(SUPPRESSED_KEY, JSON.stringify(SuppressedCandidates.getSuppressed()))
       .then(() => prefs.flush())
+      // 書けなかったら次の機会に書き直す (前は dirty を先に落として学習が消えた。2026-10-25)
+      .catch((_e: Error) => { this.suppressedDirty = true; });
   }
 
   private saveSuppressed(): void {
@@ -1630,6 +1669,8 @@ export class InputHandler {
   // 拡張が終了するとき(onDestroy)に呼ぶ。デバウンス待ちのまま消える経路を
   // 塞ぐのが目的なので、ここを外すと上のコメントの壊れ方に戻る。
   flushPendingSaves(): void {
+    clearTimeout(this.flowSaveTimer);
+    this.writeFlow();
     clearTimeout(this.learningSaveTimer);
     clearTimeout(this.nextWordSaveTimer);
     clearTimeout(this.unknownWordSaveTimer);

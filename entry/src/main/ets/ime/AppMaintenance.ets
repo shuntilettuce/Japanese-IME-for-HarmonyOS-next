@@ -19,6 +19,9 @@ export class AppMaintenance {
     'shunti_learning',
     'shunti_nextword',
     'shunti_symbol_freq',
+    'shunti_flow',
+    'shunti_unknownword',
+    'shunti_suppressed',
   ];
 
   // Everything the app persists. Order doesn't matter; each is deleted
@@ -33,6 +36,10 @@ export class AppMaintenance {
     'shunti_globaldict',
     'shunti_settings',
     'shunti_consent',
+    'shunti_flow',
+    'shunti_unknownword',
+    'shunti_suppressed',
+    'shunti_clip_pins',
   ];
 
   private static async clear(context: common.Context, names: string[]): Promise<void> {

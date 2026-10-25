@@ -59,7 +59,13 @@ export class SuppressedCandidates {
     if (surface === reading) { return false; }
     let list = SuppressedCandidates.map[reading];
     if (list === undefined) {
-      if (Object.keys(SuppressedCandidates.map).length >= MAX_READINGS) { return false; }
+      const all = Object.keys(SuppressedCandidates.map);
+      if (all.length >= MAX_READINGS) {
+        // 上限では、いちばん前に消した読みを追い出す (前は黙って断った。2026-10-25)
+        const kept: Record<string, string[]> = {};
+        for (let i = 1; i < all.length; i++) { kept[all[i]] = SuppressedCandidates.map[all[i]]; }
+        SuppressedCandidates.map = kept;
+      }
       list = [];
       SuppressedCandidates.map[reading] = list;
     }

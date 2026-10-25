@@ -165,7 +165,22 @@ export class NextWordPredictor {
   private static bump(store: Record<string, Record<string, number>>, key: string, next: string): void {
     let entry = store[key];
     if (entry === undefined) {
-      if (Object.keys(store).length >= MAX_LEARNED_KEYS) { return; }
+      const all = Object.keys(store);
+      if (all.length >= MAX_LEARNED_KEYS) {
+        // 上限では、いちばん使われていない語を追い出す (前は黙って学習を止めた。2026-10-25)
+        let minKey = all[0];
+        let minSum = Number.MAX_VALUE;
+        for (const k of all) {
+          let sum = 0;
+          const e = store[k];
+          for (const w of Object.keys(e)) { sum += e[w]; }
+          if (sum < minSum) { minSum = sum; minKey = k; }
+        }
+        const kept: Record<string, Record<string, number>> = {};
+        for (const k of all) { if (k !== minKey) { kept[k] = store[k]; } }
+        if (store === NextWordPredictor.learned) { NextWordPredictor.learned = kept; } else { NextWordPredictor.learnedBi = kept; }
+        store = kept;
+      }
       entry = {};
       store[key] = entry;
     }
