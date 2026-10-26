@@ -1,13 +1,13 @@
 {
   "note": "AI 変換 (shuntelligence) の辞書とモデル。GitHub Releases に置き、ビルド前に tools/fetch_ai_assets.py で取得する",
-  "release": "shuntelligence-v8",
-  "url": "https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/download/shuntelligence-v8/",
+  "release": "shuntelligence-v7",
+  "url": "https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/download/shuntelligence-v7/",
   "dest": "entry/src/main/resources/rawfile",
   "files": {
     "kkc_lex.bin": {
-      "src": "kkc_lex_v6.bin",
-      "size": 96403618,
-      "sha256": "34c010782644edd186121137a3d098fa0fc41616ab0ddbcd497675246e911753",
+      "src": "kkc_lex_v5.bin",
+      "size": 97629574,
+      "sha256": "209a151603339a533810a5692037a02dc89725cd4a461b7ecc730e7ade207c75",
       "license": "shuntorge: 全体は CC BY-SA 4.0 (Wikipedia 由来の語を含む)。独自部分 MIT + Mozc BSD-3-Clause / IPAdic + SudachiDict Apache-2.0 + NEologd Apache-2.0 + 日本郵便 + JMdict CC BY-SA 4.0 + Wikidata CC0 + Unicode License v3 + SCOWL (Kevin Atkinson、MIT に近い許諾)"
     },
     "kkc_model.bin": {
