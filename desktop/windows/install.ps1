@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 $Dest = Join-Path $env:ProgramFiles 'shunti IME'
 $Files = @('shunti_ime_x64.dll', 'shunti_ime_x86.dll', 'shunti_settings.exe', 'kkc_lex.bin', 'kkc_model.bin', 'LICENSE.txt')
 # 軽量・高精度の変換モデル (設定で選ぶ)。無ければ標準 (kkc_model.bin) だけで動く
-$Optional = @('kkc_model_light.bin')
+$Optional = @('kkc_model_light.bin', 'kkc_variants.tsv')   # kkc_variants.tsv = M5 の書き方の対の表
 # スタートメニューの「shunti IME の設定」(全員分)
 $Shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\shunti IME の設定.lnk'
 $Is64 = [Environment]::Is64BitOperatingSystem
@@ -69,6 +69,9 @@ function Invoke-AdminPart {
         if (-not (Test-Path -LiteralPath (Join-Path $src $f))) { throw "$f が見つかりません ($src)。zip を全部展開してから実行してください" }
     }
     Unregister-All
+    # 開いている設定の画面を閉じる (設定は変えるたびに保存しているので失うものは無い)。残すと、名前を変えた古い版の画面が
+    # 開いたままになり、切り替えが保存されないことがあった (2026-10-27)
+    Get-Process -Name 'shunti_settings' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $Dest | Out-Null
     Get-ChildItem -LiteralPath $Dest -Filter '*.old-*' -File -ErrorAction SilentlyContinue | ForEach-Object {
         try { Remove-Item -LiteralPath $_.FullName -Force } catch {}
