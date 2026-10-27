@@ -1063,6 +1063,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof ncm, &ncm, 0, g_dpi);
     g_font = CreateFontIndirectW(&ncm.lfMessageFont);
     build();
+    {   // 窓の高さを中身に合わせる (チェックを足すたびに下が見切れていた。ユーザー 2026-10-27)
+        RECT b = {};
+        GetWindowRect(GetDlgItem(g_wnd, IDCANCEL), &b);
+        MapWindowPoints(nullptr, g_wnd, reinterpret_cast<POINT*>(&b), 2);
+        RECT need = {0, 0, S(480), b.bottom + S(10)};
+        AdjustWindowRectExForDpi(&need, WS_OVERLAPPEDWINDOW & ~(WS_MAXIMIZEBOX | WS_THICKFRAME), FALSE, 0, g_dpi);
+        SetWindowPos(g_wnd, nullptr, 0, 0, need.right - need.left, need.bottom - need.top, SWP_NOZORDER | SWP_NOMOVE | SWP_NOACTIVATE);
+    }
     ShowWindow(g_wnd, show);
     PostMessageW(g_wnd, WM_APP + 7, 0, 0);   // 開いた後に更新を確かめる (1 日 1 回まで)
     if (open_dict) SetFocus(GetDlgItem(g_wnd, ID_READING));

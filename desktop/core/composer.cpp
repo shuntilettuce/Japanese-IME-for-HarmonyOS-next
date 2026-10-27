@@ -1303,6 +1303,10 @@ void Composer::load_cands(size_t i) {
         u16 head = s.reading.substr(0, s.reading.size() - s.tail_r.size());
         for (auto& c : conv_->convert(left_context(i), head, kCandidates).cands) push_unique(list, c + s.tail_s);
         if (!s.tail_r.empty()) push_unique(list, head + s.tail_s);
+        // 付属語まで含めて文節ごと変換した上位も足す (付属語に見えた所が別の語のことがある: せいでしたが → せいで下が。
+        // 自立語だけの変換では付属語が固定で出せなかった。ユーザー 2026-10-27)
+        if (!s.tail_r.empty())
+            for (auto& c : conv_->convert(left_context(i), s.reading, 5).cands) push_unique(list, c);
     }
     add_brackets(s.reading, list);   // 学習の並べ替えより前に (よく選ぶ括弧が上に来るように)
     if (learning_) list = learning_->apply_order(s.reading, list);
