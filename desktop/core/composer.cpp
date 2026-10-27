@@ -956,7 +956,8 @@ bool Composer::live_commit(const Conversion& c) {
     }
     kana_.erase(0, freeze_end);
     caret_ -= std::min(caret_, freeze_end);
-    raw_valid_ = false;
+    // 打った鍵の列 (raw_) は固定した所の分も持ったまま (読み = 固定した読み + kana_ の対応は崩れない)。以前はここで捨てていて、
+    // 固定のあとは Backspace の打ち直し・鍵の列を使う打ち間違いの直しと英字の打ち分けが効かなくなっていた (ユーザー 2026-10-27)
     prev_segs_.clear();
     live_key_.clear();
     return true;
@@ -1110,8 +1111,7 @@ bool Composer::unfreeze_last() {
     u16 r = frozen_.back().reading;
     frozen_.pop_back();
     kana_.insert(0, r);
-    caret_ += r.size();
-    raw_valid_ = false;
+    caret_ += r.size();   // 鍵の列はそのまま使える (固定した読み + kana_ は変わらない)
     live_key_.clear();
     prev_segs_.clear();
     return true;
