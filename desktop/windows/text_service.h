@@ -98,6 +98,7 @@ private:
     void apply(TfEditCookie ec, ITfContext* ctx);
     u16 read_left_context(TfEditCookie ec, ITfContext* ctx);
     void set_attributes(TfEditCookie ec, ITfContext* ctx, ITfRange* comp_range, const View& v);
+    void update_strip(TfEditCookie ec, ITfContext* ctx, const View& v);
     void update_candidates(TfEditCookie ec, ITfContext* ctx, const View& v);
     void end_composition(TfEditCookie ec, ITfContext* ctx);
     void finish_composition();
@@ -128,6 +129,7 @@ private:
     u16 left_ctx_;
     bool secure_ = false;   // いまの入力欄がパスワードの欄 (デバッグ用のビルドの入力の記録だけが使う)
     CandWindow cand_;
+    KeyStrip strip_;   // 打った綴りの帯
     Microsoft::WRL::ComPtr<ITfContext> post_ctx_;   // 文の流れの続きを出した入力欄 (クリックで入れるとき)
     LangBarButton* langbar_ = nullptr;
 };

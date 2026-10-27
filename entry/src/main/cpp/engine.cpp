@@ -74,7 +74,7 @@ static_assert(sizeof(Ent) == 16, "Ent");
 struct PEnt { uint16_t a, b, lid, rid; int16_t cost; };
 static_assert(sizeof(PEnt) == 10, "PEnt");
 
-struct Edge { int s, e; ustr surf; int32_t lid, rid, cost; Kind kind; };
+struct Edge { int s, e; ustr surf; int32_t lid, rid, cost; Kind kind; int mark = 0; };   // mark: M5 の印 (使う人 + 32 × 書き方)
 
 // 英単語の一覧の項目 (Lex::latin_words)。小文字の綴り -> 表記・品詞・コスト
 struct LatinWord { ustr surf; int32_t lid, rid, cost; };
@@ -1678,6 +1678,9 @@ struct Model {
     std::vector<LayerW> L;
     const float *normw, *normb, *end, *q1w, *q1b, *q2w, *q2b, *Kkind, *Klen, *k1b, *k2w, *k2b;
     const float *gw = nullptr, *gb = nullptr;   // ダイヤル (版 3 のときだけ)
+    // 版 6 (M5): 使う人の印 (n_user 行) と書き方の印 (n_style 行) の表。k の全結合の真ん中の区切り (先頭の文字 + 種別) を掛けたもの
+    int n_user = 0, n_style = 0;
+    const float *Kuser = nullptr, *Kstyle = nullptr;
     int vid(char32_t c) const { auto it = vocab.find(c); return it == vocab.end() ? UNK : it->second; }
 };
 
@@ -1944,6 +1947,13 @@ struct kkc_engine {
     std::vector<PathInfo> last_paths; // 直前の変換の上位の経路 (kkc_last_paths)
     double last_cost[2] = {0, 0};     // 直前の変換の 1 位・2 位 (表記が違う最初の 2 つ) の経路のコスト。2 位が無ければ大きな値
     std::vector<UserWord> user;                   // ユーザー辞書の語 (kkc_user_add_like で足す)
+    // M5 の個人化 (版 6 のモデル): 書き方の対の表 (kkc_set_variants)・表記ごとの使う人の印 (kkc_set_marks)・
+    // 書き方の記録 (kkc_set_style: 語ごと・種類ごとの、漢字とかなで書いた回数)
+    struct VarForm { ustr other; int lemma, cls; bool kanji; };
+    std::unordered_map<ustr, VarForm> var;
+    std::unordered_map<ustr, int> umarks;
+    std::unordered_map<int64_t, int> fam;   // 語 × 2 + 漢字か → 回数
+    int cls_n[8][2] = {};                   // 種類 → (かな, 漢字) の回数
     std::unordered_map<std::string, LatinWord> user_latin;   // ユーザー辞書の英字の語 (表記が英字だけ。小文字・空白なしの綴り -> 語)
     // 打った鍵の列 (kkc_set_keys)。直後の 1 回の変換で英字の辺 (K_LATIN) を作るのに使う
     std::vector<uint16_t> keys;
@@ -1987,7 +1997,8 @@ bool load_model(Model& M, const void* data, size_t size) {
     const int32_t ver = r.val<int32_t>();
     // 版 2: 全結合の重みは (入力, 出力)。版 3: + ダイヤル。版 4: 版 3 の文字ごとの表を int8 に。
     // 版 5: 版 4 + 層の大きな全結合も int8 (出力ごとの倍率)、Pa・Pb・Pc の代わりに k の全結合 (配る大きさ 24.8MB -> 約 6MB)
-    if (ver < 2 || ver > 5) return false;
+    // 版 6: 版 5 + 最後に 使う人の印・書き方の印の表 (M5)
+    if (ver < 2 || ver > 6) return false;
     M.V = r.val<int32_t>(); M.d = r.val<int32_t>(); M.layers = r.val<int32_t>(); M.heads = r.val<int32_t>();
     M.ff = r.val<int32_t>(); M.dk = r.val<int32_t>(); M.max_len = r.val<int32_t>(); M.n_seg = r.val<int32_t>();
     M.ctx = r.val<int32_t>(); M.draft_max = r.val<int32_t>(); M.draft = r.val<int32_t>();
@@ -2034,6 +2045,11 @@ bool load_model(Model& M, const void* data, size_t size) {
     M.Kkind = r.arr<float>(size_t(M.n_kind) * d); M.Klen = r.arr<float>(size_t(17) * d);
     M.k1b = r.arr<float>(d); M.k2w = r.arr<float>(size_t(dk) * d); M.k2b = r.arr<float>(dk);
     if (ver >= 3) { M.gw = r.arr<float>(size_t(dk) * dk); M.gb = r.arr<float>(dk); }
+    if (ver >= 6) {
+        M.n_user = r.val<int32_t>(); M.n_style = r.val<int32_t>();
+        if (M.n_user > 0) M.Kuser = r.arr<float>(size_t(M.n_user) * d);
+        if (M.n_style > 0) M.Kstyle = r.arr<float>(size_t(M.n_style) * d);
+    }
     return r.ok;
 }
 
@@ -2143,6 +2159,7 @@ void scores(kkc_engine* E, int rstart, int n, const std::vector<Edge>& ed, std::
     auto word_k = [&](const Edge& e) {
         ustr key = e.surf;
         key.push_back(char32_t(0x110000 + e.kind));
+        if (e.mark) key.push_back(char32_t(0x120000 + e.mark));
         auto it = word_id.find(key);
         if (it != word_id.end()) return it->second;
         const int nc = int(e.surf.size());
@@ -2175,6 +2192,15 @@ void scores(kkc_engine* E, int rstart, int n, const std::vector<Edge>& ed, std::
             const float* pb = prow(1, M.vid(e.surf.front()));
             const float* pc = prow(2, M.vid(e.surf.back()));
             for (int j = 0; j < d; j++) hid[j] = hid[j] * inv + pb[j] + kk[j] + pc[j] + kl[j] + M.k1b[j];
+            if (M.Kuser) {   // M5: 印 (使う人・書き方) の表の行を足す。印の無い辺も 0 番の行を足す (学習と同じ)
+                const int um = std::min(e.mark % 32, M.n_user - 1), sm = e.mark / 32;
+                const float* ku = M.Kuser + size_t(um) * d;
+                for (int j = 0; j < d; j++) hid[j] += ku[j];
+                if (M.Kstyle) {
+                    const float* ks = M.Kstyle + size_t(std::min(sm, M.n_style - 1)) * d;
+                    for (int j = 0; j < d; j++) hid[j] += ks[j];
+                }
+            }
         } else {
             for (int j = 0; j < d; j++) hid[j] = 0;
             for (char32_t c : e.surf) {
@@ -2863,6 +2889,144 @@ std::vector<ustr> date_candidates(const ustr& r) {
     return out;
 }
 
+// ---------------------------------------------------------------- M5: 個人化 (学習の網 kkcnative2 の add_variant_edges・style_marks と同じ決まり)
+static const int32_t VAR_PENALTY = 300;   // 足した書き方の候補のコストの上乗せ (辞書だけの下書きは元の書き方のまま)
+
+static int count_bucket(int n) { return n <= 0 ? 0 : n == 1 ? 1 : n == 2 ? 2 : n <= 4 ? 3 : n <= 9 ? 4 : n <= 19 ? 5 : 6; }
+static int rate_bucket(double s) { return s < .2 ? 1 : s < .4 ? 2 : s < .6 ? 3 : s < .8 ? 4 : 5; }
+
+static void personalize(kkc_engine* e, std::vector<Edge>& E) {
+    if (!e->var.empty()) {   // 網に書き方の違う候補を足す (同じ区間に同じ表記があれば足さない)
+        std::unordered_set<ustr> have;
+        auto key = [](const Edge& x) { ustr k = x.surf; k.push_back(char32_t(0x110000 + x.s)); k.push_back(char32_t(0x110000 + x.e)); return k; };
+        for (auto& x : E) have.insert(key(x));
+        const size_t n0 = E.size();
+        for (size_t i = 0; i < n0; i++) {
+            if (E[i].kind == K_TYPO || E[i].kind == K_LATIN) continue;
+            auto v = e->var.find(E[i].surf);
+            if (v == e->var.end()) continue;
+            Edge ne = E[i];
+            ne.surf = v->second.other;
+            ne.kind = K_DICT;
+            ne.cost = E[i].cost + VAR_PENALTY;
+            if (have.insert(key(ne)).second) E.push_back(std::move(ne));
+        }
+    }
+    for (auto& x : E) {
+        int um = 0, f = 0, c = 0;
+        auto u = e->umarks.find(x.surf);
+        if (u != e->umarks.end()) um = u->second;
+        auto v = e->var.find(x.surf);
+        if (v != e->var.end()) {
+            const auto& vf = v->second;
+            auto fi = e->fam.find(int64_t(vf.lemma) * 2 + (vf.kanji ? 1 : 0));
+            if (fi != e->fam.end()) f = count_bucket(fi->second);
+            if (vf.cls > 0 && vf.cls < 8) {
+                const int a = e->cls_n[vf.cls][vf.kanji ? 1 : 0], b = e->cls_n[vf.cls][vf.kanji ? 0 : 1];
+                if (a + b >= 5) c = rate_bucket(double(a) / double(a + b));   // 5 回以上書いた種類だけ
+            }
+        }
+        x.mark = um + 32 * (f * 6 + c);
+    }
+}
+
+KKC_API int kkc_personal(kkc_engine* e) { return e && e->m.n_style > 0 ? 1 : 0; }
+
+// 確定した文 text を読み reading の網の上でたどり (学習の網の正解の経路と同じ決め方)、通った語のうち書き方の対の表にある表記を
+// 0 区切りで out に。書き方の記録 (StyleLog) に数える語を決める。経路が無ければ 0
+KKC_API int kkc_path_variants(kkc_engine* e, const uint16_t* reading, int nr, const uint16_t* text, int nt, uint16_t* out, int cap) {
+    if (!e || e->var.empty() || nr <= 0 || nt <= 0) return 0;
+    const ustr r = from16(reading, size_t(nr)), t = from16(text, size_t(nt));
+    std::vector<Edge> E = edges(e->lex, r, &e->user);
+    personalize(e, E);
+    const int n = int(r.size()), G = int(t.size());
+    std::vector<std::vector<int>> by_start(size_t(n) + 1);
+    for (int i = 0; i < int(E.size()); i++) by_start[size_t(E[i].s)].push_back(i);
+    // (読みの位置, 文の位置) ごとに来た辺 (-1 = まだ)。左から
+    const size_t W = size_t(G) + 1;
+    std::vector<int> from(size_t(n + 1) * W, -2);
+    from[0] = -1;
+    for (int p = 0; p < n; p++)
+        for (int k = 0; k < G; k++) {
+            if (from[size_t(p) * W + size_t(k)] == -2) continue;
+            for (int i : by_start[size_t(p)]) {
+                if (!starts_with(t, size_t(k), E[size_t(i)].surf)) continue;
+                const size_t to = size_t(E[size_t(i)].e) * W + size_t(k) + E[size_t(i)].surf.size();
+                if (from[to] == -2) from[to] = i;
+            }
+        }
+    if (from[size_t(n) * W + size_t(G)] == -2) return 0;
+    std::vector<ustr> words;
+    for (int p = n, k = G; p > 0 || k > 0;) {
+        const int i = from[size_t(p) * W + size_t(k)];
+        if (i < 0) break;
+        if (e->var.count(E[size_t(i)].surf)) words.push_back(E[size_t(i)].surf);
+        p = E[size_t(i)].s;
+        k -= int(E[size_t(i)].surf.size());
+    }
+    int w = 0;
+    std::vector<uint16_t> s;
+    for (auto it = words.rbegin(); it != words.rend(); ++it) {
+        s.clear();
+        to16(*it, s);
+        if (w + int(s.size()) + 1 > cap) break;
+        for (uint16_t c : s) out[w++] = c;
+        out[w++] = 0;
+    }
+    return w;
+}
+
+KKC_API int kkc_set_variants(kkc_engine* e, const uint16_t* tsv, int n) {
+    if (!e) return -1;
+    e->var.clear();
+    std::unordered_map<ustr, int> lem;
+    ustr line;
+    auto flush = [&]() {
+        std::vector<ustr> col(1);
+        for (char32_t ch : line) { if (ch == U'\t') col.emplace_back(); else col.back().push_back(ch); }
+        if (col.size() >= 4 && !col[0].empty() && !col[1].empty()) {
+            const int id = lem.emplace(col[2], int(lem.size())).first->second;
+            int cl = 0;
+            for (char32_t ch : col[3]) if (ch >= U'0' && ch <= U'9') cl = cl * 10 + int(ch - U'0');
+            e->var.emplace(col[0], kkc_engine::VarForm{col[1], id, cl, false});
+            e->var.emplace(col[1], kkc_engine::VarForm{col[0], id, cl, true});
+        }
+        line.clear();
+    };
+    const ustr all = from16(tsv, size_t(n));
+    for (char32_t ch : all) { if (ch == U'\n') flush(); else if (ch != U'\r') line.push_back(ch); }
+    if (!line.empty()) flush();
+    e->kcache.clear(); e->K.clear();
+    return int(e->var.size());
+}
+
+KKC_API int kkc_variant_info(kkc_engine* e, const uint16_t* s, int n, int32_t* out3) {
+    if (!e || !out3) return 0;
+    auto v = e->var.find(from16(s, size_t(n)));
+    if (v == e->var.end()) return 0;
+    out3[0] = v->second.lemma; out3[1] = v->second.cls; out3[2] = v->second.kanji ? 1 : 0;
+    return 1;
+}
+
+KKC_API void kkc_set_marks(kkc_engine* e, const uint16_t* surfs, int n, const int32_t* marks, int nm) {
+    if (!e) return;
+    e->umarks.clear();
+    ustr cur;
+    int k = 0;
+    const ustr all = from16(surfs, size_t(n));
+    for (char32_t ch : all) {
+        if (ch == 0) { if (!cur.empty() && k < nm && marks[k] > 0) e->umarks[cur] = std::min(marks[k], 31); k++; cur.clear(); }
+        else cur.push_back(ch);
+    }
+}
+
+KKC_API void kkc_set_style(kkc_engine* e, const int32_t* fam, int nf, const int32_t* cls) {
+    if (!e) return;
+    e->fam.clear();
+    for (int i = 0; i < nf; i++) e->fam[int64_t(fam[3 * i]) * 2 + (fam[3 * i + 1] ? 1 : 0)] = fam[3 * i + 2];   // (語, 漢字か, 回数) × nf
+    for (int c = 0; c < 8; c++) for (int k = 0; k < 2; k++) e->cls_n[c][k] = cls ? cls[c * 2 + k] : 0;
+}
+
 KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint16_t* kana, int nk,
                         int maxout, int use_model, uint16_t* out, int cap) {
     if (!e) return -2;
@@ -2917,6 +3081,7 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
         }
         for (auto& ed : lat) E.push_back(std::move(ed));
     }
+    if (M.n_style > 0) personalize(e, E);   // M5: 書き方の違う候補と、辺ごとの印
     e->times[0] = ms_since(t0);
     std::vector<ustr> res;
     e->suggest.clear();

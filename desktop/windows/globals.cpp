@@ -49,7 +49,8 @@ const void* map_file(const std::filesystem::path& p, size_t& size) {
 }  // namespace
 
 Core::Core()
-    : learning(user_dir() / L"learned.json"), dict(user_dir() / L"userdict.json"), settings(user_dir() / L"settings.json") {
+    : learning(user_dir() / L"learned.json"), dict(user_dir() / L"userdict.json"), settings(user_dir() / L"settings.json"),
+      style(user_dir() / L"style.json") {
     dir_ = module_dir();
     flow.load(user_dir() / L"flow.tsv");
     // 計測用: 別のフォルダの辞書とモデルを使う (同じ DLL のまま、モデルを替えて比べるため)
@@ -79,6 +80,9 @@ void Core::use_model(const std::string& name) {
     if (model_) UnmapViewOfFile(model_);   // 前のモデル (エンジンは開き直したので、もう使っていない)
     model_ = model;
     model_file_ = file;
+    // M5: 書き方の対の表 (モデルが個人化を知っているときだけ使う。kkc_variants.tsv は辞書と同じフォルダ)
+    std::string tsv;
+    if (conv.personal() && read_file(dir_ / L"kkc_variants.tsv", tsv)) conv.set_variants(tsv);
 }
 
 Core& core() {

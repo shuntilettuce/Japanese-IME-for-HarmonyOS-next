@@ -30,7 +30,7 @@ constexpr wchar_t VERSION[] = L"0.7.2";
 
 enum Id {
     ID_THEME = 100, ID_PUNCT, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
-    ID_LIST, ID_READING, ID_WORD, ID_POS, ID_ADD, ID_REMOVE, ID_IMPORT, ID_ADVANCED, ID_UPDATE, ID_RESET, ID_LICENSE, ID_GITHUB, ID_ICON, ID_MODEL, ID_CANDTREE, ID_SPACELIT, ID_LATIN, ID_CAPS,
+    ID_LIST, ID_READING, ID_WORD, ID_POS, ID_ADD, ID_REMOVE, ID_IMPORT, ID_ADVANCED, ID_UPDATE, ID_RESET, ID_LICENSE, ID_GITHUB, ID_ICON, ID_MODEL, ID_CANDTREE, ID_SPACELIT, ID_LATIN, ID_CAPS, ID_TYPO, ID_PERSONAL,
 };
 
 // 変換モデル (settings.json の model の値と、画面の表示)。名前は配布の呼び名 (開発名は出さない)
@@ -103,6 +103,8 @@ void save() {
     g_s.space_literal = checked(ID_SPACELIT);
     g_s.latin_auto = checked(ID_LATIN);
     g_s.caps_alpha = checked(ID_CAPS);
+    g_s.typo_fix = checked(ID_TYPO);
+    g_s.personal = checked(ID_PERSONAL);
     g_s.live_commit = checked(ID_LIVECOMMIT);
     g_s.model = MODELS[std::clamp(selected(ID_MODEL), 0, 1)];
     if (!save_settings(g_dir / L"settings.json", g_s))
@@ -893,7 +895,7 @@ void build() {
     combo(200, y + 23, 250, ID_MODEL, {T(102), T(103)});
     y += 68;
 
-    group(T(50), y, 285);
+    group(T(50), y, 335);
     make(L"STATIC", T(104), 0, 24, y + 27, 170, 20, 0);
     combo(200, y + 23, 120, ID_PUNCT, {T(105), T(106), T(107), T(108)});
     make(L"BUTTON", T(109), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 54, 430, 22, ID_SPACE);
@@ -905,7 +907,9 @@ void build() {
     make(L"BUTTON", T(160), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 204, 430, 22, ID_SPACELIT);
     make(L"BUTTON", T(161), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 229, 430, 22, ID_LATIN);
     make(L"BUTTON", T(163), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 254, 430, 22, ID_CAPS);
-    y += 293;
+    make(L"BUTTON", T(165), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 279, 430, 22, ID_TYPO);
+    make(L"BUTTON", T(166), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 304, 430, 22, ID_PERSONAL);
+    y += 343;
 
     group(T(13), y, 216);
     g_list = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 24, y + 22, 432, 90, ID_LIST);
@@ -962,6 +966,8 @@ void build() {
     check(ID_SPACELIT, g_s.space_literal);
     check(ID_LATIN, g_s.latin_auto);
     check(ID_CAPS, g_s.caps_alpha);
+    check(ID_TYPO, g_s.typo_fix);
+    check(ID_PERSONAL, g_s.personal);
     check(ID_LIVECOMMIT, g_s.live_commit);
     g_loading = false;
     refresh_list();
@@ -976,7 +982,7 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             int id = LOWORD(w), code = HIWORD(w);
             if ((id == ID_THEME || id == ID_PUNCT || id == ID_MODEL) && code == CBN_SELCHANGE) save();
             else if (id == IDCANCEL) DestroyWindow(h);   // 「閉じる」と Esc
-            else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_CANDTREE || id == ID_SPACELIT || id == ID_LATIN || id == ID_CAPS) && code == BN_CLICKED) save();
+            else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_CANDTREE || id == ID_SPACELIT || id == ID_LATIN || id == ID_CAPS || id == ID_TYPO || id == ID_PERSONAL) && code == BN_CLICKED) save();
             else if (id == ID_ADD) add_word();
             else if (id == ID_POS && code == CBN_SELCHANGE) update_reading_box();
             else if (id == ID_IMPORT) import_words();

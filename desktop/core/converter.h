@@ -61,7 +61,16 @@ public:
     bool has_right_ctx() const;
     // 提案を候補に混ぜず Conversion::sugg に分けて出すか (設定「提案を分けて表示する」)
     void set_suggest(bool on);
+    void set_typo(bool on);    // ローマ字の打ち間違いの直し (既定オン)
     void set_latin(bool on);   // 英字の打ち分け (既定オン)
+    // M5 の個人化 (版 6 のモデルのときだけ効く)。書き方の対の表 (TSV)・表記ごとの使う人の印・書き方の記録 (表記, 回数)
+    bool personal() const;
+    void set_variants(const std::string& tsv_utf8);
+    void set_marks(const std::vector<std::pair<u16, int>>& marks);
+    void set_style(const std::vector<std::pair<u16, int>>& counts);
+    bool is_variant(const u16& surface) const;
+    // 確定した文 (読み, 表記) の中の、書き方の対の表にある語 (書き方の記録に数える)
+    std::vector<u16> path_variants(const u16& reading, const u16& text) const;
     u16 latin_word(const u16& key) const;   // 綴り (小文字) の辞書の英字の語の表記 (無ければ空)
     // 予測: 読みが prefix で始まる辞書の語
     std::vector<u16> complete(const u16& prefix, int max, int max_extra = 6);
@@ -77,6 +86,8 @@ private:
     int user_bonus_ = 800;
     bool suggest_ = true;
     bool latin_ = true;
+    bool typo_ = true;
+    std::string variants_;   // モデルを替えて開き直したときに入れ直す
 };
 
 // 語をつないで差別語になった候補か (HarmonyOS 版 AiConverter.SLURS と同じ)

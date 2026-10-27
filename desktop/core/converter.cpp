@@ -55,6 +55,8 @@ bool Converter::open(const void* lex, size_t lex_size, const void* model, size_t
     if (e_ && threads > 0) kkc_set_threads(e_, threads);
     if (e_) kkc_set_suggest(e_, suggest_ ? 1 : 0);
     if (e_) kkc_set_latin(e_, latin_ ? 1 : 0);
+    if (e_ && !typo_) kkc_set_typo(e_, 0, 0.f);
+    if (e_ && !variants_.empty()) set_variants(variants_);
     if (e_ && !user_.empty()) set_user_words(std::vector<UserDict::Form>(user_), user_bonus_);   // モデルを替えて開き直したとき
     return e_ != nullptr;
 }
@@ -297,6 +299,62 @@ u16 Converter::latin_word(const u16& key) const {
     uint16_t buf[128];
     const int n = kkc_latin_word(e_, p16(key), int(key.size()), buf, 128);
     return n > 0 ? u16(reinterpret_cast<const char16_t*>(buf), size_t(n)) : u16();
+}
+
+bool Converter::personal() const { return e_ && kkc_personal(e_); }
+
+void Converter::set_variants(const std::string& tsv_utf8) {
+    variants_ = tsv_utf8;
+    if (!e_) return;
+    const u16 t = from_utf8(tsv_utf8);
+    kkc_set_variants(e_, p16(t), int(t.size()));
+}
+
+void Converter::set_marks(const std::vector<std::pair<u16, int>>& marks) {
+    if (!e_) return;
+    u16 all;
+    std::vector<int32_t> m;
+    for (auto& [s, k] : marks) { all += s; all.push_back(0); m.push_back(k); }
+    kkc_set_marks(e_, p16(all), int(all.size()), m.data(), int(m.size()));
+}
+
+void Converter::set_style(const std::vector<std::pair<u16, int>>& counts) {
+    if (!e_) return;
+    std::unordered_map<int64_t, int> fam;   // 語 × 2 + 漢字か → 回数 (活用をまたいで足す)
+    int32_t cls[16] = {};
+    for (auto& [s, n] : counts) {
+        int32_t info[3];
+        if (!kkc_variant_info(e_, p16(s), int(s.size()), info)) continue;
+        fam[int64_t(info[0]) * 2 + info[2]] += n;
+        if (info[1] >= 0 && info[1] < 8) cls[info[1] * 2 + info[2]] += n;
+    }
+    std::vector<int32_t> f;
+    for (auto& [k, n] : fam) { f.push_back(int32_t(k / 2)); f.push_back(int32_t(k % 2)); f.push_back(n); }
+    kkc_set_style(e_, f.data(), int(fam.size()), cls);
+}
+
+bool Converter::is_variant(const u16& surface) const {
+    int32_t info[3];
+    return e_ && !surface.empty() && kkc_variant_info(e_, p16(surface), int(surface.size()), info);
+}
+
+std::vector<u16> Converter::path_variants(const u16& reading, const u16& text) const {
+    std::vector<u16> out;
+    if (!e_ || reading.empty() || text.empty()) return out;
+    std::vector<uint16_t> buf(text.size() * 2 + 64);
+    const int n = kkc_path_variants(e_, p16(reading), int(reading.size()), p16(text), int(text.size()), buf.data(), int(buf.size()));
+    u16 cur;
+    for (int i = 0; i < n; i++) {
+        if (buf[size_t(i)] == 0) { if (!cur.empty()) out.push_back(cur); cur.clear(); }
+        else cur.push_back(char16_t(buf[size_t(i)]));
+    }
+    return out;
+}
+
+void Converter::set_typo(bool on) {
+    if (on == typo_) return;
+    typo_ = on;
+    if (e_) kkc_set_typo(e_, on ? 1 : 0, 0.f);
 }
 
 void Converter::set_latin(bool on) {

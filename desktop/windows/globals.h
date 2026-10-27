@@ -48,6 +48,7 @@ struct Core {
     UserDict dict;
     SettingsFile settings;   // 設定画面が書く settings.json (入力を始めるたびに読み直す)
     SentenceFlow flow;       // 文の流れの予測 (flow.tsv)
+    StyleLog style;          // M5: 書き方の記録 (style.json)
     Core();
     // 変換モデルを設定の値 (light・standard・high) のものにする。今と同じなら何もしない。
     // ファイルが無ければ standard (kkc_model.bin) を使う。前のモデルはメモリから外す

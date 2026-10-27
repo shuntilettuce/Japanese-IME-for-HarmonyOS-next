@@ -25,6 +25,7 @@ call :settings || exit /b 1
 rem dictionary and model (copied only when changed)
 xcopy /D /Y /Q "%ROOT%\entry\src\main\resources\rawfile\kkc_lex.bin" "%DIST%\" >nul
 xcopy /D /Y /Q "%ROOT%\entry\src\main\resources\rawfile\kkc_model.bin" "%DIST%\" >nul
+xcopy /D /Y /Q "%ROOT%\entry\src\main\resources\rawfile\kkc_variants.tsv" "%DIST%\" >nul
 rem light / high conversion models (models\, fetched by tools\fetch_ai_assets.py; optional)
 if exist "%ROOT%\models\kkc_model_light.bin" xcopy /D /Y /Q "%ROOT%\models\kkc_model_light.bin" "%DIST%\" >nul
 copy /Y "%HERE%install.ps1" "%DIST%\" >nul

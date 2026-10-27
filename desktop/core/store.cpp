@@ -95,6 +95,31 @@ int Learning::last_day(const u16& reading) {
     return e ? e->day : 0;
 }
 
+std::vector<std::pair<u16, int>> Learning::marks() {
+    refresh();
+    struct Acc { int n = 0, day = 0; };
+    std::unordered_map<u16, Acc> by;
+    for (auto& e : entries_)
+        for (auto& c : e.counts) {
+            if (c.second <= 0) continue;
+            u16 r = e.reading, s = c.first;
+            while (!r.empty() && !s.empty() && r.back() == s.back() && r.back() >= 0x3041 && r.back() <= 0x3096) { r.pop_back(); s.pop_back(); }
+            if (s.empty()) continue;
+            Acc& a = by[s];
+            a.n += c.second;
+            a.day = std::max(a.day, e.day);
+        }
+    const int t = today();
+    std::vector<std::pair<u16, int>> out;
+    for (auto& [s, a] : by) {
+        const int c = a.n == 1 ? 1 : a.n == 2 ? 2 : a.n <= 4 ? 3 : a.n <= 9 ? 4 : a.n <= 19 ? 5 : 6;
+        const int age = a.day > 0 ? t - a.day : 9999;   // 日付の無い (前の版の) 記録は古いものとして
+        const int r = age <= 7 ? 0 : age <= 30 ? 1 : age <= 183 ? 2 : 3;
+        out.push_back({s, 1 + (c - 1) * 4 + r});
+    }
+    return out;
+}
+
 void Learning::save() {
     version_++;
     std::string o = "{";
@@ -395,6 +420,78 @@ std::pair<int, std::vector<std::string>> UserDict::import_text(const u16& text) 
         else if (err != "もう登録してあります") bad.push_back(std::to_string(line_no) + " 行目 (" + to_utf8(f[0]) + "): " + err);
     }
     return {ok, bad};
+}
+
+// ---------------------------------------------------------------- 書き方の記録 (M5)
+
+void StyleLog::refresh() {
+    fs::file_time_type t{};
+    bool exists = stamp_of(file_, t);
+    if (loaded_ && (!exists || t == stamp_)) return;
+    loaded_ = true;
+    stamp_ = t;
+    apps_.clear();
+    version_++;
+    std::string s;
+    if (!exists || !read_file(file_, s)) return;
+    json::Value v;
+    if (!json::Parser(s).parse(v) || v.type != json::Value::Object) { keep_broken(file_); return; }
+    for (auto& a : v.obj) {
+        if (a.second.type != json::Value::Object) continue;
+        auto& m = apps_[a.first];
+        for (auto& c : a.second.obj)
+            if (c.second.type == json::Value::Number && c.second.num > 0) m[from_utf8(c.first)] = int(c.second.num);
+    }
+}
+
+void StyleLog::save() {
+    version_++;
+    std::string o = "{";
+    bool fa = true;
+    for (auto& [app, m] : apps_) {
+        if (!fa) o += ",";
+        fa = false;
+        o += json::quote(app) + ":{";
+        bool f = true;
+        for (auto& [s, n] : m) {
+            if (!f) o += ",";
+            f = false;
+            o += json::quote(to_utf8(s)) + ":" + std::to_string(n);
+        }
+        o += "}";
+    }
+    o += "}";
+    if (write_file_atomic(file_, o)) stamp_of(file_, stamp_);
+}
+
+void StyleLog::record(const std::string& app, const u16& surface) {
+    if (surface.empty()) return;
+    refresh();
+    if (!apps_.count(app) && apps_.size() >= MAX_APPS) return;   // アプリが多すぎるときは新しいアプリを数えない (全部の合計で効く)
+    auto& m = apps_[app];
+    if (!m.count(surface) && m.size() >= MAX_SURFACES) {   // あふれたら回数のいちばん少ない表記を捨てる
+        auto low = std::min_element(m.begin(), m.end(), [](auto& a, auto& b) { return a.second < b.second; });
+        m.erase(low);
+    }
+    m[surface] = std::min(m[surface] + 1, 1000000);
+    save();
+}
+
+std::vector<std::pair<u16, int>> StyleLog::counts(const std::string& app, int min_app) {
+    refresh();
+    std::unordered_map<u16, int> sum;
+    auto it = apps_.find(app);
+    int n_app = 0;
+    if (it != apps_.end()) for (auto& kv : it->second) n_app += kv.second;
+    if (it != apps_.end() && n_app >= min_app) sum = it->second;
+    else for (auto& [a, m] : apps_) for (auto& [s, n] : m) sum[s] += n;
+    return {sum.begin(), sum.end()};
+}
+
+void StyleLog::clear() {
+    refresh();
+    apps_.clear();
+    save();
 }
 
 // 英字の語の綴り: 英字・数字だけ (間の空白は除く) を小文字にしたもの。英字・数字・空白以外を含めば空

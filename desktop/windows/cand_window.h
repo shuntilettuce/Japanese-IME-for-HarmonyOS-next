@@ -82,5 +82,26 @@ private:
     int row_h_ = 0, pad_ = 0, num_w_ = 0, width_ = 0, height_ = 0, footer_h_ = 0;
 };
 
+// 打った綴りの帯 (入力中の字のすぐ上に小さく 1 行。ユーザー 2026-10-26「打ってるものと訂正後の両方をコンパクトに」)。
+// 入力中はいつも出す (出たり消えたりするとチカチカして目が痛い)。打ち間違いを直しているときは字の色を直しの色に
+class KeyStrip {
+public:
+    ~KeyStrip();
+    void show(const u16& typed, bool fixed, const RECT& anchor, HWND owner);
+    void hide();
+    void destroy();
+    std::string theme = "auto";
+
+private:
+    static LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l);
+    void paint(HDC dc);
+    HWND hwnd_ = nullptr;
+    HFONT font_ = nullptr;
+    UINT dpi_ = 0;
+    u16 text_;
+    bool fixed_ = false;
+    int w_ = 0, h_ = 0;
+};
+
 }  // namespace win
 }  // namespace shunti

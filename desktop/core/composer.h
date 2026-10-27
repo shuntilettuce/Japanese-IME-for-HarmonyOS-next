@@ -45,6 +45,9 @@ struct Span { int start, len; SpanKind kind; };
 struct View {
     u16 text;
     std::vector<Span> spans;
+    // 打った綴り (入力中はいつも。打った鍵の列が分からなくなったら読み)。typed_fixed = 打ち間違いを直した変換を見せている
+    u16 typed;
+    bool typed_fixed = false;
     int caret = 0;
     int anchor = 0;               // 候補の窓をこの字の下に出す
     bool cand_open = false;
@@ -97,6 +100,7 @@ struct ComposerOptions {
     u16 half_symbols;              // 半角で入れる記号 (詳細設定)
     int numpad = 0;                // テンキー: 0 = 半角、1 = 数字の設定に合わせる、2 = 全角
     bool private_mode = false;     // 学習・文の流れ・提案の学習を残さない
+    bool personal = true;          // M5: 書き方を覚えて変換に使う (使う人の印・書き方の印。オフなら印を渡さない)
 };
 
 class Composer {
@@ -112,6 +116,9 @@ public:
     std::function<void(const LogEvent&)> on_log;
 
     // 入力欄のカーソルの左の文 (変換の文脈)。読めない入力欄では空を返してよい (そのときはこれまでに確定した文を使う)
+    // M5: 書き方の記録と、入力しているアプリ (実行ファイル名など。書き方をアプリごとに数える)
+    void set_style_log(StyleLog* s) { style_ = s; }
+    void set_app(const std::string& app) { app_ = app; }
     void set_context_provider(std::function<u16()> f) { context_ = std::move(f); }
     // 入力欄が変わったとき: これまでに確定した文 (文脈の代わり) を忘れる
     void reset_history() { history_.clear(); post_.clear(); last_commit_ = {}; if (flow) flow->reset(); }
@@ -184,6 +191,7 @@ private:
     bool press_input(const KeyEvent& ev);
     bool press_convert(const KeyEvent& ev);
     void sync_user_dict();
+    void sync_personal();
     void convert_all();
     void enter_single(const u16& surface, std::vector<u16> cands, int sel);
     std::vector<Seg> convert_phrases(const u16& ctx, const u16& reading, std::vector<u16>* whole);
@@ -267,6 +275,11 @@ private:
     std::vector<TreeNode> tree_;     // 直前のスペースの変換の候補の木 (convert_phrases が最後の変換のものを入れる)
     std::vector<TreeNode> last_tree_;
     uint64_t learn_version_ = 0;     // 変換の網に入れた学習の版 (sync_user_dict)
+    StyleLog* style_ = nullptr;      // M5: 書き方の記録 (無ければ数えない)
+    std::string app_;                // 入力しているアプリ (書き方の記録をアプリごとに分ける)
+    uint64_t marks_learn_ = 0, marks_style_ = 0;   // 変換に渡した印の元の版
+    std::string marks_app_;
+    bool marks_on_ = false;
     int tree_off_ = 0;               // 木の読みの位置 0 が kana_ のどこか (固定した前の方の読みの長さ)
     std::vector<Word> live_words_;   // 直前の打っている間の変換の 1 位の語の区切り (固定オフのとき、前の方を使い回す)
     std::vector<int> pred_tab_;      // Tab で予測の候補に入ったとき、候補の中の予測の位置 (Tab はこの中だけを回る)

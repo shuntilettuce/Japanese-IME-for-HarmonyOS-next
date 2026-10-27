@@ -826,5 +826,102 @@ void CandWindow::paint(HDC wdc) {
     DeleteDC(dc);
 }
 
+// ---------------------------------------------------------------- 打った綴りの帯
+
+namespace {
+constexpr wchar_t STRIP_CLASS_NAME[] = L"ShuntiImeKeyStrip";
+}
+
+KeyStrip::~KeyStrip() { destroy(); }
+
+void KeyStrip::destroy() {
+    if (hwnd_) DestroyWindow(hwnd_);
+    hwnd_ = nullptr;
+    if (font_) DeleteObject(font_);
+    font_ = nullptr;
+    dpi_ = 0;
+}
+
+void KeyStrip::hide() {
+    if (hwnd_) ShowWindow(hwnd_, SW_HIDE);
+    text_.clear();
+}
+
+LRESULT CALLBACK KeyStrip::proc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    auto* self = reinterpret_cast<KeyStrip*>(GetWindowLongPtrW(h, GWLP_USERDATA));
+    switch (m) {
+        case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+        case WM_NCHITTEST: return HTTRANSPARENT;
+        case WM_ERASEBKGND: return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC dc = BeginPaint(h, &ps);
+            if (self) self->paint(dc);
+            EndPaint(h, &ps);
+            return 0;
+        }
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+void KeyStrip::show(const u16& typed, bool fixed, const RECT& anchor, HWND owner) {
+    if (typed.empty()) { hide(); return; }
+    if (!hwnd_) {
+        static bool reg = false;
+        if (!reg) {
+            WNDCLASSEXW wc = {sizeof wc};
+            wc.lpfnWndProc = DefWindowProcW;
+            wc.hInstance = g_inst;
+            wc.lpszClassName = STRIP_CLASS_NAME;
+            reg = RegisterClassExW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+        }
+        hwnd_ = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT, STRIP_CLASS_NAME, L"", WS_POPUP,
+                                0, 0, 1, 1, nullptr, nullptr, g_inst, nullptr);
+        if (!hwnd_) return;
+        SetWindowLongPtrW(hwnd_, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
+        SetWindowLongPtrW(hwnd_, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&KeyStrip::proc));
+    }
+    UINT dpi = owner ? GetDpiForWindow(owner) : 96;
+    if (!dpi) dpi = 96;
+    if (dpi != dpi_ || !font_) {
+        if (font_) DeleteObject(font_);
+        font_ = CreateFontW(-MulDiv(12, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Consolas");
+        dpi_ = dpi;
+    }
+    text_ = typed;
+    fixed_ = fixed;
+    HDC dc = GetDC(hwnd_);
+    HGDIOBJ old = SelectObject(dc, font_);
+    SIZE sz = {};
+    GetTextExtentPoint32W(dc, W(text_), int(text_.size()), &sz);
+    TEXTMETRICW tm = {};
+    GetTextMetricsW(dc, &tm);
+    SelectObject(dc, old);
+    ReleaseDC(hwnd_, dc);
+    const int px = MulDiv(5, int(dpi_), 96), py = MulDiv(1, int(dpi_), 96);
+    w_ = sz.cx + px * 2;
+    h_ = tm.tmHeight + py * 2;
+    const int x = anchor.left - px, y = anchor.top - h_ - MulDiv(1, int(dpi_), 96);
+    SetWindowPos(hwnd_, HWND_TOPMOST, x, y, w_, h_, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    InvalidateRect(hwnd_, nullptr, FALSE);
+}
+
+void KeyStrip::paint(HDC dc) {
+    const Colors c = colors(theme);
+    RECT r = {0, 0, w_, h_};
+    HBRUSH bg = CreateSolidBrush(c.bg);
+    FillRect(dc, &r, bg);
+    DeleteObject(bg);
+    HBRUSH br = CreateSolidBrush(c.border);
+    FrameRect(dc, &r, br);
+    DeleteObject(br);
+    HGDIOBJ old = SelectObject(dc, font_);
+    SetBkMode(dc, TRANSPARENT);
+    SetTextColor(dc, fixed_ ? RGB(230, 90, 30) : c.sub);   // 直しの色は入力中の字の波線と同じ
+    RECT t = r;
+    DrawTextW(dc, W(text_), int(text_.size()), &t, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+    SelectObject(dc, old);
+}
+
 }  // namespace win
 }  // namespace shunti

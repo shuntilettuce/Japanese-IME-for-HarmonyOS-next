@@ -822,6 +822,14 @@ void Composer::update_live() {
     add_brackets(kana_, cands);   // 学習の並べ替えより前に (よく選ぶ括弧が上に来るように)
     if (learning_) cands = learning_->apply_order(kana_, cands);
     prefer_greetings(kana_, cands);
+    // 短縮よみ (よ → よろしくお願いします) は打っている途中の 1 位にしない (「よろこんで」の「よ」で一瞬出た。ブログの報告 2026-10-24)。
+    // 候補には残し、空白で変換したときは 1 位 (単発で変換したときだけ出る)
+    if (dict_ && cands.size() > 1)
+        for (auto& e : dict_->entries())
+            if (e.pos == "abbrev" && e.reading == kana_ && cands[0] == e.word) {
+                std::rotate(cands.begin(), cands.begin() + 1, cands.begin() + 2);
+                break;
+            }
     live_top_ = cands.empty() ? kana_ : cands[0];
     // 予測 (スマホ版と同じ置き方): 決まり文句は先頭に、読みの続く語 (学習した語・辞書の語) は 1 位の直後に 3 つまで
     const Phrase2* phrase = nullptr;
@@ -1108,7 +1116,22 @@ bool Composer::unfreeze_last() {
 
 // ---------------------------------------------------------------- 変換
 
+// M5: 使う人の印 (学習の記録) と書き方の記録を変換に渡す (変わったときだけ)。設定がオフ・プライベートなら空にする
+void Composer::sync_personal() {
+    if (!conv_ || !conv_->personal()) return;
+    const bool on = options.personal && !options.private_mode;
+    const uint64_t lv = on && learning_ ? learning_->version() : 0, sv = on && style_ ? style_->version() : 0;
+    if (on == marks_on_ && lv == marks_learn_ && sv == marks_style_ && app_ == marks_app_) return;
+    conv_->set_marks(on && learning_ ? learning_->marks() : std::vector<std::pair<u16, int>>{});
+    conv_->set_style(on && style_ ? style_->counts(app_) : std::vector<std::pair<u16, int>>{});
+    marks_on_ = on;
+    marks_learn_ = lv;
+    marks_style_ = sv;
+    marks_app_ = app_;
+}
+
 void Composer::sync_user_dict() {
+    sync_personal();
     if (!dict_ || !conv_) return;
     dict_->refresh();
     const uint64_t lv = learning_ && !options.private_mode ? learning_->version() : 0;
@@ -1482,6 +1505,9 @@ void Composer::commit_text(const u16& t0) {
     if (!t.empty() && !kana_.empty() && t != kana_) last_commit_ = {t, frozen_reading() + kana_};
     else last_commit_ = {};
     history_ = tail(history_ + t, CTX_MAX);
+    // M5: 確定した文の、かなでも漢字でも書ける語の書き方を数える (読みの網の上でたどって語を決める)
+    if (style_ && conv_ && options.personal && !options.private_mode && !t.empty() && !kana_.empty() && conv_->personal())
+        for (auto& w : conv_->path_variants(frozen_reading() + kana_, t)) style_->record(app_, w);
     if (!t.empty() && !kana_.empty() && !options.private_mode) {   // 再変換のための (表記, 読み)
         recent_.push_back({t, frozen_reading() + kana_});
         if (recent_.size() > 200) recent_.erase(recent_.begin());
@@ -1717,6 +1743,11 @@ void Composer::rebuild_view() {
                         }
             }
         }
+    }
+    if (state_ != State::Idle && (!kana_.empty() || !romaji_.pending().empty())) {
+        // 打った綴りの帯 (入力中はいつも)。途中を直して鍵の列が分からなくなったら読みを出す
+        v.typed = raw_valid_ && !raw_.empty() ? raw_ : kana_ + romaji_.pending();
+        v.typed_fixed = live_shown() && !typo_top_.empty() && live_top_ == typo_top_;
     }
     view_ = std::move(v);
 }

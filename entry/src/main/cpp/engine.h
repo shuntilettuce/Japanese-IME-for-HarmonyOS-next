@@ -74,6 +74,18 @@ KKC_API int kkc_last_segment_pos(kkc_engine* e, int32_t* lids, int32_t* rids, in
 // (例: 登録語 ぐぐら/ググら の代表に はしら/走ら)。コストは代表語より bonus だけ下げる (選ばれやすくする)。
 // 代表語が辞書に無ければ足さずに 0 を返す。kkc_convert と同じスレッドで呼ぶ
 KKC_API void kkc_user_clear(kkc_engine* e);
+// M5 の個人化 (版 6 のモデルのとき効く)。書き方の対の表 (UTF-16 の TSV: かな 	 漢字 	 見出し 	 種類)。返り値は表記の数
+KKC_API int kkc_set_variants(kkc_engine* e, const uint16_t* tsv, int n);
+// モデルが M5 の個人化 (書き方の印) を知っているか
+KKC_API int kkc_personal(kkc_engine* e);
+// 確定した文を読みの網の上でたどり、通った語のうち書き方の対の表にある表記を 0 区切りで out に (書き方の記録に数える語)
+KKC_API int kkc_path_variants(kkc_engine* e, const uint16_t* reading, int nr, const uint16_t* text, int nt, uint16_t* out, int cap);
+// 表記が書き方の対の表にあれば out3 = (見出しの番号, 種類, 漢字か) で 1、無ければ 0
+KKC_API int kkc_variant_info(kkc_engine* e, const uint16_t* s, int n, int32_t* out3);
+// 表記ごとの使う人の印 (1〜24 = 回数の段階 × 時期。表記を 0 区切りで並べたもの と それぞれの印)
+KKC_API void kkc_set_marks(kkc_engine* e, const uint16_t* surfs, int n, const int32_t* marks, int nm);
+// 書き方の記録: fam = (見出しの番号, 漢字か, 回数) × nf、cls = 種類 0〜7 ごとの (かな, 漢字) の回数 (16 個)
+KKC_API void kkc_set_style(kkc_engine* e, const int32_t* fam, int nf, const int32_t* cls);
 // kkc_user_add_like と同じ。flags & 1 = 読み全体が一致したときだけ置く (短縮よみ)
 KKC_API int kkc_user_add_like2(kkc_engine* e, const uint16_t* r, int nr, const uint16_t* s, int ns, const uint16_t* tr, int ntr,
                                const uint16_t* ts, int nts, int bonus, int flags);

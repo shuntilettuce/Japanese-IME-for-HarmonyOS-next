@@ -294,6 +294,7 @@ STDMETHODIMP TextService::Deactivate() {
     if (tm_) remember_app_open(is_open());   // ソフトの終了・IME の切り替え: このソフトでの状態を覚える (次に起動したとき戻す)
     finish_composition();
     cand_.destroy();
+    strip_.destroy();
     if (langbar_) {
         ComPtr<ITfLangBarItemMgr> lbm;
         if (tm_ && SUCCEEDED(tm_->QueryInterface(IID_PPV_ARGS(&lbm)))) lbm->RemoveItem(langbar_);
@@ -440,12 +441,14 @@ void TextService::apply_settings() {
     c.use_model(s.model);   // 変換モデルを替えた (同じなら何もしない)
     c.conv.set_suggest(true);   // 提案は候補に混ぜて種類を添える (Composer)。分けて出す設定は廃止 (ユーザー 2026-10-23「統合の方がわかりやすい」)
     c.conv.set_latin(s.latin_auto);
+    c.conv.set_typo(s.typo_fix);
     if (composer_) {
         composer_->options.live = s.live;
         composer_->options.live_commit = s.live_commit;
         composer_->options.live_display = s.live_display;
         composer_->options.cand_tree = s.cand_tree;
         composer_->options.space_literal = s.space_literal;
+        composer_->options.personal = s.personal;
         composer_->options.caps_alpha = s.caps_alpha;
         composer_->options.space_fullwidth = s.space_fullwidth;
         composer_->options.punct = s.punct;
@@ -480,6 +483,7 @@ void TextService::apply_settings() {
         }
     }
     cand_.theme = s.theme;
+    strip_.theme = s.theme;
 }
 
 bool TextService::to_key_event(WPARAM vk, LPARAM lp, KeyEvent& ev) {
@@ -579,6 +583,8 @@ bool TextService::ensure_composer() {
     if (!tm_) return false;
     Core& c = core();
     composer_ = std::make_unique<Composer>(c.conv.ok() ? &c.conv : nullptr, &c.learning, &c.dict);
+    composer_->set_style_log(&c.style);
+    composer_->set_app(to_utf8(u16(reinterpret_cast<const char16_t*>(app_name().c_str()))));
     composer_->flow = &c.flow;
     composer_->set_context_provider([this] { return left_ctx_; });
     if (INPUT_LOG_ENABLED) {   // デバッグ用のビルドだけ (リリース用では INPUT_LOG_ENABLED が false で、書き出す関数も空)
@@ -1025,6 +1031,7 @@ void TextService::apply(TfEditCookie ec, ITfContext* ctx) {
                 FAILED(cc->StartComposition(ec, r.Get(), static_cast<ITfCompositionSink*>(this), &comp_)) || !comp_) {
                 comp_ = nullptr;
                 cand_.hide();
+                strip_.hide();
                 return;
             }
             comp_ctx_ = ctx;
@@ -1073,8 +1080,30 @@ void TextService::place_fallback(bool ok, RECT& rc, HWND hwnd) {
     }
 }
 
+// 打った綴りの帯を入力中の字の頭の上に (入力中はいつも出す)
+void TextService::update_strip(TfEditCookie ec, ITfContext* ctx, const View& v) {
+    if (!comp_ || v.typed.empty()) { strip_.hide(); return; }
+    ComPtr<ITfContextView> view;
+    ComPtr<ITfRange> r, a;
+    RECT rc = {};
+    BOOL clipped = FALSE;
+    HWND hwnd = nullptr;
+    bool ok = SUCCEEDED(ctx->GetActiveView(&view)) && SUCCEEDED(comp_->GetRange(&r)) && SUCCEEDED(r->Clone(&a));
+    if (ok) {
+        LONG moved = 0;
+        a->Collapse(ec, TF_ANCHOR_START);
+        a->ShiftEnd(ec, 1, &moved, nullptr);
+        ok = view->GetTextExt(ec, a.Get(), &rc, &clipped) == S_OK && (rc.right > rc.left || rc.bottom > rc.top);
+        view->GetWnd(&hwnd);
+    }
+    if (!hwnd) hwnd = GetFocus();
+    place_fallback(ok, rc, hwnd);
+    strip_.show(v.typed, v.typed_fixed, rc, hwnd);
+}
+
 void TextService::update_candidates(TfEditCookie ec, ITfContext* ctx, const View& v) {
     // 確定した後の文の流れの続き (お疲れ様です -> 。 -> 本日の進捗報告です。): カーソルの所に小さく。Tab かクリックで入れる
+    if (!comp_) strip_.hide();
     if (!comp_ && !v.post.empty()) {
         ComPtr<ITfContextView> view;
         RECT rc = {};
@@ -1097,6 +1126,7 @@ void TextService::update_candidates(TfEditCookie ec, ITfContext* ctx, const View
         return;
     }
     cand_.label.clear();
+    update_strip(ec, ctx, v);
     if (!comp_ || ((!v.cand_open || v.cands.empty()) && v.sugg.empty() && v.tree.empty())) { cand_.hide(); return; }
     // 候補の木があるときは、木の頭を入力中の文字の頭にそろえる (窓を文字の頭の下に出す)
     const int at = v.tree.empty() ? v.anchor : 0;
@@ -1123,6 +1153,7 @@ void TextService::update_candidates(TfEditCookie ec, ITfContext* ctx, const View
 void TextService::finish_composition() {
     if (!composer_ || !composer_->composing() || !comp_ctx_) {
         cand_.hide();
+        strip_.hide();
         return;
     }
     ComPtr<ITfContext> keep(comp_ctx_);
@@ -1171,6 +1202,7 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie, ITfComposition* 
     }
     if (composer_) composer_->cancel();
     cand_.hide();
+    strip_.hide();
     return S_OK;
 }
 
@@ -1208,6 +1240,7 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr*, ITfDocumentMgr*) {
     // 別の入力欄に移った: 入力中のものは確定し、文脈の代わりに覚えていた文を忘れる
     finish_composition();
     cand_.hide();
+    strip_.hide();
     if (composer_) composer_->reset_history();
     return S_OK;
 }

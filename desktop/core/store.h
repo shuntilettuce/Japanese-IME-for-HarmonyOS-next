@@ -36,6 +36,9 @@ public:
     uint64_t version() { refresh(); return version_; }   // 覚えた中身が変わるたびに増える
     void clear();
 
+    // M5 の「使う人の印」: 表記ごとの (回数の段階 1〜6 × 時期 0〜3) を 1 + (c-1)*4 + r にしたもの (学習の網 kkcnative2 と同じ)。
+    // 表記は文節の末尾の同じかな (を・が) を外した自立語 (なにを → 何を は 何)。回数が 0 以下 (候補に出さない) の表記は入れない
+    std::vector<std::pair<u16, int>> marks();
     // その読みを最後に選んだ日 (1970-01-01 からの日数。分からなければ 0)。M5 の「使う人の印」の時期に使う
     int last_day(const u16& reading);
     static int today();
@@ -57,6 +60,28 @@ private:
     std::filesystem::file_time_type stamp_{};
     bool loaded_ = false;
     std::vector<Entry> entries_;
+    uint64_t version_ = 0;
+};
+
+// M5 の書き方の記録 (style.json)。かなでも漢字でも書ける語 (書き方の対の表にある表記) を、確定したアプリごとに数える。
+// 変換では、このアプリの記録 (少なければ全部のアプリの合計) から「同じ語の印」と「書き方の種類の印」を作る
+class StyleLog {
+public:
+    explicit StyleLog(std::filesystem::path file) : file_(std::move(file)) {}
+    void record(const std::string& app, const u16& surface);
+    // そのアプリの (表記, 回数)。そのアプリの記録が min_app 回未満なら、全部のアプリの合計
+    std::vector<std::pair<u16, int>> counts(const std::string& app, int min_app = 30);
+    uint64_t version() { refresh(); return version_; }
+    void clear();
+    static constexpr size_t MAX_APPS = 64, MAX_SURFACES = 20000;
+
+private:
+    void refresh();
+    void save();
+    std::filesystem::path file_;
+    std::filesystem::file_time_type stamp_{};
+    bool loaded_ = false;
+    std::unordered_map<std::string, std::unordered_map<u16, int>> apps_;
     uint64_t version_ = 0;
 };
 
