@@ -1098,7 +1098,7 @@ void TextService::update_strip(TfEditCookie ec, ITfContext* ctx, const View& v) 
     }
     if (!hwnd) hwnd = GetFocus();
     place_fallback(ok, rc, hwnd);
-    strip_.show(v.typed, v.typed_fixed, rc, hwnd);
+    strip_.show(v.typed, v.typed_fixed, v.typed_mark, rc, hwnd);
 }
 
 void TextService::update_candidates(TfEditCookie ec, ITfContext* ctx, const View& v) {

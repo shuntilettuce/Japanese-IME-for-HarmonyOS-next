@@ -775,6 +775,8 @@ void Composer::update_live() {
     }
     if (pre_r > 0) {
         Conversion t = conv_->convert(conv_ctx() + pre_s, kana_.substr(pre_r), kCandidates);
+        typo_spans_.clear();
+        for (auto& sp : conv_->typo_spans()) typo_spans_.push_back({sp.first + int(pre_r), sp.second + int(pre_r)});
         for (auto& x : t.cands) c.cands.push_back(pre_s + x);
         c.words = pre_w;
         c.words.insert(c.words.end(), t.words.begin(), t.words.end());
@@ -783,6 +785,7 @@ void Composer::update_live() {
     } else {
         prime_keys(kana_);
         c = conv_->convert(conv_ctx(), kana_, kCandidates);
+        typo_spans_ = conv_->typo_spans();
     }
     live_words_ = c.words;
     if (options.live_commit && caret_ == kana_.size() && !alpha_run_ && live_commit(c)) {
@@ -1748,6 +1751,21 @@ void Composer::rebuild_view() {
         // 打った綴りの帯 (入力中はいつも)。途中を直して鍵の列が分からなくなったら読みを出す
         v.typed = raw_valid_ && !raw_.empty() ? raw_ : kana_ + romaji_.pending();
         v.typed_fixed = live_shown() && !typo_top_.empty() && live_top_ == typo_top_;
+        // 直した鍵: 直した所の読みの区間を、打った鍵の位置に戻す (鍵から読みを作り直した対応で。prime_keys と同じ)
+        if (v.typed_fixed && raw_valid_ && v.typed == raw_ && !typo_spans_.empty()) {
+            u16 sim;
+            std::vector<int32_t> span;
+            simulate_raw(sim, span);
+            if (sim.size() >= kana_.size() && sim.compare(sim.size() - kana_.size(), kana_.size(), kana_) == 0) {
+                const size_t off = sim.size() - kana_.size();
+                v.typed_mark.assign(v.typed.size(), false);
+                for (auto& [a, b] : typo_spans_) {
+                    if (a < 0 || b <= a || size_t(b) > kana_.size()) continue;
+                    const int ks = off + size_t(a) == 0 ? 0 : span[off + size_t(a) - 1], ke = span[off + size_t(b) - 1];
+                    for (int k = ks; k < ke && size_t(k) < v.typed_mark.size(); k++) v.typed_mark[size_t(k)] = true;
+                }
+            }
+        }
     }
     view_ = std::move(v);
 }

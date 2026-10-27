@@ -48,6 +48,7 @@ struct View {
     // 打った綴り (入力中はいつも。打った鍵の列が分からなくなったら読み)。typed_fixed = 打ち間違いを直した変換を見せている
     u16 typed;
     bool typed_fixed = false;
+    std::vector<bool> typed_mark;   // typed の字ごとに、打ち間違いの直しで直した鍵か
     int caret = 0;
     int anchor = 0;               // 候補の窓をこの字の下に出す
     bool cand_open = false;
@@ -250,6 +251,7 @@ private:
     std::vector<u16> live_sugg_;          // 提案 (Conversion::sugg。打っている間の変換のもの)
     std::vector<int> live_sugg_kinds_;
     u16 typo_top_;
+    std::vector<std::pair<int, int>> typo_spans_;   // 直した所の読みの区間 (kana_ の位置。打った綴りの帯で直した鍵だけ色を変える)
     std::vector<u16> live_pred_;          // 打っている間の候補に足した予測 (読みの続く語)。Tab はここから選ぶ
     std::vector<u16> after_emoji_;        // 1 位の文の語に当たる絵文字・顔文字 (確定の後の続き Tab の窓に)                        // 1 位にした打ち間違いの直し (“ ” で囲んで見せる)
     std::vector<u16> sugg_typo_;          // そのうち打ち間違いの直し (“ ” で囲んで見せる)

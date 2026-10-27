@@ -69,6 +69,8 @@ public:
     void set_marks(const std::vector<std::pair<u16, int>>& marks);
     void set_style(const std::vector<std::pair<u16, int>>& counts);
     bool is_variant(const u16& surface) const;
+    // 直前の変換で、打ち間違いの直しの道の直した所 (読みの区間の (始め, 終わり))
+    std::vector<std::pair<int, int>> typo_spans() const;
     // 確定した文 (読み, 表記) の中の、書き方の対の表にある語 (書き方の記録に数える)
     std::vector<u16> path_variants(const u16& reading, const u16& text) const;
     u16 latin_word(const u16& key) const;   // 綴り (小文字) の辞書の英字の語の表記 (無ければ空)

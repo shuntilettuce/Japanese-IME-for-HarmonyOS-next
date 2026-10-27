@@ -333,6 +333,15 @@ void Converter::set_style(const std::vector<std::pair<u16, int>>& counts) {
     kkc_set_style(e_, f.data(), int(fam.size()), cls);
 }
 
+std::vector<std::pair<int, int>> Converter::typo_spans() const {
+    std::vector<std::pair<int, int>> out;
+    if (!e_) return out;
+    int32_t buf[64];
+    const int n = kkc_typo_spans(e_, buf, 64);
+    for (int i = 0; i < n; i++) out.push_back({buf[2 * i], buf[2 * i + 1]});
+    return out;
+}
+
 bool Converter::is_variant(const u16& surface) const {
     int32_t info[3];
     return e_ && !surface.empty() && kkc_variant_info(e_, p16(surface), int(surface.size()), info);

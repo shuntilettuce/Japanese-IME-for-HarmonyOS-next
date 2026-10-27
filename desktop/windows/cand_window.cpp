@@ -864,7 +864,7 @@ LRESULT CALLBACK KeyStrip::proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefWindowProcW(h, m, w, l);
 }
 
-void KeyStrip::show(const u16& typed, bool fixed, const RECT& anchor, HWND owner) {
+void KeyStrip::show(const u16& typed, bool fixed, const std::vector<bool>& mark, const RECT& anchor, HWND owner) {
     if (typed.empty()) { hide(); return; }
     if (!hwnd_) {
         static bool reg = false;
@@ -890,6 +890,7 @@ void KeyStrip::show(const u16& typed, bool fixed, const RECT& anchor, HWND owner
     }
     text_ = typed;
     fixed_ = fixed;
+    mark_ = mark;
     HDC dc = GetDC(hwnd_);
     HGDIOBJ old = SelectObject(dc, font_);
     SIZE sz = {};
@@ -917,9 +918,23 @@ void KeyStrip::paint(HDC dc) {
     DeleteObject(br);
     HGDIOBJ old = SelectObject(dc, font_);
     SetBkMode(dc, TRANSPARENT);
-    SetTextColor(dc, fixed_ ? RGB(230, 90, 30) : c.sub);   // 直しの色は入力中の字の波線と同じ
-    RECT t = r;
-    DrawTextW(dc, W(text_), int(text_.size()), &t, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+    // 直した鍵だけ赤 (直した所が分からなければ、直したときは全部を直しの色に)。ほかは薄い字
+    const bool any = std::find(mark_.begin(), mark_.end(), true) != mark_.end();
+    TEXTMETRICW tm = {};
+    GetTextMetricsW(dc, &tm);
+    int x = MulDiv(5, int(dpi_), 96);
+    const int y = (h_ - tm.tmHeight) / 2;
+    for (size_t i = 0; i < text_.size();) {
+        const bool m = i < mark_.size() && mark_[i];
+        size_t j = i + 1;
+        while (j < text_.size() && (j < mark_.size() && mark_[j]) == m) j++;
+        SetTextColor(dc, m ? RGB(220, 40, 40) : (fixed_ && !any) ? RGB(230, 90, 30) : c.sub);
+        TextOutW(dc, x, y, W(text_) + i, int(j - i));
+        SIZE sz = {};
+        GetTextExtentPoint32W(dc, W(text_) + i, int(j - i), &sz);
+        x += sz.cx;
+        i = j;
+    }
     SelectObject(dc, old);
 }
 

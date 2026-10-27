@@ -78,6 +78,8 @@ KKC_API void kkc_user_clear(kkc_engine* e);
 KKC_API int kkc_set_variants(kkc_engine* e, const uint16_t* tsv, int n);
 // モデルが M5 の個人化 (書き方の印) を知っているか
 KKC_API int kkc_personal(kkc_engine* e);
+// 直前の変換で、打ち間違いの直しの道の直した辺の読みの区間 (始め, 終わり) × 返り値の数
+KKC_API int kkc_typo_spans(kkc_engine* e, int32_t* out, int cap);
 // 確定した文を読みの網の上でたどり、通った語のうち書き方の対の表にある表記を 0 区切りで out に (書き方の記録に数える語)
 KKC_API int kkc_path_variants(kkc_engine* e, const uint16_t* reading, int nr, const uint16_t* text, int nt, uint16_t* out, int cap);
 // 表記が書き方の対の表にあれば out3 = (見出しの番号, 種類, 漢字か) で 1、無ければ 0

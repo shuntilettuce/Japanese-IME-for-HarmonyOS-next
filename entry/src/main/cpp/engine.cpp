@@ -1939,6 +1939,7 @@ struct kkc_engine {
     // 端末側が調べるので切る (Android 15 から AOSP に Noto Serif Hentaigana が入り、変体仮名も出る端末がある)
     int char_filter = 7;   // 1 = 変体仮名・かなの拡張、2 = ヒエログリフ、4 = 麻雀牌・ドミノ・トランプ
     std::vector<std::pair<int, ustr>> suggest;   // (種類 KKC_SUGGEST_*, 表記)
+    std::vector<int> typo_spans;   // 直前の変換の打ち間違いの直しの道で、直した辺の読みの区間 (始め, 終わり) の並び (kkc_typo_spans)
     // 語の k は文脈に依らないので、打鍵をまたいで取っておく (表記+種別 -> K の行)。多くなったら捨てる
     std::unordered_map<ustr, int> kcache;
     std::vector<float> K;
@@ -2930,6 +2931,13 @@ static void personalize(kkc_engine* e, std::vector<Edge>& E) {
     }
 }
 
+KKC_API int kkc_typo_spans(kkc_engine* e, int32_t* out, int cap) {
+    if (!e) return 0;
+    int n = 0;
+    for (int v : e->typo_spans) { if (n >= cap) break; out[n++] = v; }
+    return n / 2;
+}
+
 KKC_API int kkc_personal(kkc_engine* e) { return e && e->m.n_style > 0 ? 1 : 0; }
 
 // 確定した文 text を読み reading の網の上でたどり (学習の網の正解の経路と同じ決め方)、通った語のうち書き方の対の表にある表記を
@@ -3085,6 +3093,7 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
     e->times[0] = ms_since(t0);
     std::vector<ustr> res;
     e->suggest.clear();
+    e->typo_spans.clear();
     e->last_u.clear();
     e->last_segs.clear();
     tl_paths.clear();
@@ -3164,7 +3173,20 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
             // 提案: 打ち間違いの辺を使ったいちばんよい変換を別に出し、候補は辺を使わない (打ったとおりの) 変換だけにする
             std::vector<ustr> ty;
             double tyc[2] = {0, 0};
-            nbest(e->lex, E, n, e->last_u.data(), M.beta, M.gamma, 1, 1, ty, nullptr, tyc);
+            std::vector<SegInfo> tsegs;
+            nbest(e->lex, E, n, e->last_u.data(), M.beta, M.gamma, 1, 1, ty, &tsegs, tyc);
+            // 直した辺の読みの区間 (打った綴りの帯で、直した鍵だけ色を変えるため)
+            if (!ty.empty()) {
+                size_t ci = 0;
+                int s0 = 0;
+                for (auto& sg : tsegs) {
+                    ustr sf;
+                    for (int u16n = 0; ci < ty[0].size() && u16n < sg.l16; ci++) { sf.push_back(ty[0][ci]); u16n += ty[0][ci] > 0xFFFF ? 2 : 1; }
+                    for (const Edge& ed : E)
+                        if (ed.kind == K_TYPO && ed.s == s0 && ed.e == sg.e && ed.surf == sf) { e->typo_spans.push_back(s0); e->typo_spans.push_back(sg.e); break; }
+                    s0 = sg.e;
+                }
+            }
             std::vector<float> lit = e->last_u;
             for (size_t i = 0; i < E.size(); i++)
                 if (E[i].kind == K_TYPO) lit[i] = -1e4f;

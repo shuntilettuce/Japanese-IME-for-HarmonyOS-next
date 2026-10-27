@@ -87,7 +87,8 @@ private:
 class KeyStrip {
 public:
     ~KeyStrip();
-    void show(const u16& typed, bool fixed, const RECT& anchor, HWND owner);
+    // mark = 字ごとに、打ち間違いの直しで直した鍵か (その字だけ赤で描く。空なら全部ふつうの色)
+    void show(const u16& typed, bool fixed, const std::vector<bool>& mark, const RECT& anchor, HWND owner);
     void hide();
     void destroy();
     std::string theme = "auto";
@@ -100,6 +101,7 @@ private:
     UINT dpi_ = 0;
     u16 text_;
     bool fixed_ = false;
+    std::vector<bool> mark_;
     int w_ = 0, h_ = 0;
 };
 
