@@ -2473,6 +2473,46 @@ ustr with_commas_in(const ustr& t) {
     return changed ? out : ustr();
 }
 
+// 1 位の数字を全部漢数字にした候補 (10月27日 -> 十月二十七日、2026年 -> 二千二十六年)。無ければ空。
+// 小数・カンマの数・0 で始まる数 (007)・英字に続く数 (A4)・17 桁以上は変えない (ユーザー 2026-10-27「十月二十七日 が出ない」)
+ustr kanjize(const ustr& top) {
+    static const char32_t D[] = U"〇一二三四五六七八九";
+    auto dig = [](char32_t c) { return c >= U'0' && c <= U'9' ? int(c - U'0') : c >= U'０' && c <= U'９' ? int(c - U'０') : -1; };
+    auto num = [&](const ustr& ds) {
+        if (ds == U"0") return ustr(U"〇");
+        static const char32_t* BIG[] = {U"", U"万", U"億", U"兆"};
+        ustr out;
+        const int n = int(ds.size());
+        for (int g = (n - 1) / 4; g >= 0; g--) {
+            int v = 0;
+            for (int i = std::max(0, n - 4 * (g + 1)); i < n - 4 * g; i++) v = v * 10 + dig(ds[size_t(i)]);
+            if (!v) continue;
+            const int th = v / 1000, hu = v / 100 % 10, te = v / 10 % 10, on = v % 10;
+            if (th) { if (th > 1) out += D[th]; out += U'千'; }
+            if (hu) { if (hu > 1) out += D[hu]; out += U'百'; }
+            if (te) { if (te > 1) out += D[te]; out += U'十'; }
+            if (on) out += D[on];
+            out += BIG[g];
+        }
+        return out;
+    };
+    ustr out;
+    bool changed = false;
+    for (size_t i = 0; i < top.size();) {
+        if (dig(top[i]) < 0) { out += top[i++]; continue; }
+        size_t j = i;
+        while (j < top.size() && dig(top[j]) >= 0) j++;
+        const ustr ds = top.substr(i, j - i);
+        const char32_t pv = i ? top[i - 1] : 0, nx = j < top.size() ? top[j] : 0;
+        const bool skip = ds.size() > 16 || (ds.size() > 1 && dig(ds[0]) == 0) || pv == U'.' || nx == U'.' || pv == U',' || nx == U',' ||
+                          (pv < 0x80 && std::isalpha(int(pv))) || (nx < 0x80 && std::isalpha(int(nx)));
+        if (skip) out += ds;
+        else { ustr d2; for (char32_t c : ds) d2 += char32_t(U'0' + dig(c)); out += num(d2); changed = true; }
+        i = j;
+    }
+    return changed ? out : ustr();
+}
+
 // 1 位の漢数字をアラビア数字にした候補 (二千兆円 -> 2000兆円、六月二十日 -> 6月20日)。無ければ空。
 // モデルの教材では半角数字の読みが数字のまま (かなでない) だったので、モデルは かなの数 -> アラビア数字 を学んでおらず、
 // 数をいつも漢数字にしていた。語の区切り (segs) の頭で、読みが数として読めて、表記がその漢数字で始まる所だけ変える。
@@ -3219,6 +3259,10 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
                 res.insert(res.begin() + std::min(rank, res.size()), c);
             };
             if (!ar.empty()) place(ar, 0);
+            // 数字を全部漢数字にした形 (十月二十七日) を 3 位までに。1 位が数字のときだけ (縦書き・手紙で使う)
+            const ustr kj = kanjize(res.empty() ? ustr() : res[0]);
+            if (!kj.empty() && std::find(res.begin(), res.begin() + std::min<size_t>(3, res.size()), kj) == res.begin() + std::min<size_t>(3, res.size()))
+                place(kj, std::min<size_t>(2, res.size()));
             if (!arc.empty() && std::find(res.begin(), res.begin() + std::min<size_t>(3, res.size()), arc) == res.begin() + std::min<size_t>(3, res.size()))
                 place(arc, 2);
             if (int(res.size()) > maxout) res.resize(size_t(maxout));
