@@ -39,6 +39,7 @@ struct Core {
     Learning learning;
     UserDict dict;
     SentenceFlow flow;   // 文の流れの予測 (flow.tsv)
+    StyleLog style;      // 書き方の記録 (style.json)
     Core();
     // 変換モデルを設定の値 (light・standard・high) のものにする。今と同じなら何もしない。
     // ファイルが無ければ standard (kkc_model.bin)。前のモデルはメモリから外す
@@ -88,6 +89,7 @@ public:
     Core& core();
     void applyConfig(Composer& c) const;
     void useModel();   // 設定の変換モデルにする (同じなら何もしない)
+    void checkUpdate();   // 新しい版があれば通知で知らせる (1 日 1 回まで、裏で)
 
 private:
     fcitx::Instance* instance_;

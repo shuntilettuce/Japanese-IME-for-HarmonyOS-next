@@ -13,9 +13,18 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <spawn.h>
+#include <sys/wait.h>
+
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <thread>
+
+#include "../../core/release_info.h"
+
+extern char** environ;
 
 namespace fs = std::filesystem;
 
@@ -137,7 +146,7 @@ private:
 
 }  // namespace
 
-Core::Core() : learning(user_dir() / "learned.json"), dict(user_dir() / "userdict.json") {
+Core::Core() : learning(user_dir() / "learned.json"), dict(user_dir() / "userdict.json"), style(user_dir() / "style.json") {
     flow.load(user_dir() / "flow.tsv");
     dir_ = data_dir();
     if (dir_.empty()) return;
@@ -161,6 +170,10 @@ void Core::use_model(const std::string& name) {
     model_ = model;
     model_size_ = ms;
     model_file_ = file;
+    // 書き方の対の表と文の種類 (丁寧・崩れ) の判定器 (辞書と同じフォルダ。無ければ書き方の癖は使わない・文の種類を見ずに数える)
+    std::string tsv, reg;
+    if (read_file(dir_ / "kkc_variants.tsv", tsv)) conv.set_variants(tsv);
+    if (read_file(dir_ / "kkc_register.bin", reg)) conv.set_register(reg);
 }
 
 // ---------------------------------------------------------------- 入力欄ごとの状態
@@ -169,6 +182,7 @@ ShuntiState::ShuntiState(ShuntiEngine* engine, fcitx::InputContext* ic)
     : engine_(engine), ic_(ic),
       composer_(engine->core().conv.ok() ? &engine->core().conv : nullptr, &engine->core().learning, &engine->core().dict) {
     composer_.flow = &engine->core().flow;
+    composer_.set_style_log(&engine->core().style);
     // 変換の文脈 = 入力欄のカーソルの左 (アプリが教えてくれるときだけ。教えてくれなければこれまでに確定した文を使う)
     composer_.set_context_provider([this]() -> u16 {
         if (!ic_->capabilityFlags().test(fcitx::CapabilityFlag::SurroundingText)) return {};
@@ -321,6 +335,43 @@ void ShuntiEngine::keyEvent(const fcitx::InputMethodEntry&, fcitx::KeyEvent& eve
 
 void ShuntiEngine::activate(const fcitx::InputMethodEntry&, fcitx::InputContextEvent& event) {
     state(event.inputContext())->focusIn();
+    checkUpdate();
+}
+
+// 更新の確認 (Windows 版の設定画面の「更新を確認」と同じ Release を見る)。.deb の入れ直しには管理者の権限が要るので、
+// 入れ直しはせず、新しい版と主な変更点・Release のページを通知 (notify-send) で知らせる。
+// 調べるのは 1 日 1 回まで (~/.local/share/shunti-ime/update_check.txt の時刻)。取りに行くのは curl (無ければ wget)、裏のスレッドで
+void ShuntiEngine::checkUpdate() {
+    if (getenv("SHUNTI_NO_UPDATE_CHECK")) return;
+    const fs::path stamp = user_dir() / "update_check.txt";
+    std::error_code ec;
+    const auto t = fs::last_write_time(stamp, ec);
+    if (!ec && fs::file_time_type::clock::now() - t < std::chrono::hours(24)) return;
+    write_file_atomic(stamp, "checked\n");
+    std::thread([] {
+        std::string body;
+        if (FILE* p = popen("curl -fsSL --max-time 15 'https://api.github.com/repos/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases?per_page=30' 2>/dev/null"
+                            " || wget -qO- --timeout=15 'https://api.github.com/repos/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases?per_page=30' 2>/dev/null",
+                            "r")) {
+            char buf[65536];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof buf, p)) > 0) body.append(buf, n);
+            pclose(p);
+        }
+        const ReleaseInfo r = latest_release(body, "linux-v", "fcitx5-shunti_", ".deb");
+        if (r.version.empty() || !version_older(SHUNTI_VERSION, r.version)) return;
+        std::string msg;
+        if (!r.changes.empty()) {
+            msg = "主な変更点:\n";
+            for (auto& c : r.changes) msg += "・" + c + "\n";
+            msg += "\n";
+        }
+        msg += r.page_url;
+        const std::string title = "shunti IME の新しい版 " + r.version + " があります (今は " SHUNTI_VERSION ")";
+        const char* argv[] = {"notify-send", "-a", "shunti IME", "-i", "shunti-ime", title.c_str(), msg.c_str(), nullptr};
+        pid_t pid;
+        if (posix_spawnp(&pid, "notify-send", nullptr, nullptr, const_cast<char* const*>(argv), environ) == 0) waitpid(pid, nullptr, 0);
+    }).detach();
 }
 
 void ShuntiEngine::deactivate(const fcitx::InputMethodEntry&, fcitx::InputContextEvent& event) {

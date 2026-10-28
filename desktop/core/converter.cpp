@@ -71,6 +71,10 @@ bool Converter::convert_once(const u16& ctx, const u16& kana, int max, Conversio
     int n = kkc_convert(e_, p16(ctx), int(ctx.size()), p16(kana), int(kana.size()), want, mode, buf.data(), int(buf.size()));
     if (n == -3) return false;
     if (n <= 0) return true;
+    struct Restyle {   // 返る前に 1 位の書き方を覚えた書き方に (書き方の癖。語の区切りが分かったときだけ)
+        const Converter* c; const u16& ctx; Conversion& out;
+        ~Restyle() { if (c->restyle_) c->style_.restyle(ctx, out); }
+    } restyle{this, ctx, out};
     std::vector<u16> raw;
     for (size_t i = 0, st = 0; int(raw.size()) < n && i < buf.size(); i++) {
         if (buf[i] == 0) { raw.emplace_back(reinterpret_cast<const char16_t*>(buf.data() + st), i - st); st = i + 1; }
@@ -305,6 +309,7 @@ bool Converter::personal() const { return e_ && kkc_personal(e_); }
 
 void Converter::set_variants(const std::string& tsv_utf8) {
     variants_ = tsv_utf8;
+    style_.set_variants(tsv_utf8);
     if (!e_) return;
     const u16 t = from_utf8(tsv_utf8);
     kkc_set_variants(e_, p16(t), int(t.size()));
@@ -316,21 +321,6 @@ void Converter::set_marks(const std::vector<std::pair<u16, int>>& marks) {
     std::vector<int32_t> m;
     for (auto& [s, k] : marks) { all += s; all.push_back(0); m.push_back(k); }
     kkc_set_marks(e_, p16(all), int(all.size()), m.data(), int(m.size()));
-}
-
-void Converter::set_style(const std::vector<std::pair<u16, int>>& counts) {
-    if (!e_) return;
-    std::unordered_map<int64_t, int> fam;   // 語 × 2 + 漢字か → 回数 (活用をまたいで足す)
-    int32_t cls[16] = {};
-    for (auto& [s, n] : counts) {
-        int32_t info[3];
-        if (!kkc_variant_info(e_, p16(s), int(s.size()), info)) continue;
-        fam[int64_t(info[0]) * 2 + info[2]] += n;
-        if (info[1] >= 0 && info[1] < 8) cls[info[1] * 2 + info[2]] += n;
-    }
-    std::vector<int32_t> f;
-    for (auto& [k, n] : fam) { f.push_back(int32_t(k / 2)); f.push_back(int32_t(k % 2)); f.push_back(n); }
-    kkc_set_style(e_, f.data(), int(fam.size()), cls);
 }
 
 std::vector<std::pair<int, int>> Converter::typo_spans() const {

@@ -26,7 +26,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr wchar_t VERSION[] = L"0.7.2";
+constexpr wchar_t VERSION[] = L"0.7.3";
 
 enum Id {
     ID_THEME = 100, ID_PUNCT, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
@@ -710,7 +710,10 @@ void check_update(bool interactive) {
         if (interactive) MessageBoxW(g_wnd, (std::wstring(T(39)) + VERSION + T(40)).c_str(), L"shunti IME", MB_ICONINFORMATION);
         return;
     }
-    const std::wstring q = T(41) + l.version + T(42) + VERSION + T(43) + T(44) + T(45);
+    std::wstring changes;   // 変更点の箇条書き (Release の本文から)
+    for (auto& c : l.changes) changes += L"・" + c + L"\n";
+    if (!changes.empty()) changes = T(167) + changes + L"\n";
+    const std::wstring q = T(41) + l.version + T(42) + VERSION + T(43) + changes + T(44) + T(45);
     const int a = MessageBoxW(g_wnd, q.c_str(), T(46), MB_ICONQUESTION | MB_YESNOCANCEL);
     if (a == IDNO) { ShellExecuteW(g_wnd, L"open", l.page_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL); return; }
     if (a != IDYES) return;

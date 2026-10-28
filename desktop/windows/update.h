@@ -2,6 +2,7 @@
 // GitHub の Release から Windows 版の最新 (タグ windows-vX.Y.Z) を探し、zip をダウンロードして展開し、install.ps1 で入れる
 #pragma once
 #include <string>
+#include <vector>
 
 namespace shunti::update {
 
@@ -9,6 +10,7 @@ struct Latest {
     std::wstring version;   // 0.6.1 (見つからなければ空)
     std::wstring zip_url;   // shunti-IME-windows-0.6.1.zip の URL
     std::wstring page_url;  // Release のページ (変更点)
+    std::vector<std::wstring> changes;   // 変更点の箇条書き (Release の本文の「- 」の行。太字の見出しがあればそれだけ)
     std::wstring error;     // 調べられなかった理由
 };
 

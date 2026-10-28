@@ -2,6 +2,7 @@
 // PC では IME がアプリごとのプロセスに読み込まれるので、どちらも使う前にファイルが変わっていないかを見て、
 // 変わっていれば読み直す (別のアプリで学習・登録した分を取り込む)。保存は一時ファイルに書いてから置き換える。
 #pragma once
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -9,6 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "style.h"
 #include "text.h"
 
 namespace shunti {
@@ -28,6 +30,8 @@ public:
     std::vector<u16> apply_order(const u16& reading, const std::vector<u16>& cands);
     // 予測: 読みが prefix で始まる、より長い読みで選んだ表記 (選んだ回数の多い順)
     std::vector<u16> completions(const u16& prefix, size_t max);
+    // その読みで選んだ (表記, 回数)。回数 -1 は候補に出さない表記
+    std::vector<std::pair<u16, int>> counts(const u16& reading);
     // その読みでいちばん多く選んだ表記 (無ければ空)
     u16 top(const u16& reading);
     // min 回以上選んだ (読み, 表記, 回数)。変換の網に候補として入れる (AI が文脈で選ぶ。ブログの報告 2026-10-21)
@@ -47,6 +51,7 @@ public:
     // あふれたら、回数が少なく長く使っていない読みから捨てる
     static constexpr size_t MAX_READINGS = 20000;
     static constexpr size_t MAX_SURFACES = 5;
+    static constexpr int ONCE_MIN_READING = 5;   // この字数以上の読みは 1 回選んだだけで先頭へ
 
 private:
     struct Entry { u16 reading; std::vector<std::pair<u16, int>> counts; int day = 0; };
@@ -63,17 +68,16 @@ private:
     uint64_t version_ = 0;
 };
 
-// M5 の書き方の記録 (style.json)。かなでも漢字でも書ける語 (書き方の対の表にある表記) を、確定したアプリごとに数える。
-// 変換では、このアプリの記録 (少なければ全部のアプリの合計) から「同じ語の印」と「書き方の種類の印」を作る
+// 書き方の記録 (style.json)。かなでも漢字でも書ける語 (書き方の対の表にある表記) を、確定したときの文の種類 (丁寧・崩れの重み) と一緒に数える。
+// 書き方の癖 (style.h) が使う。2026-10-28 からアプリごとには分けない (古い形はアプリの合計を読み込む)
 class StyleLog {
 public:
     explicit StyleLog(std::filesystem::path file) : file_(std::move(file)) {}
-    void record(const std::string& app, const u16& surface);
-    // そのアプリの (表記, 回数)。そのアプリの記録が min_app 回未満なら、全部のアプリの合計
-    std::vector<std::pair<u16, int>> counts(const std::string& app, int min_app = 30);
+    void record(const u16& surface, const std::array<float, 2>& w);
+    const std::unordered_map<u16, StyleModel::Count>& counts() { refresh(); return m_; }
     uint64_t version() { refresh(); return version_; }
     void clear();
-    static constexpr size_t MAX_APPS = 64, MAX_SURFACES = 20000;
+    static constexpr size_t MAX_SURFACES = 20000;
 
 private:
     void refresh();
@@ -81,7 +85,7 @@ private:
     std::filesystem::path file_;
     std::filesystem::file_time_type stamp_{};
     bool loaded_ = false;
-    std::unordered_map<std::string, std::unordered_map<u16, int>> apps_;
+    std::unordered_map<u16, StyleModel::Count> m_;
     uint64_t version_ = 0;
 };
 

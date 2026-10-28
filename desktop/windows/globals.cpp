@@ -80,9 +80,13 @@ void Core::use_model(const std::string& name) {
     if (model_) UnmapViewOfFile(model_);   // 前のモデル (エンジンは開き直したので、もう使っていない)
     model_ = model;
     model_file_ = file;
-    // M5: 書き方の対の表 (モデルが個人化を知っているときだけ使う。kkc_variants.tsv は辞書と同じフォルダ)
+    // 書き方の対の表 (kkc_variants.tsv は辞書と同じフォルダ)。書き方の癖はどのモデルでも使う
+    // (網に書き方の違う候補を足すのは、個人化を知っている M5 系のモデルのときだけ。engine.cpp の kkc_convert)
     std::string tsv;
-    if (conv.personal() && read_file(dir_ / L"kkc_variants.tsv", tsv)) conv.set_variants(tsv);
+    if (read_file(dir_ / L"kkc_variants.tsv", tsv)) conv.set_variants(tsv);
+    // 書き方の癖: 文の種類 (丁寧・崩れ) の判定器 (kkc_register.bin も同じフォルダ。無ければ文の種類を見ずに数える)
+    std::string reg;
+    if (read_file(dir_ / L"kkc_register.bin", reg)) conv.set_register(reg);
 }
 
 Core& core() {

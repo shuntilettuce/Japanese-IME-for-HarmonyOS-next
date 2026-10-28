@@ -1,5 +1,7 @@
 #include "store.h"
 
+#include <cstdio>
+
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -230,12 +232,15 @@ std::vector<u16> Learning::apply_order(const u16& reading, const std::vector<u16
     if (!e) return cands;
     auto count = [&](const u16& s) { for (auto& c : e->counts) if (c.first == s) return c.second; return 0; };
     // 2 回以上選んだ表記は先頭へ (回数の多い順)。1 回だけのものはモデルの 1 位を覆さず 2 位へ
-    // (1 回の誤操作や特別な文脈の選択が、どの文でも 1 位になり続けた: 一つの動詞にこだわる。ユーザー 2026-10-20、S8_DESIGN §10 の B)
+    // (1 回の誤操作や特別な文脈の選択が、どの文でも 1 位になり続けた: 一つの動詞にこだわる。ユーザー 2026-10-20、S8_DESIGN §10 の B)。
+    // ただし読みが長い (ONCE_MIN_READING 字以上) ときは 1 回でも先頭へ: 長い読みはいろいろな文で打たないので 1 回の選択が外れにくい
+    // (実機の入力ログ 4176 件の時刻順の評価: 2 回 79.74 (直した 53・壊した 12) → これ 79.86 (59・13)。ユーザー 2026-10-28)
+    const int need = int(reading.size()) >= ONCE_MIN_READING ? 1 : 2;
     std::vector<u16> boosted, once, rest;
     for (auto& c : cands) {
         const int n = count(c);
         if (n < 0) continue;   // 消した表記
-        (n >= 2 ? boosted : n == 1 ? once : rest).push_back(c);
+        (n >= need ? boosted : n == 1 ? once : rest).push_back(c);
     }
     std::stable_sort(boosted.begin(), boosted.end(), [&](const u16& a, const u16& b) { return count(a) > count(b); });
     if (!once.empty()) {
@@ -274,12 +279,18 @@ std::vector<u16> Learning::completions(const u16& prefix, size_t max) {
     return out;
 }
 
+std::vector<std::pair<u16, int>> Learning::counts(const u16& reading) {
+    refresh();
+    Entry* e = find(reading);
+    return e ? e->counts : std::vector<std::pair<u16, int>>{};
+}
+
 u16 Learning::top(const u16& reading) {
     refresh();
     Entry* e = find(reading);
     if (!e) return u16();
     u16 best;
-    int n = 1;   // 2 回以上選んだものだけ (1 回だけの選択で文節の変換を覆さない)
+    int n = int(reading.size()) >= ONCE_MIN_READING ? 0 : 1;   // 2 回以上選んだものだけ (1 回だけの選択で文節の変換を覆さない。長い読みは 1 回から)
     for (auto& c : e->counts) if (c.second > n) { n = c.second; best = c.first; }
     return best;
 }
@@ -430,67 +441,69 @@ void StyleLog::refresh() {
     if (loaded_ && (!exists || t == stamp_)) return;
     loaded_ = true;
     stamp_ = t;
-    apps_.clear();
+    m_.clear();
     version_++;
     std::string s;
     if (!exists || !read_file(file_, s)) return;
     json::Value v;
     if (!json::Parser(s).parse(v) || v.type != json::Value::Object) { keep_broken(file_); return; }
-    for (auto& a : v.obj) {
+    const json::Value* sv = nullptr;
+    for (auto& a : v.obj) if (a.first == "s" && a.second.type == json::Value::Object) sv = &a.second;
+    if (sv) {   // 今の形: {"v":2,"s":{表記:[丁寧の重み, 崩れの重み, 回数]}}
+        for (auto& c : sv->obj) {
+            if (c.second.type != json::Value::Array || c.second.arr.size() != 3) continue;
+            StyleModel::Count k;
+            k.w[0] = float(c.second.arr[0].num);
+            k.w[1] = float(c.second.arr[1].num);
+            k.n = int(c.second.arr[2].num);
+            if (k.n > 0) m_[from_utf8(c.first)] = k;
+        }
+        return;
+    }
+    for (auto& a : v.obj) {   // 古い形 (アプリ → 表記 → 回数): 合計を、文の種類が分からない (半々) として読む
         if (a.second.type != json::Value::Object) continue;
-        auto& m = apps_[a.first];
-        for (auto& c : a.second.obj)
-            if (c.second.type == json::Value::Number && c.second.num > 0) m[from_utf8(c.first)] = int(c.second.num);
+        for (auto& c : a.second.obj) {
+            if (c.second.type != json::Value::Number || c.second.num <= 0) continue;
+            auto& k = m_[from_utf8(c.first)];
+            k.n += int(c.second.num);
+            k.w[0] = k.w[1] = float(k.n) * 0.70710678f;
+        }
     }
 }
 
 void StyleLog::save() {
     version_++;
-    std::string o = "{";
-    bool fa = true;
-    for (auto& [app, m] : apps_) {
-        if (!fa) o += ",";
-        fa = false;
-        o += json::quote(app) + ":{";
-        bool f = true;
-        for (auto& [s, n] : m) {
-            if (!f) o += ",";
-            f = false;
-            o += json::quote(to_utf8(s)) + ":" + std::to_string(n);
-        }
-        o += "}";
+    std::string o = "{\"v\":2,\"s\":{";
+    bool f = true;
+    char buf[64];
+    for (auto& [s, k] : m_) {
+        if (!f) o += ",";
+        f = false;
+        snprintf(buf, sizeof buf, ":[%.3f,%.3f,%d]", double(k.w[0]), double(k.w[1]), k.n);
+        o += json::quote(to_utf8(s)) + buf;
     }
-    o += "}";
+    o += "}}";
     if (write_file_atomic(file_, o)) stamp_of(file_, stamp_);
 }
 
-void StyleLog::record(const std::string& app, const u16& surface) {
+void StyleLog::record(const u16& surface, const std::array<float, 2>& w) {
     if (surface.empty()) return;
     refresh();
-    if (!apps_.count(app) && apps_.size() >= MAX_APPS) return;   // アプリが多すぎるときは新しいアプリを数えない (全部の合計で効く)
-    auto& m = apps_[app];
-    if (!m.count(surface) && m.size() >= MAX_SURFACES) {   // あふれたら回数のいちばん少ない表記を捨てる
-        auto low = std::min_element(m.begin(), m.end(), [](auto& a, auto& b) { return a.second < b.second; });
-        m.erase(low);
+    if (!m_.count(surface) && m_.size() >= MAX_SURFACES) {   // あふれたら回数のいちばん少ない表記を捨てる
+        auto low = std::min_element(m_.begin(), m_.end(), [](auto& a, auto& b) { return a.second.n < b.second.n; });
+        m_.erase(low);
     }
-    m[surface] = std::min(m[surface] + 1, 1000000);
+    auto& k = m_[surface];
+    if (k.n >= 1000000) return;
+    k.w[0] += w[0];
+    k.w[1] += w[1];
+    k.n++;
     save();
-}
-
-std::vector<std::pair<u16, int>> StyleLog::counts(const std::string& app, int min_app) {
-    refresh();
-    std::unordered_map<u16, int> sum;
-    auto it = apps_.find(app);
-    int n_app = 0;
-    if (it != apps_.end()) for (auto& kv : it->second) n_app += kv.second;
-    if (it != apps_.end() && n_app >= min_app) sum = it->second;
-    else for (auto& [a, m] : apps_) for (auto& [s, n] : m) sum[s] += n;
-    return {sum.begin(), sum.end()};
 }
 
 void StyleLog::clear() {
     refresh();
-    apps_.clear();
+    m_.clear();
     save();
 }
 

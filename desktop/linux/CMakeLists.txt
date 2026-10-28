@@ -2,7 +2,7 @@
 #   cmake -B build -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release && cmake --build build -j && sudo cmake --install build
 # 辞書とモデル (entry/src/main/resources/rawfile/kkc_*.bin) は share/shunti-ime に入る (python tools/fetch_ai_assets.py で取得)。
 cmake_minimum_required(VERSION 3.16)
-project(fcitx5-shunti VERSION 0.7.2 LANGUAGES CXX)
+project(fcitx5-shunti VERSION 0.7.3 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)   # Fcitx5 5.1 の見出し (std::span など) が C++20 を要る
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -19,10 +19,11 @@ set(CORE ${ROOT}/desktop/core)
 
 add_library(shunti MODULE
   src/shunti.cpp
-  ${CORE}/text.cpp ${CORE}/romaji.cpp ${CORE}/store.cpp ${CORE}/settings.cpp ${CORE}/converter.cpp ${CORE}/composer.cpp ${CORE}/flow.cpp ${CORE}/datetime.cpp
+  ${CORE}/text.cpp ${CORE}/romaji.cpp ${CORE}/store.cpp ${CORE}/settings.cpp ${CORE}/converter.cpp ${CORE}/style.cpp ${CORE}/release_info.cpp ${CORE}/composer.cpp ${CORE}/flow.cpp ${CORE}/datetime.cpp
   ${ROOT}/entry/src/main/cpp/engine.cpp)
 target_include_directories(shunti PRIVATE ${ROOT}/entry/src/main/cpp)
 target_link_libraries(shunti PRIVATE Fcitx5::Core Threads::Threads)
+target_compile_definitions(shunti PRIVATE SHUNTI_VERSION="${PROJECT_VERSION}")   # 更新の確認で今の版と比べる
 set_target_properties(shunti PROPERTIES PREFIX "")
 
 configure_file(shunti-addon.conf.in ${CMAKE_CURRENT_BINARY_DIR}/shunti-addon.conf @ONLY)
@@ -35,7 +36,7 @@ file(READ ${ROOT}/desktop/windows/LICENSE.txt LICENSE_TEXT)
 string(REPLACE "(Windows 版)" "(Linux 版)" LICENSE_TEXT "${LICENSE_TEXT}")
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/copyright "${LICENSE_TEXT}")
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/copyright README.md DESTINATION "${CMAKE_INSTALL_DATADIR}/doc/fcitx5-shunti")
-foreach(f kkc_lex.bin kkc_model.bin kkc_variants.tsv)
+foreach(f kkc_lex.bin kkc_model.bin kkc_variants.tsv kkc_register.bin)
   if(EXISTS ${ROOT}/entry/src/main/resources/rawfile/${f})
     install(FILES ${ROOT}/entry/src/main/resources/rawfile/${f} DESTINATION "${CMAKE_INSTALL_DATADIR}/shunti-ime")
   else()

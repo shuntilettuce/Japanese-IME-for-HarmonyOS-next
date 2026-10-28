@@ -341,7 +341,7 @@ bool Composer::press_input(const KeyEvent& ev) {
             type_char(ev.ch, ev.raw);
             return true;
         case Key::Space:
-            if (options.space_literal && !ev.shift) {   // 空白を読みに入れて、変換を続ける (幅は確定・表示のときに前後で決める)
+            if (options.space_literal) {   // 空白を読みに入れて、変換を続ける (幅は確定・表示のときに前後で決める)
                 flush_romaji();
                 kana_.insert(caret_, 1, u' ');
                 caret_++;
@@ -601,6 +601,13 @@ bool Composer::press_convert(const KeyEvent& ev) {
             set_sel(ev.shift ? s.sel - 1 : s.sel + 1);
             return true;
         case Key::Space:
+            // 空白キーで変換しない (space_literal) ときは、矢印キーで入った変換中でも空白を入れる: 確定してから
+            // 何も打っていないときの空白 (前の字に合わせた幅) を入れる (ユーザー 2026-10-27)
+            if (options.space_literal) {
+                commit_all();
+                return press(ev);
+            }
+            [[fallthrough]];
         case Key::Henkan:
         case Key::Down:
             pred_tab_.clear();   // ほかのキーで候補を動かしたら、普通の並びで
@@ -1121,12 +1128,14 @@ bool Composer::unfreeze_last() {
 
 // M5: 使う人の印 (学習の記録) と書き方の記録を変換に渡す (変わったときだけ)。設定がオフ・プライベートなら空にする
 void Composer::sync_personal() {
-    if (!conv_ || !conv_->personal()) return;
+    if (!conv_) return;
     const bool on = options.personal && !options.private_mode;
     const uint64_t lv = on && learning_ ? learning_->version() : 0, sv = on && style_ ? style_->version() : 0;
     if (on == marks_on_ && lv == marks_learn_ && sv == marks_style_ && app_ == marks_app_) return;
-    conv_->set_marks(on && learning_ ? learning_->marks() : std::vector<std::pair<u16, int>>{});
-    conv_->set_style(on && style_ ? style_->counts(app_) : std::vector<std::pair<u16, int>>{});
+    // 使う人の印はそれを読む M5 系のモデルだけ。書き方の癖はどのモデルでも
+    if (conv_->personal()) conv_->set_marks(on && learning_ ? learning_->marks() : std::vector<std::pair<u16, int>>{});
+    conv_->set_style_counts(on && style_ ? style_->counts() : std::unordered_map<u16, StyleModel::Count>{});
+    conv_->set_restyle(on && style_);
     marks_on_ = on;
     marks_learn_ = lv;
     marks_style_ = sv;
@@ -1492,13 +1501,14 @@ void Composer::log(LogEvent e) {
 }
 
 // 空白キーで変換しない (space_literal) ときの空白の幅: 前後どちらかが半角の英数字・記号なら半角、両側とも全角なら全角。
-// 文の終わりの空白は前の字に合わせる
+// 文の終わりの空白は前の字に合わせる。前後に字が無い空白 (何も打っていないときの空白) は打った幅のまま
 static u16 settle_spaces(u16 s) {
     for (size_t i = 0; i < s.size(); i++) {
         if (s[i] != u' ' && s[i] != u'　') continue;
         size_t a = i, b = i + 1;
         while (a > 0 && (s[a - 1] == u' ' || s[a - 1] == u'　')) a--;
         while (b < s.size() && (s[b] == u' ' || s[b] == u'　')) b++;
+        if (a == 0 && b == s.size()) continue;
         const bool hp = a > 0 && s[a - 1] < 0x80, hn = b < s.size() && s[b] < 0x80;
         const bool fp = a > 0 && s[a - 1] >= 0x80, fn = b < s.size() && s[b] >= 0x80;
         s[i] = hp || hn ? u' ' : (fp && (fn || b == s.size())) || (a == 0 && fn) ? u'　' : u' ';
@@ -1512,9 +1522,12 @@ void Composer::commit_text(const u16& t0) {
     if (!t.empty() && !kana_.empty() && t != kana_) last_commit_ = {t, frozen_reading() + kana_};
     else last_commit_ = {};
     history_ = tail(history_ + t, CTX_MAX);
-    // M5: 確定した文の、かなでも漢字でも書ける語の書き方を数える (読みの網の上でたどって語を決める)
-    if (style_ && conv_ && options.personal && !options.private_mode && !t.empty() && !kana_.empty() && conv_->personal())
-        for (auto& w : conv_->path_variants(frozen_reading() + kana_, t)) style_->record(app_, w);
+    // M5: 確定した文の、かなでも漢字でも書ける語の書き方を、文の種類 (左の文脈から 丁寧・崩れ) と一緒に数える
+    // (読みの網の上でたどって語を決める)
+    if (style_ && conv_ && options.personal && !options.private_mode && !t.empty() && !kana_.empty()) {
+        const auto w8 = conv_->style_weight(ctx_);
+        for (auto& w : conv_->path_variants(frozen_reading() + kana_, t)) style_->record(w, w8);
+    }
     if (!t.empty() && !kana_.empty() && !options.private_mode) {   // 再変換のための (表記, 読み)
         recent_.push_back({t, frozen_reading() + kana_});
         if (recent_.size() > 200) recent_.erase(recent_.begin());

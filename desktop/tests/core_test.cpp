@@ -3,14 +3,18 @@
 // 期待と違えば FAIL を出し、終了コードを 1 にする。変換の時間も出す。
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "../core/composer.h"
+#include "../core/release_info.h"
 #include "../core/datetime.h"
 #include "../core/layout.h"
 #include "../core/pos_classes.h"
@@ -638,6 +642,18 @@ int main(int argc, char** argv) {
     expect("learned twice", c.view().text, second);
     printf("     (first was %s)\n", u8(first).c_str());
     keys(c, "{esc}{esc}");
+    {   // 読みが 5 字以上なら 1 回選んだだけで先頭へ (2026-10-28)。短い読みは今までどおり 2 位
+        Learning l(work / "learned_once.json");
+        l.clear();
+        l.record(u"しんいらい", u"新依頼");
+        l.record(u"かわ", u"革");
+        auto a = l.apply_order(u"しんいらい", {u"震為雷", u"新以来", u"新依頼"});
+        expect("learned once: long reading goes first", a[0], u"新依頼");
+        auto b = l.apply_order(u"かわ", {u"川", u"皮", u"革"});
+        expect("learned once: short reading stays 2nd", b[0] + u"," + b[1], u"川,革");
+        expect("learned once: top() long reading", l.top(u"しんいらい"), u"新依頼");
+        expect("learned once: top() short reading", l.top(u"かわ"), u"");
+    }
 
     // ---- ユーザー辞書
     std::string err = dict.add(u"しゅんてぃ", u"shunti", "noun", "");
@@ -807,10 +823,10 @@ int main(int argc, char** argv) {
         }
         keys(s, "kyouha iitenki{enter}");
         expect("space literal kana", s.take_commit(), u"今日は　いい天気");
-        keys(s, "kyouha{S-sp}");
-        if (s.view().spans.empty() || s.view().spans[0].kind != SpanKind::Focused) { printf("FAIL space literal: Shift+space does not convert\n"); failures++; }
-        else printf("ok   space literal: Shift+space converts\n");
-        keys(s, "{esc}{esc}");
+        keys(s, "kyouha{S-sp}iitenki{enter}");   // Shift+空白も空白 (この設定では変換に使わない。ユーザー 2026-10-27)
+        expect("space literal Shift+space", s.take_commit(), u"今日は　いい天気");
+        keys(s, "kyouhaiitenki{left}{sp}");   // 矢印で入った変換中の空白は、確定して空白
+        expect("space literal space after arrow", s.take_commit(), u"今日はいい天気　");
         keys(s, "kyouhaiitenki{left}");   // 矢印キーで文節に分ける変換に入る (← は最後の文節から)
         {
             const View& v = s.view();
@@ -887,6 +903,58 @@ int main(int argc, char** argv) {
             if (got.compare(0, 4, u"IMEを") == 0) printf("ok   caps alpha off convert: %s\n", u8(got).c_str());
             else { printf("FAIL caps alpha off convert: %s\n", u8(got).c_str()); failures++; }
         }
+    }
+
+    {   // 書き方の癖 (style.h): 覚えた書き方に 1 位を入れ替える。記録が少ない・半々なら入れ替えない
+        StyleModel sm;
+        sm.set_variants("できない\t出来ない\t出来る\t1\nこと\t事\t事\t2\n");
+        Conversion c;
+        c.cands = {u"今日はできないこと", u"今日は出来ないこと"};
+        c.words = {{u"きょう", u"今日"}, {u"は", u"は"}, {u"できない", u"できない"}, {u"こと", u"こと"}};
+        Conversion c0 = c;
+        expect("restyle: no record", sm.restyle(u"", c0) ? c0.cands[0] : u"(そのまま)", u"(そのまま)");
+        StyleLog log(work / "style.json");
+        log.clear();
+        const auto w = sm.weight_of(u"");
+        for (int i = 0; i < 3; i++) log.record(u"出来ない", w);
+        sm.set_counts(log.counts());
+        Conversion c1 = c;
+        sm.restyle(u"", c1);
+        expect("restyle: kanji learned", c1.cands[0], u"今日は出来ないこと");
+        expect("restyle: original kept 2nd", c1.cands.size() > 1 ? c1.cands[1] : u"", u"今日はできないこと");
+        expect("restyle: words follow", c1.words[2].surface, u"出来ない");
+        Conversion c3;   // 網が でき|ない と 2 語に分けても、つないで表を引く (S8 の網)
+        c3.cands = {u"それはできない"};
+        c3.words = {{u"それ", u"それ"}, {u"は", u"は"}, {u"でき", u"でき"}, {u"ない", u"ない"}};
+        sm.restyle(u"", c3);
+        expect("restyle: joined words", c3.cands[0], u"それは出来ない");
+        for (int i = 0; i < 3; i++) log.record(u"できない", w);
+        sm.set_counts(log.counts());
+        Conversion c2 = c;
+        expect("restyle: split record stays", sm.restyle(u"", c2) ? c2.cands[0] : u"(そのまま)", u"(そのまま)");
+        std::string bin;   // 判定器: 学習したときの確率と同じ (int8 にした分のずれは 0.03 まで)
+        std::ifstream f(fs::path(argv[1]).parent_path() / "kkc_register.bin", std::ios::binary);
+        bin.assign(std::istreambuf_iterator<char>(f), {});
+        if (!sm.set_register(bin)) { printf("FAIL register: kkc_register.bin を読めない\n"); failures++; }
+        for (auto [ctx, p1] : std::vector<std::pair<u16, float>>{{u"日本の漫画家。鹿児島県出身。", .0554f}, {u"それマジで草www", .9805f}, {u"お世話になっております。", .0113f}}) {
+            const float got = sm.register_of(ctx)[1];
+            if (std::abs(got - p1) <= .03f) printf("ok   register %s: %.3f\n", u8(ctx).c_str(), got);
+            else { printf("FAIL register %s: %.3f (Python %.3f)\n", u8(ctx).c_str(), got, p1); failures++; }
+        }
+        StyleLog again(work / "style.json");
+        expect("style log reload", again.counts().count(u"出来ない") && again.counts().at(u"出来ない").n == 3 ? u"3" : u"?", u"3");
+    }
+
+    {   // 更新の確認: Release の一覧から最新の版と主な変更点を読む (2026-10-28)
+        std::ifstream jf(fs::path(__FILE__).parent_path() / "release_test.json", std::ios::binary);
+        const std::string json((std::istreambuf_iterator<char>(jf)), std::istreambuf_iterator<char>());
+        auto join = [](const std::vector<std::string>& v) { std::string o; for (auto& x : v) o += "[" + x + "]"; return from_utf8(o); };
+        ReleaseInfo w = latest_release(json, "windows-v", "shunti-IME-windows-", ".zip");
+        expect("release: windows version", from_utf8(w.version), u"0.7.3");
+        expect("release: bullets (headings only, until next section)", join(w.changes), u"[書き方][修正]");
+        ReleaseInfo l = latest_release(json, "linux-v", "fcitx5-shunti_", ".deb");
+        expect("release: hidden list wins", join(l.changes), u"[小数]");
+        expect("release: older", version_older("0.7.2", "0.7.3") && !version_older("0.7.10", "0.7.9") ? u"ok" : u"ng", u"ok");
     }
 
     printf(failures ? "\n%d FAILED\n" : "\nall ok\n", failures);

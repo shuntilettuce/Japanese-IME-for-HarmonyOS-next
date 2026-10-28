@@ -63,11 +63,15 @@ public:
     void set_suggest(bool on);
     void set_typo(bool on);    // ローマ字の打ち間違いの直し (既定オン)
     void set_latin(bool on);   // 英字の打ち分け (既定オン)
-    // M5 の個人化 (版 6 のモデルのときだけ効く)。書き方の対の表 (TSV)・表記ごとの使う人の印・書き方の記録 (表記, 回数)
+    // M5 の個人化 (版 6 のモデルのときだけ効く)。書き方の対の表 (TSV)・表記ごとの使う人の印
     bool personal() const;
     void set_variants(const std::string& tsv_utf8);
     void set_marks(const std::vector<std::pair<u16, int>>& marks);
-    void set_style(const std::vector<std::pair<u16, int>>& counts);
+    // 書き方の癖 (style.h): 文の種類の判定器・書き方の記録。オフのときは 1 位を入れ替えない
+    bool set_register(const std::string& bin) { return style_.set_register(bin); }
+    void set_style_counts(const std::unordered_map<u16, StyleModel::Count>& counts) { style_.set_counts(counts); }
+    void set_restyle(bool on) { restyle_ = on; }
+    std::array<float, 2> style_weight(const u16& ctx) const { return style_.weight_of(ctx); }
     bool is_variant(const u16& surface) const;
     // 直前の変換で、打ち間違いの直しの道の直した所 (読みの区間の (始め, 終わり))
     std::vector<std::pair<int, int>> typo_spans() const;
@@ -90,6 +94,8 @@ private:
     bool latin_ = true;
     bool typo_ = true;
     std::string variants_;   // モデルを替えて開き直したときに入れ直す
+    StyleModel style_;
+    bool restyle_ = false;
 };
 
 // 語をつないで差別語になった候補か (HarmonyOS 版 AiConverter.SLURS と同じ)

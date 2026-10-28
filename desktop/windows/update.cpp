@@ -1,5 +1,7 @@
 #include "update.h"
 #include "strings.h"
+#include "../core/release_info.h"
+#include "../core/text.h"
 
 #include <windows.h>
 #include <winhttp.h>
@@ -70,68 +72,23 @@ bool http_get(const std::wstring& url, std::string& body, std::wstring& err) {
     return ok;
 }
 
-// JSON の中の "key":"値" を pos から探す (GitHub の返事だけを読むので、簡単な探し方で足りる)
-bool next_value(const std::string& j, const std::string& key, size_t& pos, std::string& out) {
-    const std::string k = "\"" + key + "\"";
-    size_t p = j.find(k, pos);
-    if (p == std::string::npos) return false;
-    p = j.find('"', j.find(':', p + k.size()) + 1);
-    if (p == std::string::npos) return false;
-    size_t e = j.find('"', p + 1);
-    if (e == std::string::npos) return false;
-    out = j.substr(p + 1, e - p - 1);
-    pos = e + 1;
-    return true;
-}
-
-std::vector<int> parts(const std::wstring& v) {
-    std::vector<int> o;
-    int x = 0;
-    bool any = false;
-    for (wchar_t c : v) {
-        if (c >= L'0' && c <= L'9') { x = x * 10 + (c - L'0'); any = true; }
-        else if (c == L'.') { o.push_back(x); x = 0; any = false; }
-        else break;
-    }
-    if (any) o.push_back(x);
-    return o;
-}
-
 }  // namespace
 
 bool older(const std::wstring& a, const std::wstring& b) {
-    std::vector<int> x = parts(a), y = parts(b);
-    while (x.size() < y.size()) x.push_back(0);
-    while (y.size() < x.size()) y.push_back(0);
-    return x < y;
+    auto u8 = [](const std::wstring& w) { return to_utf8(u16(w.begin(), w.end())); };
+    return version_older(u8(a), u8(b));
 }
 
 Latest find_latest() {
     Latest best;
     std::string body;
     if (!http_get(std::wstring(L"https://api.github.com") + REPO, body, best.error)) return best;
-    // Release ごとに tag_name・html_url・添付の browser_download_url が並ぶ (新しい順)
-    size_t pos = 0;
-    std::string tag;
-    while (next_value(body, "tag_name", pos, tag)) {
-        const size_t next_tag = body.find("\"tag_name\"", pos);
-        if (tag.rfind("windows-v", 0) != 0) continue;
-        const std::wstring ver = widen(tag.substr(9));
-        if (!best.version.empty() && !older(best.version, ver)) continue;
-        // この Release の範囲で zip とページを探す
-        const std::string block = body.substr(pos, next_tag == std::string::npos ? std::string::npos : next_tag - pos);
-        size_t q = 0;
-        std::string url, page;
-        std::wstring zip;
-        while (next_value(block, "browser_download_url", q, url))
-            if (url.find("shunti-IME-windows-") != std::string::npos && url.size() > 4 && url.compare(url.size() - 4, 4, ".zip") == 0) zip = widen(url);
-        page = "https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/" + tag;
-        if (zip.empty()) continue;
-        best.version = ver;
-        best.zip_url = zip;
-        best.page_url = widen(page);
-    }
-    if (best.version.empty() && best.error.empty()) best.error = T(153);
+    const ReleaseInfo r = latest_release(body, "windows-v", "shunti-IME-windows-", ".zip");
+    if (r.version.empty()) { best.error = T(153); return best; }
+    best.version = widen(r.version);
+    best.zip_url = widen(r.asset_url);
+    best.page_url = widen(r.page_url);
+    for (auto& c : r.changes) best.changes.push_back(widen(c));
     return best;
 }
 

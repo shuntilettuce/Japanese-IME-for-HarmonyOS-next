@@ -505,6 +505,25 @@ void number_edges(const Lex& L, const ustr& r, std::vector<Edge>& out) {
             }
         }
     }
+    // 小数: 数 + てん + 1 桁ずつ読んだ数 (れいてんご -> 0.5、さんてんいちよん -> 3.14) (2026-10-27)
+    static const std::pair<ustr, char32_t> fig[] = {{U"れい", U'0'}, {U"ぜろ", U'0'}, {U"いち", U'1'}, {U"に", U'2'}, {U"さん", U'3'},
+        {U"よん", U'4'}, {U"ご", U'5'}, {U"ろく", U'6'}, {U"なな", U'7'}, {U"はち", U'8'}, {U"きゅう", U'9'}};
+    for (size_t p = r.find(U"てん"); p != ustr::npos; p = r.find(U"てん", p + 1)) {
+        ustr frac; size_t e = p + 2;
+        for (bool hit = true; hit && e < r.size();) {
+            hit = false;
+            for (auto& f : fig) if (r.compare(e, f.first.size(), f.first) == 0) { frac += f.second; e += f.first.size(); hit = true; break; }
+        }
+        if (frac.empty()) continue;
+        for (size_t s = 0; s < p; s++) {
+            int64_t v = 0;
+            const ustr head = r.substr(s, p - s);
+            if (head == U"れい" || head == U"ぜろ") v = 0;
+            else if (!parse_num(head, v) || number_continues(r, s, p)) continue;
+            out.push_back({int(s), int(e), digits(v, false) + U"." + frac, L.num_arabic, L.num_arabic, 3000, K_NUM});
+            break;   // いちばん長い頭だけ
+        }
+    }
 }
 
 void special_edges(const Lex& L, const ustr& r, std::vector<Edge>& out) {
@@ -2978,7 +2997,8 @@ KKC_API int kkc_typo_spans(kkc_engine* e, int32_t* out, int cap) {
     return n / 2;
 }
 
-KKC_API int kkc_personal(kkc_engine* e) { return e && e->m.n_style > 0 ? 1 : 0; }
+// 個人化を知っているモデル (M5 の系統: 使う人の印か書き方の印の表がある)。書き方の癖はアプリが 1 位を入れ替える (style.h)
+KKC_API int kkc_personal(kkc_engine* e) { return e && (e->m.n_user > 0 || e->m.n_style > 0) ? 1 : 0; }
 
 // 確定した文 text を読み reading の網の上でたどり (学習の網の正解の経路と同じ決め方)、通った語のうち書き方の対の表にある表記を
 // 0 区切りで out に。書き方の記録 (StyleLog) に数える語を決める。経路が無ければ 0
@@ -3004,17 +3024,28 @@ KKC_API int kkc_path_variants(kkc_engine* e, const uint16_t* reading, int nr, co
             }
         }
     if (from[size_t(n) * W + size_t(G)] == -2) return 0;
-    std::vector<ustr> words;
+    std::vector<ustr> path, words;
     for (int p = n, k = G; p > 0 || k > 0;) {
         const int i = from[size_t(p) * W + size_t(k)];
         if (i < 0) break;
-        if (e->var.count(E[size_t(i)].surf)) words.push_back(E[size_t(i)].surf);
+        path.push_back(E[size_t(i)].surf);
         p = E[size_t(i)].s;
         k -= int(E[size_t(i)].surf.size());
     }
+    std::reverse(path.begin(), path.end());
+    // 網の語の区切りが表と合わないことがある (でき|ない と できない): 隣を 3 つまでつないで長い方から引く
+    for (size_t i = 0; i < path.size();) {
+        size_t len = 0;
+        for (size_t L = std::min<size_t>(3, path.size() - i); L >= 1 && !len; L--) {
+            ustr t;
+            for (size_t q = 0; q < L; q++) t += path[i + q];
+            if (e->var.count(t)) { words.push_back(t); len = L; }
+        }
+        i += len ? len : 1;
+    }
     int w = 0;
     std::vector<uint16_t> s;
-    for (auto it = words.rbegin(); it != words.rend(); ++it) {
+    for (auto it = words.begin(); it != words.end(); ++it) {
         s.clear();
         to16(*it, s);
         if (w + int(s.size()) + 1 > cap) break;
@@ -3129,7 +3160,7 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
         }
         for (auto& ed : lat) E.push_back(std::move(ed));
     }
-    if (M.n_style > 0) personalize(e, E);   // M5: 書き方の違う候補と、辺ごとの印
+    if (M.n_user > 0 || M.n_style > 0) personalize(e, E);   // M5: 書き方の違う候補と、辺ごとの印
     e->times[0] = ms_since(t0);
     std::vector<ustr> res;
     e->suggest.clear();
