@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """同梱する日本語フォント (rawfile/font/NotoSansJP-Regular.ttf) を作り直す。
 
+※ 置き換え済み (2026-10): 同梱フォントは tools/build_ud_font.py で作る (BIZ UDP ゴシック + 補いの Noto Sans JP)。ここは app_charset などの部品として残す。
+
 Noto Sans JP の可変フォントを wght=400 で切り出し、このアプリが実際に描く文字
 だけに絞って同梱する。
 

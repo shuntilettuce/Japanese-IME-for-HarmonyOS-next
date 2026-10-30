@@ -7,10 +7,14 @@ import { font, UIContext } from '@kit.ArkUI';
 // font is the only fix; there's no system font-family name to switch to
 // instead.
 //
-// The bundled file is a static wght=400 instance of Noto Sans JP, cut down to
-// the characters this app can actually display -- rebuild it with
-// tools/build_jp_font.py, which derives that set from the UI strings and the
-// dictionaries rather than guessing.
+// The UI face is BIZ UDPGothic, a universal-design font (similar shapes such as
+// シ/ツ and ば/ぱ are easier to tell apart at candidate-bar sizes). It covers
+// JIS levels 1-2 only, so the ~1,800 rarer kanji the dictionaries can show come
+// from a second file: Noto Sans JP cut down to exactly the characters BIZ
+// UDPGothic lacks. JP_FONT_FAMILY lists both, so each glyph comes from the
+// first face that has it and none falls through to the system font. Rebuild
+// both with tools/build_ud_font.py, which derives the set from the UI strings
+// and the dictionaries rather than guessing.
 //
 // The set is derived rather than hand-picked because the hand-picked one was
 // wrong: the file bundled before dropped ⏎ ⇧ ← → (this keyboard's own key
@@ -22,7 +26,9 @@ import { font, UIContext } from '@kit.ArkUI';
 //
 // Only one weight is bundled: a Bold face costs another ~4MB to buy nothing but
 // the difference from synthetic bold, which is not a price an IME should pay.
-export const JP_FONT_FAMILY = 'NotoSansJP';
+const UD_FAMILY = 'BIZUDPGothic';
+const FALLBACK_FAMILY = 'NotoSansJP';
+export const JP_FONT_FAMILY = `${UD_FAMILY},${FALLBACK_FAMILY}`;
 
 let registered = false;
 
@@ -45,14 +51,16 @@ let registered = false;
 export function registerJpFont(ui?: UIContext): void {
   if (registered) { return; }
   try {
-    const options: font.FontOptions = {
-      familyName: JP_FONT_FAMILY,
-      familySrc: $rawfile('font/NotoSansJP-Regular.ttf'),
-    };
-    if (ui !== undefined) {
-      ui.getFont().registerFont(options);
-    } else {
-      font.registerFont(options);
+    const faces: font.FontOptions[] = [
+      { familyName: UD_FAMILY, familySrc: $rawfile('font/BIZUDPGothic-Regular.ttf') },
+      { familyName: FALLBACK_FAMILY, familySrc: $rawfile('font/NotoSansJP-Fallback.ttf') },
+    ];
+    for (const options of faces) {
+      if (ui !== undefined) {
+        ui.getFont().registerFont(options);
+      } else {
+        font.registerFont(options);
+      }
     }
     registered = true;
   } catch (e) {

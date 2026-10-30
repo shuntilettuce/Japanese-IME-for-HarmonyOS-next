@@ -38,8 +38,8 @@ KKC_API int kkc_last_suggest(kkc_engine* e, uint16_t* out, int cap, int32_t* kin
 KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint16_t* kana, int nk,
                         int maxout, int use_model, uint16_t* out, int cap);
 
-// 打った鍵の列 (ローマ字の英字) を渡す。英字のまま打った語 (github) を候補にできるようにする。
-// keys = 打った鍵 (英字・記号そのまま)。span_end[i] = 読みの i 文字目が鍵の何文字目までで決まったか (単調増加)。
+// 打ったキーの並び (ローマ字の英字) を渡す。英字のまま打った語 (github) を候補にできるようにする。
+// keys = 打ったキー (英字・記号そのまま)。span_end[i] = 読みの i 文字目がキーの何文字目までで決まったか (単調増加)。
 // 直後の 1 回の kkc_convert にだけ効く (その変換の読みの長さが nk と合わなければ使わない)
 KKC_API void kkc_set_keys(kkc_engine* e, const uint16_t* keys, int nkeys, const int32_t* span_end, int nk);
 // カーソルの後ろの文 (後ろの文脈、80 字ほど)。直後の 1 回の kkc_convert にだけ効く。後ろの文脈を学んだモデル (S8 から) だけが使う

@@ -87,7 +87,7 @@ private:
 class KeyStrip {
 public:
     ~KeyStrip();
-    // mark = 字ごとに、打ち間違いの直しで直した鍵か (その字だけ赤で描く。空なら全部ふつうの色)
+    // mark = 字ごとに、打ち間違いの直しで直したキーか (その字だけ赤で描く。空なら全部ふつうの色)
     void show(const u16& typed, bool fixed, const std::vector<bool>& mark, const RECT& anchor, HWND owner);
     void hide();
     void destroy();

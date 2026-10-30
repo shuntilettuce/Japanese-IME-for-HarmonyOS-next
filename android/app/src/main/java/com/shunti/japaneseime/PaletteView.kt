@@ -32,7 +32,7 @@ class PaletteView(
     // 記号のキーは黄金長方形 (横:縦 = 1.618:1)、絵文字は 44dp (HarmonyOS 版と同じ、2026-10-14)
     private val cellH get() = if (emoji) 44 * dp else maxOf(28 * dp, width / 8f / 1.618f)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = JpFont.get(context) }
     private val rect = RectF()
 
     private val emoji get() = h.subMode == InputHandler.SubMode.EMOJI

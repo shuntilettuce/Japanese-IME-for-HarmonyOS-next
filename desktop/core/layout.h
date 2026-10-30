@@ -89,13 +89,13 @@ private:
     Kind kind_ = Kind::Letters;
     std::string name_, author_, url_;
     std::map<std::string, std::u16string> single_, shifted_;
-    std::map<std::string, std::u16string> chords_;   // 鍵は キーを名前順に + でつないだもの
+    std::map<std::string, std::u16string> chords_;   // キーは キーを名前順に + でつないだもの
     std::set<std::string> chord_keys_;               // 同時押しに出てくるキー (それ以外は待たずに出す)
     std::set<std::string> shift_keys_;               // 押している間効くシフト (表に出てくるもの)
     std::vector<Pending> pending_;
     std::set<std::string> held_;                      // いま押されているキー
     bool shift_used_ = false;                         // シフトを押している間に、ほかのキーと組んだ (離したときに単打で出さない)
-    std::map<std::string, std::u16string> prefixed_;   // 前置シフトの面: 鍵は "p1>e"
+    std::map<std::string, std::u16string> prefixed_;   // 前置シフトの面: キーは "p1>e"
     std::string prefix_;                              // 打った前置 ("p1")。空 = なし
 };
 

@@ -85,7 +85,7 @@ export class SentenceFlow {
     if (m === undefined) {
       const keys = Object.keys(SentenceFlow.table);
       if (keys.length >= MAX_KEYS) {
-        // いちばん使われていない鍵を 1 つ捨てる
+        // いちばん使われていないキーを 1 つ捨てる
         let worst = keys[0];
         let wn = Number.MAX_SAFE_INTEGER;
         for (const k of keys) {

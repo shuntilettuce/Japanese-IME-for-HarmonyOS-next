@@ -1,6 +1,7 @@
 package com.shunti.japaneseime
 
 import android.graphics.Color
+import android.os.SystemClock
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.BackgroundColorSpan
@@ -32,6 +33,7 @@ class InputHandler(
         val ai: AiConverter?
         fun render()          // 候補の帯とキーの表示を出し直す
         fun post(r: () -> Unit)   // いまの処理が終わってから r を呼ぶ
+        fun postDelayed(ms: Long, r: () -> Unit)   // ms ミリ秒の後に r を呼ぶ
     }
 
     enum class InputState { IDLE, COMPOSING, SELECTING }
@@ -74,13 +76,13 @@ class InputHandler(
     private var ctx = ""                           // 変換の文脈 (入力を始めたときのカーソルの左 + その後に確定した分)
     private val composingUndoStack = ArrayList<String>()
     private val romaji = JapaneseConverter(tables.ROMAJI_TABLE)   // QWERTY でかなを打つとき
-    // 打った鍵 (QWERTY・GODAN のローマ字、フリックのかなはその字のまま)。エンジンに渡して英字の打ち分けに使う (PC と同じ、2026-10-24)。
+    // 打ったキー (QWERTY・GODAN のローマ字、フリックのかなはその字のまま)。エンジンに渡して英字の打ち分けに使う (PC と同じ、2026-10-24)。
     // 途中を書き換えたら (消す・小゛゜) 使えない
     private val rawKeys = StringBuilder()
     private var alphaRun = false   // 大文字で始めた英字の続き (かなにしない)
     private var keysValid = true
 
-    /** 読み kana に合う打った鍵の列 (読みの字ごとの「その字までの鍵の数」つき)。読みに英字が残るときだけ (PC の prime_keys と同じ) */
+    /** 読み kana に合う打ったキーの並び (読みの字ごとの「その字までのキーの数」つき)。読みに英字が残るときだけ (PC の prime_keys と同じ) */
     fun keysFor(kana: String): Pair<String, IntArray>? {
         if (!keysValid || rawKeys.isEmpty() || kana.none { it in 'a'..'z' || it in 'A'..'Z' }) return null
         val conv = JapaneseConverter(tables.ROMAJI_TABLE)
@@ -124,7 +126,10 @@ class InputHandler(
     private var numericField = false
 
     fun onInputStart(ei: EditorInfo?, restarting: Boolean) {
-        if (restarting) return
+        if (restarting) {
+            host.post { checkAfterRestart(retry = true) }
+            return
+        }
         SentenceFlow.reset()   // 別の欄に移った: 途中の節はつながらない
         resetComposition()
         numericField = false
@@ -165,6 +170,64 @@ class InputHandler(
         if (inputState == InputState.COMPOSING) commitRaw()
     }
 
+    // ---------------------------------------------------------------- 入力欄の変化
+    private var fieldComposing = false      // 入力欄が最後に知らせた未確定の範囲があるか
+    private var fieldHadComposing = false   // 入力中に未確定の範囲を知らせてきた (知らせない入力欄では何もしないため)
+    private var fieldCheckPending = false
+    private var lastComposingEdit = 0L
+    private var composingShown = ""         // 最後に入力欄へ書いた未確定の字
+
+    /**
+     * 入力欄の未確定の範囲が変わった (onUpdateSelection)。入力中なのに範囲が無くなったら、アプリが未確定の字を
+     * 引き取った (送信ボタンで送って欄を空にしたなど) ので、入力中の状態と候補を捨てる。
+     * 自分の編集の前の通知が遅れて届くことがあるので、少し待って、範囲が無いままのときだけ捨てる
+     */
+    fun onFieldComposing(start: Int, end: Int) {
+        fieldComposing = start >= 0 && end > start
+        if (inputState == InputState.IDLE) {
+            fieldHadComposing = false
+        } else if (fieldComposing) {
+            fieldHadComposing = true
+        } else if (fieldHadComposing) {
+            scheduleFieldCheck(FIELD_CHECK_MS)
+        }
+    }
+
+    private fun scheduleFieldCheck(ms: Long) {
+        if (fieldCheckPending) return
+        fieldCheckPending = true
+        host.postDelayed(ms) {
+            fieldCheckPending = false
+            if (inputState != InputState.IDLE && fieldHadComposing && !fieldComposing) {
+                val wait = lastComposingEdit + FIELD_CHECK_MS - SystemClock.uptimeMillis()
+                if (wait > 0) {
+                    scheduleFieldCheck(wait)   // 自分が書いた直後: その通知を待つ
+                } else {
+                    dropComposing()
+                }
+            }
+        }
+    }
+
+    /**
+     * 入力のやり直し (restartInput) の後、未確定の字が欄に残っているかを読む。Discord は送信のとき未確定の範囲の通知を
+     * 送らず、やり直しだけが来る。待つと帯が残って見えるのですぐ読み、まだ残っていればもう 1 回だけ読む。読めないときは今のまま
+     */
+    private fun checkAfterRestart(retry: Boolean) {
+        if (inputState == InputState.IDLE || composingShown.isEmpty()) return
+        val before = host.ic?.getTextBeforeCursor(composingShown.length, 0)?.toString() ?: return
+        if (before != composingShown) {
+            dropComposing()
+        } else if (retry) {
+            host.postDelayed(RESTART_RETRY_MS) { checkAfterRestart(retry = false) }
+        }
+    }
+
+    private fun dropComposing() {
+        predictions = emptyList()
+        resetComposition(touchField = false)
+    }
+
     // ---------------------------------------------------------------- キー
     /** かな・数字のキー (フリックのかなキー、数字パッド) */
     fun handleDirectKana(kana: String) {
@@ -190,7 +253,7 @@ class InputHandler(
     private fun beginIfIdle() {
         if (composingText.isEmpty() && romaji.pending().isEmpty()) {
             ctx = host.ic?.getTextBeforeCursor(40, 0)?.toString() ?: ""
-            rawKeys.setLength(0)   // 新しい入力: 打った鍵も始めから
+            rawKeys.setLength(0)   // 新しい入力: 打ったキーも始めから
             keysValid = true
             alphaRun = false
             predictions = emptyList()
@@ -445,15 +508,17 @@ class InputHandler(
         continueWithTail(composingText.substring(fk.length))
     }
 
-    private fun resetComposition() {
+    /** touchField = false: 入力欄の字はアプリが片付けたので、こちらでは消し直さない (送った字やほかの字を消さないため) */
+    private fun resetComposition(touchField: Boolean = true) {
         romaji.reset()
         rawKeys.setLength(0)
         keysValid = true
         suggestions = emptyList()
-        if (composingText.isNotEmpty() || inputState != InputState.IDLE) {
+        if (touchField && (composingText.isNotEmpty() || inputState != InputState.IDLE)) {
             host.ic?.setComposingText("", 1)
             host.ic?.finishComposingText()
         }
+        fieldHadComposing = false
         composingUndoStack.clear()
         composingText = ""
         conversionEnd = 0
@@ -659,13 +724,16 @@ class InputHandler(
 
     private fun showComposing() {
         val ic = host.ic ?: return
+        lastComposingEdit = SystemClock.uptimeMillis()
         if (inputState == InputState.SELECTING) {
             val (_, tail) = splitAtConversionEnd(composingText)
-            ic.setComposingText((candidates.getOrNull(selectedCandidateIndex) ?: "") + tail, 1)
+            composingShown = (candidates.getOrNull(selectedCandidateIndex) ?: "") + tail
+            ic.setComposingText(composingShown, 1)
             return
         }
         val live = liveTop()
         val shown = (live ?: composingText) + romaji.pending()   // 打ちかけのローマ字も後ろに出す
+        composingShown = shown
         if (live == null && isRangeShrunk()) {
             val s = SpannableString(shown)
             s.setSpan(BackgroundColorSpan(RANGE_BG), 0, conversionEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -860,6 +928,8 @@ class InputHandler(
 
     companion object {
         private const val UNDO_MERGE_MS = 1500L
+        private const val FIELD_CHECK_MS = 150L   // 未確定の範囲が消えた通知を信じるまでの時間
+        private const val RESTART_RETRY_MS = 80L  // 入力のやり直しの後、欄を読み直すまでの時間
         private const val UNIT_MARKS = "℃°%％‰℉Ω㎏㎞㎝㎜㎡㎥¥￥$＄€£"
         private val PAST_FORMS = listOf("てしまいました", "ちゃいました", "てしまった", "ちゃった", "ちゃう", "ました", "ています", "ている", "てる", "ます")
         private val TAIL_PARTICLES = listOf("ですね", "ですよ", "でした", "です", "だね", "だよ", "だな", "すぎる", "すぎ", "ね", "よ", "な", "わ", "だ")

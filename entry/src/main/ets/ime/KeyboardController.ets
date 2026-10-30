@@ -1224,7 +1224,7 @@ export class InputHandler {
       .catch((_e: Error) => { this.learningDirty = true; });
   }
 
-  // 読めなかった保存 (壊れた JSON) を、次の保存で上書きする前に別の鍵へ写して残す (PC 版の .broken と同じ。2026-10-25)
+  // 読めなかった保存 (壊れた JSON) を、次の保存で上書きする前に別のキーへ写して残す (PC 版の .broken と同じ。2026-10-25)
   private static keepBroken(prefs: dataPreferences.Preferences | undefined, val: dataPreferences.ValueType): void {
     if (!prefs) { return; }
     const raw = String(val);

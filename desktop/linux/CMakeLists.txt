@@ -2,7 +2,7 @@
 #   cmake -B build -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release && cmake --build build -j && sudo cmake --install build
 # 辞書とモデル (entry/src/main/resources/rawfile/kkc_*.bin) は share/shunti-ime に入る (python tools/fetch_ai_assets.py で取得)。
 cmake_minimum_required(VERSION 3.16)
-project(fcitx5-shunti VERSION 0.7.3 LANGUAGES CXX)
+project(fcitx5-shunti VERSION 0.7.4 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)   # Fcitx5 5.1 の見出し (std::span など) が C++20 を要る
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

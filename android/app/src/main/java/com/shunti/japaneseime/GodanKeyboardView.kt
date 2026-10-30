@@ -33,8 +33,8 @@ class GodanKeyboardView(
 
     private val dp = resources.displayMetrics.density
     private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val big = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
-    private val hint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+    private val big = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = JpFont.get(context) }
+    private val hint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = JpFont.get(context) }
     private val rect = RectF()
     private val timers = Handler(Looper.getMainLooper())
     private var repeating: Runnable? = null
@@ -45,7 +45,7 @@ class GodanKeyboardView(
         fun at(d: Int) = acts.getOrNull(d) ?: acts[0]!!
     }
 
-    /** 字のキー: タップ・左・上・右・下 (r: ローマ字の鍵、p: そのまま入れる字) */
+    /** 字のキー: タップ・左・上・右・下 (r: ローマ字のキー、p: そのまま入れる字) */
     private fun k(label: String, tap: String, l: String? = null, u: String? = null, r: String? = null, d: String? = null) =
         Key(label, listOf(tap, l, u, r, d))
     private fun s(label: String, act: String, span: Int = 1, accent: Boolean = false) = Key(label, listOf(act), side = true, span = span, accent = accent)

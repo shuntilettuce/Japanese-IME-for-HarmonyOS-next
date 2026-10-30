@@ -39,32 +39,32 @@ desktop/windows の画面に出る日本語の文言。番号は strings.json �
 | 32 | 変換 | settings_app.cpp (shortcut_line・build) |
 | 33 | ひらがな | settings_app.cpp (shortcut_line) |
 | 34 | カタカナひらがな | settings_app.cpp (shortcut_line) |
-| 35 | キー割り当てを初期状態 (選んだ型) に戻します。よろしいですか? | settings_app.cpp (shortcut_reset) |
-| 36 | 書き出せませんでした (書き込めない場所かもしれません)。 | settings_app.cpp (export_words) |
+| 35 | キー割り当てを選択中の型の初期状態に戻します。よろしいですか? | settings_app.cpp (shortcut_reset) |
+| 36 | 書き出せませんでした。(書き出し先を確認してください) | settings_app.cpp (export_words) |
 | 37 | 語を書き出しました。 | settings_app.cpp (export_words) |
-| 38 | 更新を確かめられませんでした。 | settings_app.cpp (check_update) |
+| 38 | 更新確認に失敗しました。 | settings_app.cpp (check_update) |
 | 39 | 最新版です ( | settings_app.cpp (check_update) |
 | 40 | )。 | settings_app.cpp (check_update) |
-| 41 | 新しい版 | settings_app.cpp (check_update) |
-| 42 | があります (今は | settings_app.cpp (check_update) |
+| 41 | 新しいバージョン | settings_app.cpp (check_update) |
+| 42 | があります (今: | settings_app.cpp (check_update) |
 | 43 | )。 | settings_app.cpp (check_update) |
-| 44 | ダウンロードして入れますか？ 管理者の確認が出ます。… | settings_app.cpp (check_update) |
-| 45 | 「いいえ」で変更点のページを開きます。 | settings_app.cpp (check_update) |
+| 44 | インストールしますか？ 管理者の確認が出ます。インストール後、使用中アプリを開き直してください。 | settings_app.cpp (check_update) |
+| 45 | 「いいえ」を押すと最新のGitHub releaseが開きます。 | settings_app.cpp (check_update) |
 | 46 | shunti IME の更新 | settings_app.cpp (check_update) |
 | 47 | 更新できませんでした: | settings_app.cpp (check_update) |
 | 48 | shunti IME の詳細設定 | settings_app.cpp (open_advanced 題) |
-| 49 | 日本語入力時の記号 (クリックで変更) | settings_app.cpp (open_advanced) |
+| 49 | 日本語入力時の記号 クリックで変更 | settings_app.cpp (open_advanced) |
 | 50 | 入力 | settings_app.cpp (open_advanced・build) |
 | 51 | テンキー: | settings_app.cpp (open_advanced) |
-| 52 | 常に半角 | settings_app.cpp (open_advanced) |
+| 52 | 常時半角 | settings_app.cpp (open_advanced) |
 | 53 | 数字の全角/半角の設定に合わせる | settings_app.cpp (open_advanced) |
-| 54 | 常に全角 | settings_app.cpp (open_advanced) |
+| 54 | 常時全角 | settings_app.cpp (open_advanced) |
 | 55 | 候補の窓の数: | settings_app.cpp (open_advanced) |
 | 56 | 初めて使うソフト: | settings_app.cpp (open_advanced) |
 | 57 | 日本語入力をオン | settings_app.cpp (open_advanced)・langbar.cpp |
 | 58 | 日本語入力をオフ | settings_app.cpp (open_advanced)・langbar.cpp |
 | 59 | その他 | settings_app.cpp (open_advanced) |
-| 60 | プライベート (学習機能を一時的にオフ。…) | settings_app.cpp (open_advanced) |
+| 60 | 学習機能を一時的にオフ　Ctrl+Shift+F10 でも切り替え可 | settings_app.cpp (open_advanced) |
 | 61 | ユーザー辞書を書き出す… | settings_app.cpp (open_advanced) |
 | 62 | キー配列 (日本語入力がオンのとき) | settings_app.cpp (open_advanced) |
 | 63 | 親指キー: | settings_app.cpp (open_advanced) |
@@ -72,9 +72,9 @@ desktop/windows の画面に出る日本語の文言。番号は strings.json �
 | 65 | 無変換・空白 | settings_app.cpp (open_advanced) |
 | 66 | 空白・変換 | settings_app.cpp (open_advanced) |
 | 67 | 連続シフト (親指を押したまま続けて打つ) | settings_app.cpp (open_advanced) |
-| 68 | 親指キーを単独で押したら 本来のキー (空白・変換・無変換) | settings_app.cpp (open_advanced) |
+| 68 | 親指キーを単独で押すと 本来のキー (空白・変換・無変換) | settings_app.cpp (open_advanced) |
 | 69 | 押しっぱなしで繰り返す | settings_app.cpp (open_advanced) |
-| 70 | その他の配列は 設定のフォルダに layout_名前.tsv を置くと ここに出ます | settings_app.cpp (open_advanced) |
+| 70 | その他の配列は 設定のフォルダに layout_名前.tsv を置けば一覧に表示されます | settings_app.cpp (open_advanced) |
 | 71 | 閉じる | settings_app.cpp (open_advanced・build) |
 | 72 | キー割り当て | settings_app.cpp (open_advanced) |
 | 73 | 型: | settings_app.cpp (open_advanced) |
@@ -96,7 +96,7 @@ desktop/windows の画面に出る日本語の文言。番号は strings.json �
 | 89 | 日本語入力 | settings_app.cpp (open_advanced 列) |
 | 90 | オン・オフを切り替え | settings_app.cpp (open_advanced) |
 | 91 | 一覧から消す | settings_app.cpp (open_advanced) |
-| 92 | 変換で選び直して覚えた語を、すべて忘れます。よろしいですか? | settings_app.cpp (reset_learning) |
+| 92 | 変換学習をリセットします。よろしいですか? | settings_app.cpp (reset_learning) |
 | 93 | 学習をリセット | settings_app.cpp (reset_learning・build) |
 | 94 | 学習をリセットしました。 | settings_app.cpp (reset_learning) |
 | 95 | 表示 | settings_app.cpp (build) |
@@ -116,8 +116,8 @@ desktop/windows の画面に出る日本語の文言。番号は strings.json �
 | 109 | 何も入力していないときのスペースを全角にする | settings_app.cpp (build) |
 | 110 | 数字を全角で入力する | settings_app.cpp (build) |
 | 111 | 入力中も変換候補を表示する | settings_app.cpp (build) |
-| 112 | 入力中の文字も変換して表示する (ライブ変換) | settings_app.cpp (build) |
-| 113 | 変換演算を直近の文字にのみ適用 (より軽量) | settings_app.cpp (build) |
+| 112 | ライブ変換 | settings_app.cpp (build) |
+| 113 | 変換演算を直近の文字にのみ適用 (軽量化) | settings_app.cpp (build) |
 | 114 | 提案 (打ち間違いの直し・日付・絵文字など) を候補と分けて表示する | settings_app.cpp (build) |
 | 115 | 読み | settings_app.cpp (build 列) |
 | 116 | 単語 | settings_app.cpp (build 列) |

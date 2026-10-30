@@ -26,8 +26,8 @@ android {
         applicationId = "com.shunti.japaneseime.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 7
-        versionName = "1.3.2"
+        versionCode = 8
+        versionName = "1.3.3"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
     // リリースの署名: android/keystore.properties (git には入れない) があれば使う
@@ -58,7 +58,7 @@ android {
     }
     // 辞書とモデルは圧縮しない (端末でそのままメモリに写して使う)
     androidResources {
-        noCompress += listOf("bin")
+        noCompress += listOf("bin", "ttf")
     }
     packaging {
         jniLibs { useLegacyPackaging = false }
@@ -98,6 +98,8 @@ val copyAiAssets by tasks.registering(Copy::class) {
         if (missing.isNotEmpty()) throw GradleException("辞書とモデルがありません ($missing)。リポジトリの直下で python tools/fetch_ai_assets.py を実行してください")
     }
     from(rawfile) { include(names) }
+    // キーボード・候補のフォント (HarmonyOS 版と同じ 2 本。tools/build_ud_font.py で作る。JpFont.kt)
+    from(rawfile) { include("font/BIZUDPGothic-Regular.ttf", "font/NotoSansJP-Fallback.ttf") }
     // 軽量の変換モデル (設定で選ぶ。リポジトリの models/、tools/fetch_ai_assets.py で取得。無ければ標準だけ)
     from(File(repo, "models")) { include("kkc_model_light.bin") }
     into(layout.buildDirectory.dir("kkc/assets"))

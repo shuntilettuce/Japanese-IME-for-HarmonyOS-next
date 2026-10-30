@@ -17,7 +17,7 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
     fun convert(ctx: String, kana: String, max: Int = 10, model: Boolean = true, times: DoubleArray? = null): List<String> =
         convertWithSegments(ctx, kana, max, model, times).cands
 
-    /** keys = PC と同じくローマ字で打った鍵の列と、読みの字ごとの「その字までの鍵の数」(読みと同じ長さ)。次の変換 1 回だけに効く */
+    /** keys = PC と同じくローマ字で打ったキーの並びと、読みの字ごとの「その字までのキーの数」(読みと同じ長さ)。次の変換 1 回だけに効く */
     fun convertWithSegments(ctx: String, kana: String, max: Int = 10, model: Boolean = true, times: DoubleArray? = null,
                             keys: Pair<String, IntArray>? = null): Result {
         if (handle == 0L || kana.isEmpty()) return Result(emptyList(), IntArray(0), IntArray(0))

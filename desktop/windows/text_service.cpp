@@ -690,6 +690,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* ctx, WPARAM wp, LPARAM lp, BOOL*
             break;
         }
         case Action::Private: {
+            core().settings.refresh();   // 設定の画面で変えた分を古い値で書き戻さない
             Settings s = core().settings.get();
             s.private_mode = !s.private_mode;
             save_settings(user_dir() / L"settings.json", s);
@@ -799,6 +800,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* ctx, WPARAM wp, LPARAM lp, BOOL*
         }
         case Action::ModelToggle: {
             // 変換モデルを XS3 ⇔ S7 で入れ替えて保存・反映 (切り替えたら音で知らせる)
+            core().settings.refresh();   // 設定の画面で変えた分を古い値で書き戻さない
             Settings s = core().settings.get();
             s.model = s.model == "light" ? "standard" : "light";
             save_settings(user_dir() / L"settings.json", s);

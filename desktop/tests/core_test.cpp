@@ -44,7 +44,7 @@ static std::vector<char> slurp(const char* p) {
     return std::vector<char>((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
-// 打鍵の列: 普通の字はそのまま、{sp} {enter} {esc} {bs} {del} {left} {right} {up} {down} {home} {end} {tab}
+// 打鍵の並び: 普通の字はそのまま、{sp} {enter} {esc} {bs} {del} {left} {right} {up} {down} {home} {end} {tab}
 // {pgdn} {pgup} {f6}〜{f10} {henkan} {muhenkan}、Shift つきは {S-left} のように
 static void keys(Composer& c, const std::string& seq) {
     u16 s = from_utf8(seq);
@@ -605,6 +605,17 @@ int main(int argc, char** argv) {
     expect("typo t+te", c.take_commit(), u"きって");
     keys(c, "tq{bs}su{enter}");
     expect("typo t+su", c.take_commit(), u"つ");
+    // ---- 打ちかけが無ければ Backspace はかなを 1 字消す (か を消して k が残らない)
+    keys(c, "kaki{bs}{enter}");
+    expect("bs kana", c.take_commit(), u"か");
+    keys(c, "kanji{bs}{enter}");
+    expect("bs after n", c.take_commit(), u"かん");
+    keys(c, "itta{bs}{enter}");
+    expect("bs after sokuon", c.take_commit(), u"いっ");
+    keys(c, "kanji{bs}ji{enter}");
+    expect("bs then type", c.take_commit(), u"かんじ");
+    keys(c, "ka{bs}ki{enter}");
+    expect("bs to empty", c.take_commit(), u"き");
 
     // ---- 英字・数字・記号
     keys(c, "Google{enter}");
@@ -855,7 +866,7 @@ int main(int argc, char** argv) {
         if (c2.size() >= 2 && (c2[0] == u"OpenAI" || c2[1] == u"OpenAI")) printf("ok   dict latin word top 2: %s / %s\n", u8(c2[0]).c_str(), u8(c2[1]).c_str());
         else { printf("FAIL dict latin word not 2nd (%d cands)\n", int(c2.size())); failures++; }
         keys(s, "{esc}");
-        keys(s, "openainohougaii");   // 文の途中の英字の語: 鍵の列を渡して網に入れる (順位はモデル次第なので表示だけ)
+        keys(s, "openainohougaii");   // 文の途中の英字の語: キーの並びを渡して網に入れる (順位はモデル次第なので表示だけ)
         {
             int at = -1;
             const auto& c3 = s.view().cands;
@@ -865,7 +876,7 @@ int main(int argc, char** argv) {
         keys(s, "{esc}");
     }
 
-    // ---- 打ちすぎた字を消しても鍵の列を使い続ける (英字が出なくならない) / 長く打っても前の打ち間違いの直しが消えない
+    // ---- 打ちすぎた字を消してもキーの並びを使い続ける (英字が出なくならない) / 長く打っても前の打ち間違いの直しが消えない
     {
         Composer s(&conv, &learning, &dict);
         s.options.live_commit = false;

@@ -433,6 +433,12 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
         super.onFinishInputView(finishingInput)
     }
 
+    /** 入力欄の未確定の範囲が変わった (アプリの送信ボタンで欄が空になったときなど) */
+    override fun onUpdateSelection(oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int, candidatesStart: Int, candidatesEnd: Int) {
+        super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
+        input.onFieldComposing(candidatesStart, candidatesEnd)
+    }
+
     override fun onFinishInput() {
         super.onFinishInput()
         input.onInputStop()
@@ -559,6 +565,10 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
         main.post(r)
     }
 
+    override fun postDelayed(ms: Long, r: () -> Unit) {
+        main.postDelayed(r, ms)
+    }
+
     /**
      * 提案が無いときの提案の行。提案を分けて出す設定では場所を空けたまま (INVISIBLE) にする:
      * 出し入れでキーボードの高さが変わると、打っている最中にキーが上下してフリックが暴発した (ユーザー 2026-10-09)
@@ -575,6 +585,7 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
         row.removeAllViews()
         row.addView(TextView(this).apply {
             text = "提案"
+            typeface = JpFont.get(context)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             setTextColor(accent)
             setPadding((8 * dp).toInt(), 0, (6 * dp).toInt(), 0)
@@ -588,6 +599,7 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
             }
             row.addView(TextView(this).apply {
                 text = shown
+                typeface = JpFont.get(context)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
                 setTextColor(accent)
                 setPadding((10 * dp).toInt(), (2 * dp).toInt(), (10 * dp).toInt(), (2 * dp).toInt())
@@ -665,6 +677,7 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
         for ((i, c) in chips.withIndex()) {
             val tv = TextView(this).apply {
                 text = if (c.first.startsWith(CLIP_PREFIX)) clipLabel(c.first.removePrefix(CLIP_PREFIX)) else c.first
+                typeface = JpFont.get(context)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
                 setTextColor(theme.getValue(if (i == sel) "onAccent" else "textPrimary"))
                 if (i == sel) setBackgroundColor(theme.getValue("accent"))

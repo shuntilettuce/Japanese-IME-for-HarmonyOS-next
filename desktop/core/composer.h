@@ -45,10 +45,10 @@ struct Span { int start, len; SpanKind kind; };
 struct View {
     u16 text;
     std::vector<Span> spans;
-    // 打った綴り (入力中はいつも。打った鍵の列が分からなくなったら読み)。typed_fixed = 打ち間違いを直した変換を見せている
+    // 打った綴り (入力中はいつも。打ったキーの並びが分からなくなったら読み)。typed_fixed = 打ち間違いを直した変換を見せている
     u16 typed;
     bool typed_fixed = false;
-    std::vector<bool> typed_mark;   // typed の字ごとに、打ち間違いの直しで直した鍵か
+    std::vector<bool> typed_mark;   // typed の字ごとに、打ち間違いの直しで直したキーか
     int caret = 0;
     int anchor = 0;               // 候補の窓をこの字の下に出す
     bool cand_open = false;
@@ -204,7 +204,8 @@ private:
     void fork_unmerge(size_t i);   // まとめたのを元の文節に戻す
     bool has_latin_word(const u16& raw) const;
     void simulate_raw(u16& sim, std::vector<int32_t>& span) const;
-    bool undo_last_key();   // 最後に打った鍵を抜いてローマ字を打ち直す (Backspace)   // 打った鍵を Romaji に通し直した読みと字ごとの鍵の数   // 打った鍵の中に英字の語 (大文字の混ざる辞書の語・ユーザーの語) の綴りがあるか
+    bool delete_last_char();   // 読みの最後の 1 字を消してキーの並びもその字の分縮める (Backspace)
+    bool undo_last_key();   // 最後に打ったキーを抜いてローマ字を打ち直す (Backspace)   // 打ったキーを Romaji に通し直した読みと字ごとのキーの数   // 打ったキーの中に英字の語 (大文字の混ざる辞書の語・ユーザーの語) の綴りがあるか
     void follow_after(size_t i);   // 選び直した文節の後ろを、新しい左の文脈で変換し直す
     void transform(Key f);
     u16 alpha_source(const u16& reading) const;
@@ -218,7 +219,7 @@ private:
     u16 frozen_reading() const;
     u16 frozen_surface() const;
     u16 conv_ctx() const;
-    void prime_keys(const u16& reading);   // 打った鍵の列を変換に渡す (読みが打った鍵から作れるときだけ)
+    void prime_keys(const u16& reading);   // 打ったキーの並びを変換に渡す (読みが打ったキーから作れるときだけ)
     bool unfreeze_last();
     void calibrate();
     bool live_shown() const;
@@ -251,7 +252,7 @@ private:
     std::vector<u16> live_sugg_;          // 提案 (Conversion::sugg。打っている間の変換のもの)
     std::vector<int> live_sugg_kinds_;
     u16 typo_top_;
-    std::vector<std::pair<int, int>> typo_spans_;   // 直した所の読みの区間 (kana_ の位置。打った綴りの帯で直した鍵だけ色を変える)
+    std::vector<std::pair<int, int>> typo_spans_;   // 直した所の読みの区間 (kana_ の位置。打った綴りの帯で直したキーだけ色を変える)
     std::vector<u16> live_pred_;          // 打っている間の候補に足した予測 (読みの続く語)。Tab はここから選ぶ
     std::vector<u16> after_emoji_;        // 1 位の文の語に当たる絵文字・顔文字 (確定の後の続き Tab の窓に)                        // 1 位にした打ち間違いの直し (“ ” で囲んで見せる)
     std::vector<u16> sugg_typo_;          // そのうち打ち間違いの直し (“ ” で囲んで見せる)

@@ -43,7 +43,7 @@ void SentenceFlow::load(const std::filesystem::path& path) {
         st = e + 1;
         size_t t1 = line.find('\t'), t2 = t1 == std::string::npos ? t1 : line.find('\t', t1 + 1);
         if (t2 == std::string::npos) continue;
-        // 鍵・続きの中の改行は \n と書いてある (続きは句読点の 1 字か節なので実際には入らない)
+        // キー・続きの中の改行は \n と書いてある (続きは句読点の 1 字か節なので実際には入らない)
         table_[from_utf8(line.substr(0, t1))][from_utf8(line.substr(t1 + 1, t2 - t1 - 1))] = std::max(1, to_int(line.c_str() + t2 + 1));
     }
 }
@@ -119,7 +119,7 @@ void SentenceFlow::record_suggest(const u16& t) {
 void SentenceFlow::bump(const u16& key, const u16& v) {
     auto it = table_.find(key);
     if (it == table_.end()) {
-        if (table_.size() >= MAX_KEYS) {   // いちばん使われていない鍵を 1 つ捨てる
+        if (table_.size() >= MAX_KEYS) {   // いちばん使われていないキーを 1 つ捨てる
             auto worst = table_.begin();
             int wn = 1 << 30;
             for (auto i = table_.begin(); i != table_.end(); ++i) {

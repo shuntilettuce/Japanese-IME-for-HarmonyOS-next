@@ -26,7 +26,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr wchar_t VERSION[] = L"0.7.3";
+constexpr wchar_t VERSION[] = L"0.7.4";
 
 enum Id {
     ID_THEME = 100, ID_PUNCT, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
@@ -885,6 +885,8 @@ void reset_learning() {
     MessageBoxW(g_wnd, T(94), L"shunti IME", MB_ICONINFORMATION);
 }
 
+void show_settings();
+
 void build() {
     int y = 8;
     group(T(95), y, 86);
@@ -956,11 +958,17 @@ void build() {
     make(L"BUTTON", L"GitHub", BS_PUSHBUTTON | WS_TABSTOP, 308, y, 76, 25, ID_GITHUB);
     make(L"BUTTON", T(71), BS_DEFPUSHBUTTON | WS_TABSTOP, 390, y, 80, 25, IDCANCEL);
 
+    show_settings();
+    select(ID_POS, 0);
+    refresh_list();
+}
+
+// g_s を画面のチェックと選択に出す
+void show_settings() {
     g_loading = true;
     select(ID_THEME, g_s.theme == "light" ? 1 : g_s.theme == "dark" ? 2 : 0);
     select(ID_PUNCT, g_s.punct);
     select(ID_MODEL, g_s.model == "light" ? 0 : 1);
-    select(ID_POS, 0);
     check(ID_SPACE, g_s.space_fullwidth);
     check(ID_DIGITS, g_s.digits_fullwidth);
     check(ID_LIVE, g_s.live);
@@ -973,7 +981,6 @@ void build() {
     check(ID_PERSONAL, g_s.personal);
     check(ID_LIVECOMMIT, g_s.live_commit);
     g_loading = false;
-    refresh_list();
 }
 
 LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
@@ -1014,6 +1021,14 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             }
             return 0;
         }
+        case WM_ACTIVATE:
+            // 開いている間に IME 側 (内緒・モデルの切り替えのショートカット) や別の設定の画面が書いた分を読み直す。
+            // 読み直さないと、次にチェックを押したとき古い値でまとめて書き戻していた (切り替えが効かない・戻る)
+            if (LOWORD(w) != WA_INACTIVE) {
+                load_settings(g_dir / L"settings.json", g_s);
+                show_settings();
+            }
+            return DefWindowProcW(h, m, w, l);
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;

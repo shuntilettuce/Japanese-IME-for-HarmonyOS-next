@@ -84,7 +84,7 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_com_shunti_japaneseime_Engine_nat
 }
 
 // 提案 (kkc_set_suggest / kkc_last_suggest)。各要素は「種類 + \u0001 + 表記」
-// 次の変換 1 回に、PC と同じくローマ字で打った鍵の列を渡す (英字の打ち分け・ローマ字の打ち間違いの直し。2026-10-24)
+// 次の変換 1 回に、PC と同じくローマ字で打ったキーの並びを渡す (英字の打ち分け・ローマ字の打ち間違いの直し。2026-10-24)
 extern "C" JNIEXPORT void JNICALL Java_com_shunti_japaneseime_Engine_nativeSetKeys(JNIEnv* env, jclass, jlong p, jstring keys, jintArray spanEnd) {
     auto* h = reinterpret_cast<Handle*>(p);
     if (!h) return;

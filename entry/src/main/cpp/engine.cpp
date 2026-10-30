@@ -821,8 +821,8 @@ struct Head {
     }
 };
 
-// rom_in: 打った鍵の列 (PC、kkc_set_keys)。あれば読みからローマ字を作らずにこれを使う (読みに英字が残った打ち間違い
-// ありgsとう も、鍵の列 arigstou から 1 打戻せば ありがとう になる)
+// rom_in: 打ったキーの並び (PC、kkc_set_keys)。あれば読みからローマ字を作らずにこれを使う (読みに英字が残った打ち間違い
+// ありgsとう も、キーの並び arigstou から 1 打戻せば ありがとう になる)
 void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& base, const Ctx& ctx, std::vector<Edge>& out,
                const std::string* rom_in = nullptr) {
     init();
@@ -884,7 +884,7 @@ void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& ba
     std::vector<uint16_t> key;
     const int n1 = int(r.size());
     // 辞書の引きの使い回し (打ち直しの候補どうしで同じ区間を何度も引く)。値は (最初の語, 終わり)、無ければ (0, 0)
-    // 鍵は読みの 64 ビットのハッシュ (文字列を作らずに引く。かなの読みどうしの衝突は実際上起きない)
+    // キーは読みの 64 ビットのハッシュ (文字列を作らずに引く。かなの読みどうしの衝突は実際上起きない)
     std::unordered_map<uint64_t, std::pair<uint32_t, uint32_t>> memo;
     auto look = [&](const ustr& s, int a0, int a1, uint32_t& a, uint32_t& b) -> bool {
         // まず読みのブルームフィルタ (hash16 と同じハッシュ) で、辞書に無い区間を覚えずに捨てる (ほとんどの区間は無い)
@@ -892,7 +892,7 @@ void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& ba
         for (int i = a0; i < a1; i++) h = (h ^ uint64_t(s[size_t(i)])) * 1099511628211ULL;
         h ^= h >> 29;
         if (!L.maybe_hash(h)) return false;
-        h ^= uint64_t(a1 - a0) << 56;   // 覚える鍵は長さも混ぜる
+        h ^= uint64_t(a1 - a0) << 56;   // 覚えるキーは長さも混ぜる
         auto it = memo.find(h);
         if (it == memo.end()) {
             std::u16string k16(s.begin() + a0, s.begin() + a1);
@@ -1355,11 +1355,11 @@ void kanji_continuation_edges(const Lex& L, const ustr& ctx, const ustr& r, std:
 }
 
 // ---------------------------------------------------------------- 英字の辺 (ローマ字で打った英単語。K_LATIN)
-// 打った鍵の列 (kkc_set_keys) の、かなの区間 [s, e) に対応する鍵の区間 [span_start(s), span_end[e-1]) が英字だけのとき、
+// 打ったキーの並び (kkc_set_keys) の、かなの区間 [s, e) に対応するキーの区間 [span_start(s), span_end[e-1]) が英字だけのとき、
 // 小文字にして英単語の一覧 (Lex::latin_words) を引く。当たれば正しい大文字小文字の表記の辺を足す。かなにするか
 // 英字のままにするかは採点器 (モデル) が文脈で決める (K_TYPO と同じ考え方)。コストに LATIN_BIAS を上乗せして日本語寄りにする
 // user_latin: ユーザー辞書の英字の語 (小文字・空白なしの綴り -> 語。ShuntiLettuce)。空白を挟んで打った区間 (shunti lettuce) も当てる
-// ローマ字としてありえない鍵の並びがあるか (大文字、または js・ml・ck のような子音の続き)。かなだけに読める区間でも、こういう並びなら
+// ローマ字としてありえないキーの並びがあるか (大文字、または js・ml・ck のような子音の続き)。かなだけに読める区間でも、こういう並びなら
 // 英字を打ったとみなして打ったままの辺を作る (json・yaml・AzuYahi が網に入らなかった。2026-10-24)。普通のローマ字には出ないので網は重くならない
 bool unromaji(const uint16_t* k, int n) {
     auto cons = [](uint16_t c) { return c >= u'a' && c <= u'z' && c != u'a' && c != u'i' && c != u'u' && c != u'e' && c != u'o'; };
@@ -1381,7 +1381,7 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
                  const ustr& r, const std::unordered_map<std::string, LatinWord>& user_latin, std::vector<Edge>& out,
                  bool left_latin = false, bool right_latin = false) {
     const int nkeys = int(keys.size());
-    // かなの区間 [s, e) に、鍵の区間 [ks, ke) が英字だけの英単語に当たる辺を足す
+    // かなの区間 [s, e) に、キーの区間 [ks, ke) が英字だけの英単語に当たる辺を足す
     auto add = [&](int ks, int ke, int s, int e) {
         if (ke - ks < 2) {   // 1 字の語は英語の文の中の i・a だけ (前後が空白か英語の文脈。学習の網と同じ)
             if (ke - ks != 1) return;
@@ -1455,7 +1455,7 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
         // 辞書に無い英字の並び (略語・新しい語): 打ったまま (大文字小文字も打った通り) を、辞書の語より高い点で (名詞として)。
         // 大文字・頭だけ大文字も出すと、free shipping → Free Shipping のように勝手に大文字にした (2026-10-18 英字まじりベンチ)。
         // 大文字にしたい人は Shift で打つ
-        // かなだけの区間には作らない (M5 で鍵の列を常に渡すと、あらゆる区間に打ったままの辺ができて網が数倍に重くなった。2026-10-23)。
+        // かなだけの区間には作らない (M5 でキーの並びを常に渡すと、あらゆる区間に打ったままの辺ができて網が数倍に重くなった。2026-10-23)。
         // 読みに英字が残った所 (辞書に無い英字を打った: minecraft) にだけ
         if (std::all_of(r.begin() + s, r.begin() + e, is_kana) && !unromaji(keys.data() + ks, ke - ks)) return;
         ustr typed;
@@ -1467,7 +1467,7 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
         for (int e = s + 1; e <= n; e++) {
             const int ke = span_end[size_t(e - 1)];
             add(ks, ke, s, e);
-            // 読みの最後の区間は、読みにならなかった鍵 (余り、語末の子音) も含めて試す
+            // 読みの最後の区間は、読みにならなかったキー (余り、語末の子音) も含めて試す
             if (e == n && nkeys > ke) add(ks, nkeys, s, e);
         }
     }
@@ -1975,7 +1975,7 @@ struct kkc_engine {
     std::unordered_map<int64_t, int> fam;   // 語 × 2 + 漢字か → 回数
     int cls_n[8][2] = {};                   // 種類 → (かな, 漢字) の回数
     std::unordered_map<std::string, LatinWord> user_latin;   // ユーザー辞書の英字の語 (表記が英字だけ。小文字・空白なしの綴り -> 語)
-    // 打った鍵の列 (kkc_set_keys)。直後の 1 回の変換で英字の辺 (K_LATIN) を作るのに使う
+    // 打ったキーの並び (kkc_set_keys)。直後の 1 回の変換で英字の辺 (K_LATIN) を作るのに使う
     std::vector<uint16_t> keys;
     std::vector<int32_t> span_end;
     // カーソルの後ろの文 (kkc_set_right_ctx)。直後の 1 回の変換で、後ろの文脈を学んだモデル (区分 4 つ) に渡す
@@ -2450,12 +2450,12 @@ KKC_API void kkc_set_right_ctx(kkc_engine* e, const uint16_t* text, int n) {
 
 KKC_API int kkc_has_right_ctx(kkc_engine* e) { return e && e->m.n_seg > 3 ? 1 : 0; }
 
-// 打った鍵の列 (ローマ字の英字) を渡す。英字のまま打った語 (github) を候補にできるようにする。
-// keys = 打った鍵 (英字・記号そのまま)。span_end[i] = 読みの i 文字目が鍵の何文字目までで決まったか (単調増加)。
+// 打ったキーの並び (ローマ字の英字) を渡す。英字のまま打った語 (github) を候補にできるようにする。
+// keys = 打ったキー (英字・記号そのまま)。span_end[i] = 読みの i 文字目がキーの何文字目までで決まったか (単調増加)。
 // 直後の 1 回の kkc_convert にだけ効く (その変換の読みの長さが nk と合わなければ使わない)
 KKC_API void kkc_set_keys(kkc_engine* e, const uint16_t* keys, int nkeys, const int32_t* span_end, int nk) {
     if (!e) return;
-    // 区間が鍵の列からはみ出す・逆戻りするものは使わない (範囲外を読まないため)
+    // 区間がキーの並びからはみ出す・逆戻りするものは使わない (範囲外を読まないため)
     for (int i = 0; i < nk; i++)
         if (span_end[i] < (i ? span_end[i - 1] : 0) || span_end[i] > nkeys) { e->keys.clear(); e->span_end.clear(); return; }
     if (nkeys > 0) e->keys.assign(keys, keys + nkeys); else e->keys.clear();
@@ -3113,7 +3113,7 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
     auto t0 = std::chrono::steady_clock::now();
     ustr r = from16(kana, size_t(nk));
     const int n = int(r.size());
-    // 打った鍵の列 (kkc_set_keys) は直後の 1 回の変換だけに効く。ここで取り出して消す (読みの長さが合わなければ使わない)
+    // 打ったキーの並び (kkc_set_keys) は直後の 1 回の変換だけに効く。ここで取り出して消す (読みの長さが合わなければ使わない)
     std::vector<uint16_t> keys;
     std::vector<int32_t> span_end;
     if (e->lex.latin && int(e->span_end.size()) == n) {
@@ -3132,7 +3132,7 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
         auto latin_ch = [](uint16_t c) { return c == u' ' || (c < 0x80 && std::isalpha(int(c))); };
         const bool left_latin = nctx > 0 && latin_ch(ctx[nctx - 1]), right_latin = !rctx.empty() && latin_ch(rctx[0]);
         if (e->latin) latin_edges(e->lex, keys, span_end, n, r, e->user_latin, lat, left_latin, right_latin);
-        // 読みに英字が残った所 (ローマ字の打ち間違い: arigstou -> ありgsとう) は、鍵の列から 1 打戻した読みで打ち間違いの辺を作る。
+        // 読みに英字が残った所 (ローマ字の打ち間違い: arigstou -> ありgsとう) は、キーの並びから 1 打戻した読みで打ち間違いの辺を作る。
         // かなだけの区間の打ち間違いは edges() が読みから作っている
         if (e->lex.typo) {
             typo::Ctx tctx;
@@ -3246,7 +3246,7 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
             double tyc[2] = {0, 0};
             std::vector<SegInfo> tsegs;
             nbest(e->lex, E, n, e->last_u.data(), M.beta, M.gamma, 1, 1, ty, &tsegs, tyc);
-            // 直した辺の読みの区間 (打った綴りの帯で、直した鍵だけ色を変えるため)
+            // 直した辺の読みの区間 (打った綴りの帯で、直したキーだけ色を変えるため)
             if (!ty.empty()) {
                 size_t ci = 0;
                 int s0 = 0;

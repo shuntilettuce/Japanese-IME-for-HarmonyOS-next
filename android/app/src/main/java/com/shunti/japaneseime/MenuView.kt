@@ -38,7 +38,7 @@ class MenuView(context: Context, private val host: Host, private val haptic: () 
 
     private val dp = resources.displayMetrics.density
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val text = TextPaint(Paint.ANTI_ALIAS_FLAG)
+    private val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { typeface = JpFont.get(context) }
     private val rect = RectF()
     private var hits: List<Pair<RectF, () -> Unit>> = emptyList()
     private var pressed: RectF? = null

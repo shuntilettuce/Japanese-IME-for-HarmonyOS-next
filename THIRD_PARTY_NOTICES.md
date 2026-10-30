@@ -274,17 +274,36 @@ Public Domain Dataです。使用・変更・配布に関しては一切の制�
 
 Source: http://sourceforge.jp/projects/o-dic/
 
-## Noto Sans JP (bundled font: `entry/src/main/resources/rawfile/font/
-## NotoSansJP-Regular.ttf`) — SIL Open Font License 1.1
+## BIZ UDPGothic (bundled font: `entry/src/main/resources/rawfile/font/
+## BIZUDPGothic-Regular.ttf`, also in the Android APK) — SIL Open Font License 1.1
 
-The app bundles a Japanese font because HarmonyOS's own system font ships
-only Simplified/Traditional Chinese regional variants — without it,
+The keyboard and candidate text use BIZ UDPGothic, a universal-design
+Japanese font. The bundled file is a derived work: subset to the
+characters the app can display, by `tools/build_ud_font.py`. Outlines are
+unmodified.
+
+```
+Copyright 2022 The BIZ UDGothic Project Authors (https://github.com/googlefonts/morisawa-biz-ud-gothic)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+(The license text is the same as in the Noto Sans JP section below.)
+```
+
+Source: https://github.com/google/fonts —
+`ofl/bizudpgothic/BIZUDPGothic-Regular.ttf`
+
+## Noto Sans JP (bundled font: `entry/src/main/resources/rawfile/font/
+## NotoSansJP-Fallback.ttf`, also in the Android APK) — SIL Open Font License 1.1
+
+The app bundles Japanese fonts because HarmonyOS's own system font ships
+only Simplified/Traditional Chinese regional variants — without them,
 Han-unified kanji render with Chinese glyph shapes on a China-region
 device (see `entry/src/main/ets/components/JpFont.ets`).
 
-The bundled file is a derived work of Noto Sans JP: instanced from the
-variable font at `wght=400` and subset to the characters the app can
-display, by `tools/build_jp_font.py`. Outlines are unmodified.
+This file supplies only the characters BIZ UDPGothic lacks (mostly rarer
+kanji). It is a derived work of Noto Sans JP: instanced from the variable
+font at `wght=400` and subset to those characters, by
+`tools/build_ud_font.py`. Outlines are unmodified.
 
 ```
 Copyright 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name

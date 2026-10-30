@@ -30,6 +30,22 @@ Colors colors(const std::string& theme) {
 
 const wchar_t* W(const u16& s) { return reinterpret_cast<const wchar_t*>(s.c_str()); }
 
+// 候補の字: ユニバーサルデザインのフォント (BIZ UDP ゴシック。日本語の Windows 10 1809 以降に標準で入っている)。無ければ Yu Gothic UI
+const wchar_t* ui_face() {
+    static const wchar_t* face = [] {
+        LOGFONTW lf = {};
+        lf.lfCharSet = DEFAULT_CHARSET;
+        wcscpy_s(lf.lfFaceName, L"BIZ UDPGothic");
+        bool found = false;
+        HDC dc = GetDC(nullptr);
+        EnumFontFamiliesExW(dc, &lf, [](const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM p) -> int { *reinterpret_cast<bool*>(p) = true; return 0; },
+                            LPARAM(&found), 0);
+        ReleaseDC(nullptr, dc);
+        return found ? L"BIZ UDPGothic" : L"Yu Gothic UI";
+    }();
+    return face;
+}
+
 bool register_class() {
     static bool done = false;
     if (done) return true;
@@ -125,12 +141,12 @@ void CandWindow::show(const std::vector<u16>& cands, int sel, const RECT& anchor
         if (font_) DeleteObject(font_);
         if (small_) DeleteObject(small_);
         dpi_ = dpi;
-        font_ = CreateFontW(-MulDiv(16, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Yu Gothic UI");
-        small_ = CreateFontW(-MulDiv(12, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Yu Gothic UI");
+        font_ = CreateFontW(-MulDiv(16, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, ui_face());
+        small_ = CreateFontW(-MulDiv(12, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, ui_face());
         for (HFONT* f : {&tfont_, &tsmall_, &talt_}) if (*f) DeleteObject(*f);
-        tfont_ = CreateFontW(-MulDiv(14, int(dpi), 96), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Yu Gothic UI");
-        tsmall_ = CreateFontW(-MulDiv(9, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Yu Gothic UI");
-        talt_ = CreateFontW(-MulDiv(12, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Yu Gothic UI");
+        tfont_ = CreateFontW(-MulDiv(14, int(dpi), 96), 0, 0, 0, FW_SEMIBOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, ui_face());
+        tsmall_ = CreateFontW(-MulDiv(9, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, ui_face());
+        talt_ = CreateFontW(-MulDiv(12, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, ui_face());
     }
     cands_ = cands;
     sel_ = std::clamp(sel, -1, int(cands.size()) - 1);   // -1 = まだ選んでいない (打っている間の候補)
@@ -918,7 +934,7 @@ void KeyStrip::paint(HDC dc) {
     DeleteObject(br);
     HGDIOBJ old = SelectObject(dc, font_);
     SetBkMode(dc, TRANSPARENT);
-    // 直した鍵だけ赤 (直した所が分からなければ、直したときは全部を直しの色に)。ほかは薄い字
+    // 直したキーだけ赤 (直した所が分からなければ、直したときは全部を直しの色に)。ほかは薄い字
     const bool any = std::find(mark_.begin(), mark_.end(), true) != mark_.end();
     TEXTMETRICW tm = {};
     GetTextMetricsW(dc, &tm);

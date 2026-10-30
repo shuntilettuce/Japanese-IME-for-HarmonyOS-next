@@ -56,7 +56,7 @@ public:
     Conversion convert(const u16& ctx, const u16& kana, int max);
     // 後ろの文脈 (カーソルの後ろ・後で打った文)。直後の 1 回の convert にだけ効く。has_right_ctx = モデルが使えるか
     void set_right_ctx(const u16& text);
-    // 打った鍵の列と、読みの i 字目が鍵の何打目までで決まったか (英字の語・ローマ字の打ち間違いの直しに使う)。直後の 1 回の convert にだけ効く
+    // 打ったキーの並びと、読みの i 字目がキーの何打目までで決まったか (英字の語・ローマ字の打ち間違いの直しに使う)。直後の 1 回の convert にだけ効く
     void set_keys(const u16& keys, const std::vector<int32_t>& span_end, size_t reading_len);
     bool has_right_ctx() const;
     // 提案を候補に混ぜず Conversion::sugg に分けて出すか (設定「提案を分けて表示する」)

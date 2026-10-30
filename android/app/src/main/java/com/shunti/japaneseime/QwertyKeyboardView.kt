@@ -30,7 +30,7 @@ class QwertyKeyboardView(
 
     private val dp = resources.displayMetrics.density
     private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = JpFont.get(context) }
     private val rect = RectF()
 
     /** キー 1 つ: 表示・動作・幅 (1 = 普通のキー) */

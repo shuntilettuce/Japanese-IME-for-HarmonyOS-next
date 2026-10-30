@@ -306,7 +306,7 @@ class MainActivity : Activity() {
     private fun text(s: String, sp: Float, bold: Boolean = false, secondary: Boolean = false) = TextView(this).apply {
         text = s
         setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
-        if (bold) typeface = Typeface.DEFAULT_BOLD
+        typeface = if (bold) Typeface.create(JpFont.get(context), Typeface.BOLD) else JpFont.get(context)
         // 見出し・本文はテーマのはっきりした文字色、補足は薄い文字色
         val attr = obtainStyledAttributes(intArrayOf(if (secondary) android.R.attr.textColorSecondary else android.R.attr.textColorPrimary))
         attr.getColorStateList(0)?.let { setTextColor(it) }
@@ -316,6 +316,7 @@ class MainActivity : Activity() {
 
     private fun button(label: String, onClick: () -> Unit) = Button(this).apply {
         text = label
+        typeface = JpFont.get(context)
         isAllCaps = false
         setOnClickListener { onClick() }
     }

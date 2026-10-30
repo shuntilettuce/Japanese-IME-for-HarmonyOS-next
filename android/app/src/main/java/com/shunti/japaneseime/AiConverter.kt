@@ -12,7 +12,7 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
     var lastMs = 0.0
         private set
 
-    /** 読み -> 打った鍵の列 (InputHandler が QWERTY・GODAN で打った分を覚えている。無ければ null) */
+    /** 読み -> 打ったキーの並び (InputHandler が QWERTY・GODAN で打った分を覚えている。無ければ null) */
     var keysFor: (String) -> Pair<String, IntArray>? = { null }
 
     // ---- 長い入力: 前の方を固定して、後ろだけを変換する ----
