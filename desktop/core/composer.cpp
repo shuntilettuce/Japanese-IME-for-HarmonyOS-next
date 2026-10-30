@@ -153,7 +153,7 @@ bool Composer::press(const KeyEvent& ev) {
         case State::Convert: handled = press_convert(ev); break;
     }
     if (ev.key != Key::F9 && ev.key != Key::F10 && ev.key != Key::Muhenkan) last_f_ = Key::Char;
-    if (state_ == State::Input) update_live();
+    if (state_ == State::Input) after_input(ev.key == Key::Char);
     if (state_ == State::Convert && options.always_cands && !segs_.empty()) {
         if (!segs_[focus_].loaded) load_cands(focus_);
         cand_open_ = true;
@@ -175,6 +175,8 @@ void Composer::start_input() {
     alpha_run_ = false;
     live_key_.clear();
     live_cands_.clear();
+    live_read_.clear();
+    live_pending_ = false;
     prev_segs_.clear();
 }
 
@@ -232,7 +234,7 @@ void Composer::type_kana(const u16& s) {
         }
         insert(u16(1, c));
     }
-    update_live();
+    after_input(true);
     rebuild_view();
 }
 
@@ -390,12 +392,13 @@ bool Composer::press_input(const KeyEvent& ev) {
             if (live_shown()) {
                 u16 t = live_top_;
                 log({"commit", kana_, t, ctx_, live_cands_, 0, {}, "live"});
-                confirm_learned(kana_, t);
+                confirm_live(t);
                 commit_text(frozen_surface() + t);
                 to_idle();
                 return true;
             }
             log({"raw", kana_, kana_, ctx_});
+            confirm_learned(kana_, kana_);
             commit_text(frozen_surface() + kana_);   // 固定した所は変換した形のまま
             to_idle();
             return true;
@@ -718,7 +721,7 @@ void Composer::select_suggestion(int index) {
 
 void Composer::select_candidate(int index) {
     if (state_ == State::Input) {   // 打っている間の候補: それを確定する
-        if (index < 0 || index >= int(live_cands_.size())) return;
+        if (live_pending_ || index < 0 || index >= int(live_cands_.size())) return;   // 待っている間の候補は今の読みと合わない
         u16 c = live_cands_[size_t(index)];
         flush_romaji();
         {
@@ -754,6 +757,22 @@ static u16 frozen_prefix_reading(const std::vector<Word>& ws) {
     u16 r;
     for (const Word& w : ws) r += w.reading;
     return r;
+}
+
+// 字を打っている間は変換を待つ。消す・動かすなどのキーでは、今までどおりその場で変換する
+void Composer::after_input(bool typed) {
+    live_pending_ = typed && options.live_wait && options.live_display;
+    if (!live_pending_) update_live();
+}
+
+bool Composer::flush_live() {
+    if (!live_pending_) return false;
+    live_pending_ = false;
+    if (state_ == State::Input) {
+        update_live();
+        rebuild_view();
+    }
+    return true;
 }
 
 void Composer::update_live() {
@@ -803,6 +822,7 @@ void Composer::update_live() {
         return;
     }
     live_key_ = key;
+    live_read_ = kana_;
     sugg_focus_ = -1;
     live_sugg_.clear();
     live_sugg_kinds_.clear();
@@ -1515,6 +1535,18 @@ void Composer::confirm_learned(const u16& reading, const u16& surface) {
     if (learning_ && !options.private_mode && !contains(sugg_set_, surface)) new_learn_.push_back(learning_->confirm(reading, surface));
 }
 
+// ライブ変換の確定は文節でも数える。文全体の読みだけだと、文の中の かな に票が入らない (ユーザー 2026-10-31)
+void Composer::confirm_live(const u16& top) {
+    for (auto& s : frozen_) confirm_learned(s.reading, s.surface);
+    confirm_learned(kana_, top);
+    u16 joined;
+    for (auto& w : live_words_) joined += w.surface;
+    if (joined != top) return;   // 学習や挨拶で 1 位が変わった文は、語の区切りが合わない
+    std::vector<Phrase> ph = group_phrases(live_words_);
+    if (ph.size() < 2) return;   // 文全体と同じ
+    for (auto& p : ph) confirm_learned(p.reading, p.surface);
+}
+
 void Composer::commit_all() {
     u16 t, reading;
     std::vector<u16> segs;
@@ -1686,6 +1718,8 @@ void Composer::to_idle() {
     alpha_run_ = false;
     live_key_.clear();
     live_cands_.clear();
+    live_read_.clear();
+    live_pending_ = false;
     live_sugg_.clear();
     sugg_focus_ = -1;
     live_sugg_kinds_.clear();
@@ -1702,9 +1736,10 @@ void Composer::finish() {
         if (options.live_display && !kana_.empty()) update_live();
         if (live_shown()) {
             log({"commit", kana_, live_top_, ctx_, live_cands_, 0, {}, "live"});
-            confirm_learned(kana_, live_top_);
+            confirm_live(live_top_);
             commit_text(frozen_surface() + live_top_);
         } else {
+            confirm_learned(kana_, kana_);
             commit_text(frozen_surface() + kana_);
         }
         to_idle();
@@ -1726,6 +1761,12 @@ void Composer::cancel() {
 bool Composer::live_shown() const {
     return (options.live_display || options.space_literal) && state_ == State::Input && !kana_.empty() && caret_ == kana_.size() &&
            !alpha_run_ && !live_top_.empty() && live_key_ == conv_ctx() + u'\x01' + kana_;
+}
+
+// 変換を待っている間: 前に変換した所はそのまま見せ、後ろに打った字だけを足す (全部かなに戻すとかえってチラつく)
+bool Composer::live_stale() const {
+    return live_pending_ && options.live_display && state_ == State::Input && caret_ == kana_.size() && !alpha_run_ &&
+           !live_top_.empty() && !live_read_.empty() && kana_.compare(0, live_read_.size(), live_read_) == 0;
 }
 
 void Composer::rebuild_view() {
@@ -1762,6 +1803,13 @@ void Composer::rebuild_view() {
                 }
             }
             if (!p.empty()) v.spans.push_back({f + int(live_top_.size()), int(p.size()), SpanKind::Input});
+        } else if (live_stale()) {
+            const u16 top = options.space_literal ? settle_spaces(live_top_) : live_top_;
+            const u16 rest = kana_.substr(live_read_.size()) + p;
+            v.text = fz + top + rest;
+            v.caret = int(v.text.size());
+            v.spans.push_back({f, int(top.size()), SpanKind::Converted});
+            if (!rest.empty()) v.spans.push_back({f + int(top.size()), int(rest.size()), SpanKind::Input});
         } else {
             u16 in = kana_.substr(0, caret_) + p + kana_.substr(caret_);
             v.text = fz + in;

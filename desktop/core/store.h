@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <utility>
 #include <unordered_map>
@@ -54,6 +55,9 @@ public:
     std::vector<Strong> strong(int min);
     uint64_t version() { refresh(); return version_; }   // 覚えた中身が変わるたびに増える
     void clear();
+    // かなを数えていなかった頃の学習の直し: kana_first が真の短い読みは、漢字の回数を 0 に下げて順位を AI に戻す
+    // (かなの回数を足すと、文脈を見ずにかなに固定してしまう)。手で 1 回選べば戻る。直した読みの数を返す
+    int release_kana(const std::function<bool(const u16&)>& kana_first);
 
     // M5 の「使う人の印」: 表記ごとの (回数の段階 1〜6 × 時期 0〜3) を 1 + (c-1)*4 + r にしたもの (学習の網 kkcnative2 と同じ)。
     // 表記は文節の末尾の同じかな (を・が) を外した自立語 (なにを → 何を は 何)。回数が 0 以下 (候補に出さない) の表記は入れない

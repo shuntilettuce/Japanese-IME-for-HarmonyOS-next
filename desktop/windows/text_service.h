@@ -90,6 +90,11 @@ private:
     void layout_apply(ITfContext* ctx, const std::vector<shunti::Layout::Out>& outs);
     void layout_arm_timer();
     static void CALLBACK layout_timer_proc(HWND, UINT, UINT_PTR, DWORD);
+    Microsoft::WRL::ComPtr<ITfContext> live_ctx_;     // 手が止まったら変換する入力欄
+    UINT_PTR live_timer_ = 0;
+    void live_arm(ITfContext* ctx);
+    void live_stop();
+    static void CALLBACK live_timer_proc(HWND, UINT, UINT_PTR, DWORD);
     void apply_settings();
     bool is_secure_field(TfEditCookie ec, ITfContext* ctx);   // パスワードの欄か (入力の記録を止める)
     Action classify(WPARAM vk, LPARAM lp, KeyEvent& ev, ITfContext* ctx);

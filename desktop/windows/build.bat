@@ -69,6 +69,11 @@ cl /nologo /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICOD
   "%HERE%settings_app.cpp" "%HERE%strings.cpp" "%HERE%update.cpp" "%CORE%\release_info.cpp" "%CORE%\text.cpp" "%CORE%\store.cpp" "%CORE%\flow.cpp" "%CORE%\settings.cpp" /Fe"%DIST%\shunti_settings.exe" ^
   /link /SUBSYSTEM:WINDOWS /guard:cf "%OBJ%\settings_app.res" comctl32.lib comdlg32.lib shell32.lib ole32.lib user32.lib gdi32.lib winhttp.lib ^
   /MANIFEST:EMBED "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'" || exit /b 1
+rem one-shot learned.json repair run by install.ps1 (uses the x64 objects of the DLL)
+set X64=%HERE%..\build\obj_x64%SUFFIX%
+cl /nologo /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS /I"%ROOT%\entry\src\main\cpp" /Fo"%OBJ%\\" ^
+  "%HERE%kana_fix.cpp" "%X64%\text.obj" "%X64%\store.obj" "%X64%\converter.obj" "%X64%\style.obj" "%X64%\engine.obj" "%X64%\engine_avx2.obj" /Fe"%DIST%\shunti_kana_fix.exe" ^
+  /link /SUBSYSTEM:WINDOWS /guard:cf shell32.lib ole32.lib || exit /b 1
 rem web installer: downloads the latest Windows release from GitHub and runs install.ps1
 cl /nologo /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS /Fo"%OBJ%\\" ^
   "%HERE%setup.cpp" "%HERE%strings.cpp" "%HERE%update.cpp" "%CORE%\release_info.cpp" "%CORE%\text.cpp" /Fe"%HERE%..\build\shunti-IME-setup.exe" ^

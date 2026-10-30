@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 $Dest = Join-Path $env:ProgramFiles 'shunti IME'
 $Files = @('shunti_ime_x64.dll', 'shunti_ime_x86.dll', 'shunti_settings.exe', 'kkc_lex.bin', 'kkc_model.bin', 'LICENSE.txt')
 # 軽量・高精度の変換モデル (設定で選ぶ)。無ければ標準 (kkc_model.bin) だけで動く
-$Optional = @('kkc_model_light.bin', 'kkc_variants.tsv', 'kkc_register.bin')   # kkc_variants.tsv = M5 の書き方の対の表・kkc_register.bin = 文の種類の判定器
+$Optional = @('shunti_kana_fix.exe', 'kkc_model_light.bin', 'kkc_variants.tsv', 'kkc_register.bin')   # kkc_variants.tsv = M5 の書き方の対の表・kkc_register.bin = 文の種類の判定器
 # スタートメニューの「shunti IME の設定」(全員分)
 $Shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\shunti IME の設定.lnk'
 $Is64 = [Environment]::Is64BitOperatingSystem
@@ -146,6 +146,7 @@ try {
         }
         Write-Host 'Windows キー + スペース で「shunti IME」に切り替えて使ってください。'
         Write-Host '(すでに開いていたアプリでは、開き直すと使えるようになります)'
+        try { Start-Process (Join-Path $Dest 'shunti_kana_fix.exe') -WindowStyle Hidden } catch {}   # かなの学習の直し (1 度だけ)
         try { Start-Process (Join-Path $Dest 'shunti_settings.exe') -ArgumentList '--consent' } catch {}
     }
     exit 0

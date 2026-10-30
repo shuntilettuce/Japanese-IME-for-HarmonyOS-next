@@ -28,7 +28,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr wchar_t VERSION[] = L"0.7.5";
+constexpr wchar_t VERSION[] = L"0.7.6";
 
 enum Id {
     ID_PUNCT = 100, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
@@ -36,7 +36,7 @@ enum Id {
 };
 
 // 変換モデル (settings.json の model の値と、画面の表示)。名前は配布の呼び名 (開発名は出さない)
-const char* const MODELS[] = {"light", "standard"};
+std::vector<std::string> g_models = {"light", "standard"};   // 変換モデルの欄の並び
 
 struct PosItem { const wchar_t* label; const char* pos; const char* group; };
 // 品詞は MS-IME の分類にそろえる (MS-IME の一覧の出力をそのまま読み込めるように)
@@ -98,14 +98,15 @@ void save() {
     g_s.space_fullwidth = checked(ID_SPACE);
     g_s.digits_fullwidth = checked(ID_DIGITS);
     g_s.live = checked(ID_LIVE);
-    g_s.live_display = checked(ID_LIVEDISPLAY);
+    g_s.live_display = selected(ID_LIVEDISPLAY) > 0;
+    g_s.live_wait = selected(ID_LIVEDISPLAY) == 1;
     g_s.cand_tree = checked(ID_CANDTREE);
     g_s.space_literal = checked(ID_SPACELIT);
     g_s.latin_auto = checked(ID_LATIN);
     g_s.caps_alpha = checked(ID_CAPS);
     g_s.typo_fix = checked(ID_TYPO);
     g_s.live_commit = checked(ID_LIVECOMMIT);
-    g_s.model = MODELS[std::clamp(selected(ID_MODEL), 0, 1)];
+    g_s.model = g_models[size_t(std::clamp(selected(ID_MODEL), 0, int(g_models.size()) - 1))];
     if (!save_settings(g_dir / L"settings.json", g_s))
         MessageBoxW(g_wnd, T(12), L"shunti IME", MB_ICONWARNING);
 }
@@ -199,7 +200,7 @@ void import_words() {
 // 記号ごとの全角/半角・テンキー・候補の数・無変換キー・再変換・プライベート・ローマ字の表・辞書の書き出し
 const wchar_t SYMS[] = L"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 enum { ADV_SYM0 = 500, ADV_NUMPAD = 600, ADV_PAGE, ADV_APPOPEN, ADV_PRIVATE, ADV_ROMAJI, ADV_EXPORT, ADV_CLOSE,
-       ADV_KEYMAP = 710, ADV_LAYOUT = 711, ADV_LAYOUT_NOTE = 712, ADV_LTHUMBS = 713, ADV_LCONT, ADV_LTAP, ADV_LREP, ADV_RLIST = 720, ADV_RKEY, ADV_RKANA, ADV_RADD, ADV_RDEL, ADV_ALIST = 730, ADV_ATOGGLE, ADV_ADEL, ADV_THEME = 740, ADV_ICON,
+       ADV_KEYMAP = 710, ADV_LAYOUT = 711, ADV_LAYOUT_NOTE = 712, ADV_LTHUMBS = 713, ADV_LCONT, ADV_LTAP, ADV_LREP, ADV_RLIST = 720, ADV_RKEY, ADV_RKANA, ADV_RADD, ADV_RDEL, ADV_ALIST = 730, ADV_ATOGGLE, ADV_ADEL, ADV_THEME = 740, ADV_ICON, ADV_STRIP,
        ADV_SLIST = 800, ADV_SKEY, ADV_SFUNC, ADV_SADD, ADV_SCHG, ADV_SDEL, ADV_SUP, ADV_SDOWN, ADV_SRESET };
 // キー割り当ての型 (Google 日本語入力 = Mozc の keymap と同じ字)
 struct Keymap { const char* id; const wchar_t* name; };
@@ -351,6 +352,7 @@ void adv_save() {
     g_wnd = g_adv;
     const char* themes[] = {"auto", "light", "dark"};
     g_s.theme = themes[std::max(0, selected(ADV_THEME))];
+    g_s.typed_strip = checked(ADV_STRIP);
     g_s.half_symbols = g_half;
     g_s.numpad = std::max(0, selected(ADV_NUMPAD));
     g_s.page_size = 5 + std::max(0, selected(ADV_PAGE));
@@ -675,6 +677,7 @@ LRESULT CALLBACK adv_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
         if (id == ADV_CLOSE || id == IDCANCEL) DestroyWindow(h);
         else if ((id == ADV_NUMPAD || id == ADV_PAGE || id == ADV_APPOPEN || id == ADV_THEME) && code == CBN_SELCHANGE) adv_save();
         else if (id == ADV_ICON) reregister_icon();
+        else if (id == ADV_STRIP && code == BN_CLICKED) adv_save();
         else if (id >= ADV_SYM0 && id < ADV_SYM0 + 64 && code == BN_CLICKED) {   // 押すたびに全角 ⇔ 半角
             const char c = char(SYMS[id - ADV_SYM0]);
             const size_t at = g_half.find(c);
@@ -772,11 +775,12 @@ void open_advanced() {
     make(L"STATIC", T(56), 0, 24, y + 87, 120, 20, 0);
     combo(150, y + 83, 300, ADV_APPOPEN, {T(57), T(58)});
     y += 122;
-    group(T(95), y, 86);
+    group(T(95), y, 112);
     make(L"STATIC", T(96), 0, 24, y + 27, 170, 20, 0);
     combo(200, y + 23, 250, ADV_THEME, {T(97), T(98), T(99)});
     make(L"BUTTON", T(100), BS_PUSHBUTTON | WS_TABSTOP, 24, y + 52, 250, 25, ADV_ICON);
-    y += 94;
+    make(L"BUTTON", T(188), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 82, 430, 22, ADV_STRIP);
+    y += 120;
     group(T(59), y, 90);
     make(L"BUTTON", T(60), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 22, 430, 22, ADV_PRIVATE);
     make(L"BUTTON", T(61), BS_PUSHBUTTON | WS_TABSTOP, 24, y + 54, 180, 25, ADV_EXPORT);
@@ -869,6 +873,7 @@ void open_advanced() {
     g_half = g_s.half_symbols;
     for (int i = 0; SYMS[i]; i++) sym_label(i);
     select(ADV_THEME, g_s.theme == "light" ? 1 : g_s.theme == "dark" ? 2 : 0);
+    check(ADV_STRIP, g_s.typed_strip);
     select(ADV_NUMPAD, g_s.numpad);
     select(ADV_PAGE, std::clamp(g_s.page_size, 5, 9) - 5);
     check(ADV_PRIVATE, g_s.private_mode);
@@ -950,10 +955,11 @@ void build() {
     group(T(50), y, 310);
     make(L"STATIC", T(104), 0, 24, y + 27, 170, 20, 0);
     combo(200, y + 23, 120, ID_PUNCT, {T(105), T(106), T(107), T(108)});
-    make(L"BUTTON", T(109), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 54, 430, 22, ID_SPACE);
-    make(L"BUTTON", T(110), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 79, 430, 22, ID_DIGITS);
-    make(L"BUTTON", T(111), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 104, 430, 22, ID_LIVE);
-    make(L"BUTTON", T(112), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 129, 430, 22, ID_LIVEDISPLAY);
+    make(L"STATIC", T(112), 0, 24, y + 56, 170, 20, 0);
+    combo(200, y + 52, 120, ID_LIVEDISPLAY, {T(191), T(192), T(193)});
+    make(L"BUTTON", T(109), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 79, 430, 22, ID_SPACE);
+    make(L"BUTTON", T(110), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 104, 430, 22, ID_DIGITS);
+    make(L"BUTTON", T(111), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 129, 430, 22, ID_LIVE);
     make(L"BUTTON", T(113), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 154, 430, 22, ID_LIVECOMMIT);
     make(L"BUTTON", T(159), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 179, 430, 22, ID_CANDTREE);
     make(L"BUTTON", T(160), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 204, 430, 22, ID_SPACELIT);
@@ -1025,11 +1031,14 @@ void show_settings() {
     g_loading = true;
     SetDlgItemTextW(g_wnd, ID_LEARN_LOG, T(g_s.learn_log ? 179 : 178));
     select(ID_PUNCT, g_s.punct);
-    select(ID_MODEL, g_s.model == "light" ? 0 : 1);
+    {
+        const auto it = std::find(g_models.begin(), g_models.end(), g_s.model);
+        select(ID_MODEL, it == g_models.end() ? 1 : int(it - g_models.begin()));
+    }
     check(ID_SPACE, g_s.space_fullwidth);
     check(ID_DIGITS, g_s.digits_fullwidth);
     check(ID_LIVE, g_s.live);
-    check(ID_LIVEDISPLAY, g_s.live_display);
+    select(ID_LIVEDISPLAY, !g_s.live_display ? 0 : g_s.live_wait ? 1 : 2);
     check(ID_CANDTREE, g_s.cand_tree);
     check(ID_SPACELIT, g_s.space_literal);
     check(ID_LATIN, g_s.latin_auto);
@@ -1046,7 +1055,7 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     case WM_COMMAND: {
             int id = LOWORD(w), code = HIWORD(w);
-            if ((id == ID_PUNCT || id == ID_MODEL) && code == CBN_SELCHANGE) save();
+            if ((id == ID_PUNCT || id == ID_MODEL || id == ID_LIVEDISPLAY) && code == CBN_SELCHANGE) save();
             else if (id == IDCANCEL) DestroyWindow(h);   // 「閉じる」と Esc
             else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_CANDTREE || id == ID_SPACELIT || id == ID_LATIN || id == ID_CAPS || id == ID_TYPO) && code == BN_CLICKED) save();
             else if (id == ID_ADD) add_word();

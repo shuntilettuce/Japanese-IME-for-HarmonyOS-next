@@ -293,6 +293,7 @@ void TextService::remember_app_open(bool open) {
 STDMETHODIMP TextService::Deactivate() {
     if (tm_) remember_app_open(is_open());   // ソフトの終了・IME の切り替え: このソフトでの状態を覚える (次に起動したとき戻す)
     finish_composition();
+    live_stop();
     cand_.destroy();
     strip_.destroy();
     if (langbar_) {
@@ -446,6 +447,7 @@ void TextService::apply_settings() {
         composer_->options.live = s.live;
         composer_->options.live_commit = s.live_commit;
         composer_->options.live_display = s.live_display;
+        composer_->options.live_wait = s.live_wait;
         composer_->options.cand_tree = s.cand_tree;
         composer_->options.space_literal = s.space_literal;
         composer_->options.learn_log = s.learn_log;
@@ -876,6 +878,35 @@ void CALLBACK TextService::layout_timer_proc(HWND, UINT, UINT_PTR id, DWORD) {
     if (self->layout_.waiting()) self->layout_arm_timer();
 }
 
+// ライブ変換の「遅延」: 最後の打鍵からこの時間だけ打たなければ変換する
+static constexpr UINT LIVE_WAIT_MS = 200;
+static TextService* g_live_owner = nullptr;
+
+void TextService::live_arm(ITfContext* ctx) {
+    g_live_owner = this;
+    live_ctx_ = ctx;
+    live_timer_ = SetTimer(nullptr, live_timer_, LIVE_WAIT_MS, live_timer_proc);
+}
+
+void TextService::live_stop() {
+    if (live_timer_) KillTimer(nullptr, live_timer_);
+    live_timer_ = 0;
+    live_ctx_.Reset();
+    if (g_live_owner == this) g_live_owner = nullptr;
+}
+
+void CALLBACK TextService::live_timer_proc(HWND, UINT, UINT_PTR id, DWORD) {
+    KillTimer(nullptr, id);
+    TextService* self = g_live_owner;
+    if (!self) return;
+    self->live_timer_ = 0;
+    ComPtr<ITfContext> keep = self->live_ctx_;
+    if (!keep) return;
+    self->edit(keep.Get(), TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, [self, keep](TfEditCookie ec) {
+        if (self->composer_ && self->composer_->flush_live()) self->apply(ec, keep.Get());
+    });
+}
+
 // 配列で決まった字・打鍵を入れる。英字の配列は英字としてローマ字へ、かなの配列はかなのまま。
 // BS・Enter・矢印は、打っている間はこちらで、何も打っていないときはアプリへ (キーを送り直す)
 void TextService::layout_apply(ITfContext* ctx, const std::vector<shunti::Layout::Out>& outs) {
@@ -1066,6 +1097,7 @@ void TextService::apply(TfEditCookie ec, ITfContext* ctx) {
         end_composition(ec, ctx);
     }
     update_candidates(ec, ctx, v);
+    if (composer_->live_waiting()) live_arm(ctx);
 }
 
 // 候補の窓の置き場所が取れなかったとき (Firefox は配置が決まるまで位置を教えず、キャレットも知らせない: 窓が左上の隅に出た。
@@ -1091,9 +1123,9 @@ void TextService::place_fallback(bool ok, RECT& rc, HWND hwnd) {
     }
 }
 
-// 打った綴りの帯を入力中の字の頭の上に (入力中はいつも出す)
+// 打った綴りの帯を入力中の字の頭の上に (入力中はいつも出す。詳細設定で切れる)
 void TextService::update_strip(TfEditCookie ec, ITfContext* ctx, const View& v) {
-    if (!comp_ || v.typed.empty()) { strip_.hide(); return; }
+    if (!comp_ || v.typed.empty() || !core().settings.get().typed_strip) { strip_.hide(); return; }
     ComPtr<ITfContextView> view;
     ComPtr<ITfRange> r, a;
     RECT rc = {};

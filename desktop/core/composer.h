@@ -88,6 +88,7 @@ struct ComposerOptions {
     bool live = true;          // 打っている間も AI 変換して候補の窓に出す
     bool live_commit = true;   // 長い入力の前の方を固定する (保留: 入力欄には確定せず、変換した形で見せて文節で直せる)
     bool live_display = false; // ライブ変換: 入力中の文字を、空白を押す前から AI の 1 位で見せる (Enter でそのまま確定)
+    bool live_wait = false;    // ライブ変換を打つ手が止まってから行う (チラつきを抑える。flush_live を呼ぶ側がタイマーを持つ)
     bool always_cands = true;  // 変換中は候補の窓をいつも出す
     bool cand_tree = false;     // 変換中は候補の窓の上に候補の木 (文節の強さ・つながり・迷う区切り) を出す
     bool follow = true;         // 文節を選び直したら、後ろのまだ選んでいない文節を新しい左の文脈で変換し直す
@@ -168,6 +169,8 @@ public:
     void finish();
     // 入力中のものを捨てる
     void cancel();
+    bool live_waiting() const { return live_pending_; }   // 手が止まるのを待っている変換がある
+    bool flush_live();                                    // 待っていた変換を行う。行ったら true
 
 private:
     enum class State { Idle, Input, Convert };
@@ -227,6 +230,8 @@ private:
     bool unfreeze_last();
     void calibrate();
     bool live_shown() const;
+    bool live_stale() const;
+    void after_input(bool typed);
     void rebuild_view();
 
     Converter* conv_;
@@ -254,6 +259,8 @@ private:
 
     // 打っている間の変換
     u16 live_key_;                       // live_cands_ を作ったときの文脈と読み
+    u16 live_read_;                      // live_top_ を作ったときの読み (待っている間はここまでを変換した形で見せる)
+    bool live_pending_ = false;
     std::vector<u16> live_cands_;
     std::vector<u16> live_sugg_;          // 提案 (Conversion::sugg。打っている間の変換のもの)
     std::vector<int> live_sugg_kinds_;
@@ -266,6 +273,7 @@ private:
     std::vector<u16> sugg_set_;           // 候補に混ぜた提案 (✦ を付けて見せる・学習しない)
     std::vector<u16> date_cands_;         // 日付・時刻の候補 (学習しない。sugg_note で日付と添える)
     void confirm_learned(const u16& reading, const u16& surface);   // 選び直さずに確定した表記を学習に足す
+    void confirm_live(const u16& top);                              // ライブ変換の確定: 文全体と文節を学習に足す
     void add_datetime(const u16& reading, std::vector<u16>& list);   // 日付・時刻の候補を list の後ろに足す (学習しない)
     int sugg_focus_ = -1;                 // 提案の列で選んでいるもの (Shift+↓ / Shift+Tab で入る。-1 = 入っていない)
     u16 live_top_;                       // 打っている間の変換そのものの 1 位 (予測・決まり文句を足す前)。ライブ変換で見せる

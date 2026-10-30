@@ -165,16 +165,20 @@ std::vector<std::pair<u16, int>> Learning::marks() {
     refresh();
     struct Acc { int n = 0, day = 0; };
     std::unordered_map<u16, Acc> by;
-    for (auto& e : entries_)
+    for (auto& e : entries_) {
+        int kana = 0;   // かなのまま確定した分は、同じ読みの漢字の印から引く (かなの方が多ければ印を付けない)
+        for (auto& c : e.counts) if (c.first == e.reading) kana = std::max(c.second, 0);
         for (auto& c : e.counts) {
-            if (c.second <= 0) continue;
+            const int n = c.second - kana;
+            if (n <= 0) continue;
             u16 r = e.reading, s = c.first;
             while (!r.empty() && !s.empty() && r.back() == s.back() && r.back() >= 0x3041 && r.back() <= 0x3096) { r.pop_back(); s.pop_back(); }
             if (s.empty()) continue;
             Acc& a = by[s];
-            a.n += (c.second + 1) / 2;   // 印の段階は手で選んだ回数で数える
+            a.n += (n + 1) / 2;   // 印の段階は手で選んだ回数で数える
             a.day = std::max(a.day, e.day);
         }
+    }
     const int t = today();
     std::vector<std::pair<u16, int>> out;
     for (auto& [s, a] : by) {
@@ -216,7 +220,8 @@ Learning::Undo Learning::confirm(const u16& reading, const u16& surface) {
 }
 
 Learning::Undo Learning::record(const u16& reading, const u16& surface, int add) {
-    if (reading.empty() || surface.empty() || surface == reading) return {};
+    // かなのままの表記も数える。数えないと、かなで打ち続けても 1 回選んだ漢字に勝てない (ユーザー 2026-10-31)
+    if (reading.empty() || surface.empty()) return {};
     refresh();
     Undo undo{reading, surface};
     Entry* e = find(reading);
@@ -408,6 +413,26 @@ void Learning::clear() {
     idx_.clear();
     loaded_ = true;
     save();
+    std::error_code ec;
+    fs::remove(file_.string() + ".pre-kana", ec);   // release_kana の前の控えも学習なので一緒に消す
+}
+
+int Learning::release_kana(const std::function<bool(const u16&)>& kana_first) {
+    refresh();
+    int fixed = 0;
+    for (auto& e : entries_) {
+        if (e.reading.size() > 5) continue;   // 入力ログで負けた読みは 5 字まで
+        int best = 0, kana = 0;
+        for (auto& c : e.counts) {
+            if (c.first == e.reading) kana = c.second;
+            else best = std::max(best, c.second);
+        }
+        if (best < TOP_MIN_COUNT || kana > best || !kana_first(e.reading)) continue;
+        for (auto& c : e.counts) if (c.first != e.reading && c.second > 0) c.second = 0;   // 0 なら、古い版が @w を落として回数が 2 倍になっても 1 位に戻らない
+        fixed++;
+    }
+    if (fixed) save();
+    return fixed;
 }
 
 // ---------------------------------------------------------------- ユーザー辞書

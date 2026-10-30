@@ -635,6 +635,60 @@ int main(int argc, char** argv) {
     shown = c.view().text;
     c.finish();
     expect("live display finish commits what is shown", c.take_commit(), shown);
+    c.options.live_wait = true;   // 遅延: 打っている間は変換せず、手が止まったら変換する
+    keys(c, "kyouhaiitenki");
+    expect("live wait shows kana until flush", c.view().text, u"きょうはいいてんき");
+    if (!c.live_waiting() || !c.flush_live()) { printf("FAIL live wait flush\n"); failures++; }
+    shown = c.view().text;
+    if (shown == u"きょうはいいてんき") { printf("FAIL live wait flush shows kana\n"); failures++; }
+    keys(c, "desu");
+    expect("live wait keeps the converted part", c.view().text, shown + u"です");
+    keys(c, "{enter}");
+    u16 waited = c.take_commit();
+    if (waited == shown + u"です" || waited.find(u"きょう") != u16::npos) printf("     live wait enter: [%s]\n", u8(waited).c_str());
+    if (c.live_waiting()) { printf("FAIL live wait pending after enter\n"); failures++; }
+    keys(c, "kyouhaii{bs}");
+    if (c.live_waiting()) { printf("FAIL live wait pending after backspace\n"); failures++; }
+    keys(c, "{esc}");
+    c.take_commit();
+    c.options.live_wait = false;
+    {   // かなのままの表記も学習する: 選んだ回数が多ければ漢字の学習に勝つ
+        std::filesystem::remove(work / "learned_kana.json");   // 前回の試験の回数を持ち越さない
+        Learning l(work / "learned_kana.json");
+        l.record(u"した", u"下");
+        expect("kana learn: kanji first", l.top(u"した"), u"下");
+        auto has_mark = [&] {
+            for (auto& m : l.marks()) if (m.first == u"下") return true;
+            return false;
+        };
+        if (!has_mark()) { printf("FAIL kana learn: mark missing\n"); failures++; }
+        l.record(u"した", u"した");
+        if (has_mark()) { printf("FAIL kana learn: mark stays at a tie\n"); failures++; }
+        l.record(u"した", u"した");
+        expect("kana learn: kana wins", l.top(u"した"), u"した");
+        l.record(u"ため", u"溜め");
+        l.record(u"はし", u"橋");
+        l.record(u"はし", u"はし");
+        l.record(u"はし", u"はし");
+        l.record(u"はし", u"はし");
+        l.record(u"あいうえおかき", u"亜");
+        int lifted = l.release_kana([](const u16& r) { return r != u"みず"; });
+        if (lifted != 1) { printf("FAIL lift kana count %d\n", lifted); failures++; }
+        expect("release kana: AI decides", l.top(u"ため"), u16());
+        expect("release kana: long reading stays", l.top(u"あいうえおかき"), u"亜");
+        l.record(u"ため", u"溜め");
+        expect("release kana: one pick restores", l.top(u"ため"), u"溜め");
+        std::filesystem::remove(work / "learned_live.json");
+        Learning ll(work / "learned_live.json");
+        ll.record(u"した", u"下");
+        Composer lc(&conv, &ll, &dict);
+        lc.options.live_display = true;
+        keys(lc, "benkyouwoshita{enter}");
+        lc.take_commit();
+        int votes = 0;
+        for (auto& x : ll.counts(u"した")) if (x.first == u"した") votes = x.second;
+        if (votes != 1) { printf("FAIL live vote in a sentence %d\n", votes); failures++; }
+    }
     {   // 文の流れ: お疲れ様です -> 。 -> 本日の進捗報告です。 (2 回あった流れ)
         SentenceFlow f;
         for (int i = 0; i < 2; i++) { f.feed(u"お疲れ様です。本日の進捗報告です。"); f.boundary(); }

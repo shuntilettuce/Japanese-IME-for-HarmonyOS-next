@@ -63,9 +63,11 @@ struct Settings {
     bool live = true;                // 打っている間も候補を出す
     bool live_commit = true;         // リアルタイム確定
     bool live_display = false;       // ライブ変換: 入力中の文字を、空白を押す前から変換して見せる
+    bool live_wait = false;          // ライブ変換を打つ手が止まってから行う
     bool caps_alpha = true;          // 大文字で打ち始めたら英字のまま (ComposerOptions::caps_alpha)
     bool learn_log = false;          // 確定した文を手元に残す (設定の「学習を始める」で同意した人だけ)
     bool consent_asked = false;      // 同意を聞く画面を出した (更新の後に 1 度だけ出す)
+    bool typed_strip = true;         // 入力中の字の上に読みの帯を出す
     bool typo_fix = true;            // ローマ字の打ち間違いを直す (オフなら打ったとおり。ブログの要望 2026-10-26)
     bool latin_auto = true;          // 英字の打ち分け (ローマ字で打った英単語を文脈で英字にする)。暴発が嫌ならオフ
     bool space_literal = false;      // 空白キーで変換しない (空白も読みに入れて変換を続ける。ComposerOptions::space_literal)
