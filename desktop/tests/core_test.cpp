@@ -689,6 +689,26 @@ int main(int argc, char** argv) {
         for (auto& x : ll.counts(u"した")) if (x.first == u"した") votes = x.second;
         if (votes != 1) { printf("FAIL live vote in a sentence %d\n", votes); failures++; }
     }
+    {   // 回数の単位の印: 古い版が読みの項目として書き戻しても 2 倍にならない
+        auto p = work / "learned_w.json";
+        auto written = [&](const char* text) { std::ofstream(p, std::ios::binary | std::ios::trunc) << text; };
+        auto count = [&]() {
+            Learning a(p);
+            auto v = a.counts(u"あ");
+            return v.empty() ? 0 : v[0].second;
+        };
+        written(u8R"({"あ":{"亜":4},"@w":{"@w":2}})");
+        if (count() != 4) { printf("FAIL weight marker as entry\n"); failures++; }
+        written(u8R"({"@w":2,"あ":{"亜":4}})");
+        if (count() != 4) { printf("FAIL weight marker as number\n"); failures++; }
+        written(u8R"({"あ":{"亜":4}})");
+        if (count() != 8) { printf("FAIL old counts not doubled\n"); failures++; }
+        {
+            Learning a(p);
+            a.record(u"あ", u"亜");
+        }
+        if (count() != 10) { printf("FAIL weight marker after save\n"); failures++; }
+    }
     {   // 文の流れ: お疲れ様です -> 。 -> 本日の進捗報告です。 (2 回あった流れ)
         SentenceFlow f;
         for (int i = 0; i < 2; i++) { f.feed(u"お疲れ様です。本日の進捗報告です。"); f.boundary(); }

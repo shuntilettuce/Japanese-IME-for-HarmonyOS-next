@@ -11,6 +11,8 @@ New-Item -ItemType Directory -Path $stage | Out-Null
 $files = 'install.bat', 'uninstall.bat', 'install.ps1', 'README.txt', 'LICENSE.txt', 'shunti_settings.exe', 'shunti_kana_fix.exe',
          'shunti_ime_x64.dll', 'shunti_ime_x86.dll', 'kkc_lex.bin', 'kkc_model.bin', 'kkc_variants.tsv', 'kkc_register.bin', 'kkc_model_light.bin'
 foreach ($f in $files) { Copy-Item (Join-Path $dist $f) (Join-Path $stage $f) }
+# キー配列の表 (install.ps1 が layout_*.tsv を全部写す)
+Get-ChildItem -LiteralPath $dist -Filter 'layout_*.tsv' -File | Copy-Item -Destination $stage
 $zip = Join-Path $Out "$name.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path $stage -DestinationPath $zip -CompressionLevel Optimal

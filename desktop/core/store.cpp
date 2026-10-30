@@ -129,7 +129,7 @@ void Learning::refresh() {
     if (!json::Parser(s).parse(v) || v.type != json::Value::Object) { keep_broken(file_); return; }
     bool weighted = false;
     for (auto& r : v.obj) {
-        if (r.first == "@w") weighted = true;
+        if (r.first == "@w") { weighted = true; continue; }
         if (r.second.type != json::Value::Object) continue;
         Entry e{from_utf8(r.first), {}};
         for (auto& c : r.second.obj) {
@@ -192,7 +192,8 @@ std::vector<std::pair<u16, int>> Learning::marks() {
 
 void Learning::save() {
     version_++;
-    std::string o = "{\"@w\":2";   // 手で選ぶと 2 回分と数えた回数
+    // 手で選ぶと 2 回分と数えた回数。読みの形で書く (数字だと、開いたままのアプリの古い版が消して書き戻し、次に 2 倍になった)
+    std::string o = "{\"@w\":{\"@w\":2}";
     for (auto& e : entries_) {
         o += ",";
         o += json::quote(to_utf8(e.reading)) + ":{";
