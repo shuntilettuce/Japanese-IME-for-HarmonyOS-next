@@ -34,7 +34,8 @@ bool load_settings(const fs::path& p, Settings& s) {
     boolean("space_literal", s.space_literal);
     boolean("latin_auto", s.latin_auto);
     boolean("typo_fix", s.typo_fix);
-    boolean("personal", s.personal);
+    boolean("learn_log", s.learn_log);
+    boolean("consent_asked", s.consent_asked);
     boolean("caps_alpha", s.caps_alpha);
     boolean("ctrl_space", s.ctrl_space);
     str("model", s.model);
@@ -101,7 +102,8 @@ bool save_settings(const fs::path& p, const Settings& s) {
     o += std::string("  \"space_literal\": ") + b(s.space_literal) + ",\n";
     o += std::string("  \"latin_auto\": ") + b(s.latin_auto) + ",\n";
     o += std::string("  \"typo_fix\": ") + b(s.typo_fix) + ",\n";
-    o += std::string("  \"personal\": ") + b(s.personal) + ",\n";
+    o += std::string("  \"learn_log\": ") + b(s.learn_log) + ",\n";
+    o += std::string("  \"consent_asked\": ") + b(s.consent_asked) + ",\n";
     o += std::string("  \"caps_alpha\": ") + b(s.caps_alpha) + ",\n";
     o += "  \"model\": " + json::quote(s.model) + ",\n";
     o += "  \"half_symbols\": " + json::quote(s.half_symbols) + ",\n";

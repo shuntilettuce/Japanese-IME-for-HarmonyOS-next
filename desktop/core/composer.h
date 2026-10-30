@@ -13,6 +13,7 @@
 //   リアルタイム確定: 長く打つと、前の方で 2 回続けて同じ変換になった所 (または句読点の後ろ) までを確定する
 //   (末尾の KEEP 字は残す)。確定した分は文脈としてモデルに渡すので、後ろの変換の質は落ちない。
 #pragma once
+#include <array>
 #include <functional>
 #include <map>
 #include <string>
@@ -45,10 +46,10 @@ struct Span { int start, len; SpanKind kind; };
 struct View {
     u16 text;
     std::vector<Span> spans;
-    // 打った綴り (入力中はいつも。打ったキーの並びが分からなくなったら読み)。typed_fixed = 打ち間違いを直した変換を見せている
+    // 打ったままの読み (入力中はいつも)。typed_fixed = 打ち間違いを直した変換を見せている
     u16 typed;
     bool typed_fixed = false;
-    std::vector<bool> typed_mark;   // typed の字ごとに、打ち間違いの直しで直したキーか
+    std::vector<bool> typed_mark;   // typed の字ごとに、打ち間違いの直しで直した字か
     int caret = 0;
     int anchor = 0;               // 候補の窓をこの字の下に出す
     bool cand_open = false;
@@ -101,7 +102,8 @@ struct ComposerOptions {
     u16 half_symbols;              // 半角で入れる記号 (詳細設定)
     int numpad = 0;                // テンキー: 0 = 半角、1 = 数字の設定に合わせる、2 = 全角
     bool private_mode = false;     // 学習・文の流れ・提案の学習を残さない
-    bool personal = true;          // M5: 書き方を覚えて変換に使う (使う人の印・書き方の印。オフなら印を渡さない)
+    bool learn_log = false;        // 確定した文を手元に残す (設定で同意した人だけ)
+    bool secure_field = false;     // パスワードの欄 (確定した文を残さない)
 };
 
 class Composer {
@@ -127,6 +129,8 @@ public:
     const std::pair<u16, u16>& undoable() const { return last_commit_; }
     // 確定の取り消し: 入力欄から表記を消したあとで呼ぶ。読みに戻して変換し直す (変換中にする)
     bool undo_commit();
+    // 選んだ英字 (日本語をローマ字で打ったもの) の読み。ローマ字として読めなければ空
+    u16 romaji_reading(const u16& text) const;
     // 再変換: 確定した文を読みに戻せるか (読みが分からなければ空)。かなだけの文はそのまま、漢字まじりはこれまで確定した記録から
     u16 reading_of(const u16& text) const;
     // 再変換を始める (読みを入れて変換した状態にする)。始めたら true
@@ -233,6 +237,8 @@ private:
     State state_ = State::Idle;
     u16 ctx_;          // 左の文脈 (入力を始めたときのカーソルの左 + その後にリアルタイム確定した分)
     u16 history_;      // これまでに確定した文 (入力欄の文が読めないときの文脈)
+    std::vector<Learning::Undo> new_learn_, last_learn_;   // 確定で覚えたことの控え (確定の取り消しで戻す)
+    std::vector<std::pair<u16, std::array<float, 2>>> last_style_;
     std::pair<u16, u16> last_commit_;   // 直前の確定 (表記, 読み)。確定の取り消しのため (次のキーで忘れる)
     std::vector<std::pair<u16, u16>> recent_;   // 最近確定した (表記, 読み)。再変換で読みに戻すため (200 件まで)
     u16 commit_;
@@ -259,6 +265,7 @@ private:
     u16 sugg_note(const u16& x) const;   // 候補の右に添える種類 (もしかして・絵文字 …)
     std::vector<u16> sugg_set_;           // 候補に混ぜた提案 (✦ を付けて見せる・学習しない)
     std::vector<u16> date_cands_;         // 日付・時刻の候補 (学習しない。sugg_note で日付と添える)
+    void confirm_learned(const u16& reading, const u16& surface);   // 選び直さずに確定した表記を学習に足す
     void add_datetime(const u16& reading, std::vector<u16>& list);   // 日付・時刻の候補を list の後ろに足す (学習しない)
     int sugg_focus_ = -1;                 // 提案の列で選んでいるもの (Shift+↓ / Shift+Tab で入る。-1 = 入っていない)
     u16 live_top_;                       // 打っている間の変換そのものの 1 位 (予測・決まり文句を足す前)。ライブ変換で見せる

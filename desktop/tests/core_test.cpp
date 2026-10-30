@@ -266,7 +266,12 @@ int main(int argc, char** argv) {
         // 年
         expect("datetime 2026ねん", at(pred("2026ねん"), 0), u"令和8年");
         expect("datetime 20261018", at(pred("20261018"), 1), u"2026年10月18日(日)");
-        expect("datetime 20260230 (ありえない日)", u16(pred("20260230").empty() ? u"なし" : u"あり"), u"なし");
+        {   // ありえない日は日付にしない (数字の書き換えだけ)
+            const auto v = pred("20260230");
+            bool date = false;
+            for (auto& s : v) date = date || s.find(u'年') != u16::npos || s.find(u'/') != u16::npos;
+            expect("datetime 20260230 (ありえない日)", u16(date ? u"あり" : u"なし"), u"なし");
+        }
         expect("datetime れいわはちねん", at(pred("れいわはちねん"), 0), u"2026年");
         expect("datetime へいせいにねん", at(pred("へいせいにねん"), 0), u"1990年");
         expect("datetime しょうわごじゅうごねん", at(pred("しょうわごじゅうごねん"), 0), u"1980年");
@@ -337,6 +342,67 @@ int main(int argc, char** argv) {
     if (!conv.open(lex.data(), lex.size(), model.data(), model.size(), th ? atoi(th) : 1)) { printf("engine open failed\n"); return 2; }
     printf("     engine open %.1f ms (threads %d)\n",
            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_open).count(), th ? atoi(th) : 1);
+    {   // 数字だけの読みの書き換え (2026-10-30)
+        auto at = [](const std::vector<u16>& v, size_t i) { return i < v.size() ? v[i] : u16(); };
+        auto has = [](const std::vector<u16>& v, const u16& s) { return std::find(v.begin(), v.end(), s) != v.end(); };
+        expect("number 2026 era", at(number_forms(u"2026"), 0), u"令和8年");
+        if (!has(number_forms(u"2026"), u"二千二十六") || !has(number_forms(u"2026"), u"2,026")) { printf("FAIL number 2026\n"); failures++; }
+        if (!has(number_forms(u"20"), u"二十") || !has(number_forms(u"20"), u"⑳") || !has(number_forms(u"20"), u"⓴")) { printf("FAIL number 20\n"); failures++; }
+        if (!has(number_forms(u"50"), u"㊿") || !has(number_forms(u"21"), u"㉑") || !has(number_forms(u"36"), u"㊱") || !has(number_forms(u"0"), u"⓪")) { printf("FAIL number circled\n"); failures++; }
+        if (!has(number_forms(u"12345678"), u"1234万5678") || !has(number_forms(u"1000000"), u"100万") || !has(number_forms(u"1000000"), u"百万")) { printf("FAIL number big\n"); failures++; }
+        if (!number_forms(u"01").empty() || !number_forms(u"3a").empty() || !number_forms(u"123456789012345678901").empty()) { printf("FAIL number reject\n"); failures++; }
+    }
+    {   // 時間を指定して学習を戻す: 控えの時刻より新しい分だけ、元の値へ (2026-10-30)
+        const std::filesystem::path d = work / "forget";
+        std::error_code ec;
+        std::filesystem::remove_all(d, ec);
+        std::filesystem::create_directories(d, ec);
+        {
+            Learning l(d / "learned.json");
+            StyleLog st(d / "style.json");
+            l.record(u"かわ", u"川");
+            l.record(u"かわ", u"川");
+            std::filesystem::rename(d / RECENT_FILE, d / "keep.tsv", ec);
+            std::ofstream old(d / RECENT_FILE, std::ios::binary);   // 2 回目までは 1 時間より前のこと
+            old << "1000\tL\t" << to_utf8(u"かわ") << "\t" << to_utf8(u"川") << "\t0\t0\n";
+            old.close();
+            l.record(u"かわ", u"川");
+            l.record(u"やま", u"山");
+            st.record(u"山", {1.f, 0.f});
+            const int n = forget_recent(d, 2000);
+            if (n != 3) { printf("FAIL forget_recent count %d\n", n); failures++; }
+            int kawa = 0;
+            for (auto& c : l.counts(u"かわ")) if (c.first == u"川") kawa = c.second;
+            if (kawa != 4 || !l.counts(u"やま").empty() || !st.counts().empty()) { printf("FAIL forget_recent restore %d\n", kawa); failures++; }
+            l.hide(u"かわ", u"皮");
+            if (!l.hidden(u"かわ", u"皮")) { printf("FAIL hide\n"); failures++; }
+            forget_recent(d, 2000);
+            if (l.hidden(u"かわ", u"皮")) { printf("FAIL forget_recent hide\n"); failures++; }
+            auto u = l.record(u"かわ", u"川");
+            l.restore({u});
+            kawa = 0;
+            for (auto& c : l.counts(u"かわ")) if (c.first == u"川") kawa = c.second;
+            if (kawa != 4) { printf("FAIL learning restore %d\n", kawa); failures++; }
+            // 確定した文: 同意したときだけ書く・種類を指定して消せる・時間の指定でも消える
+            l.note_commit(u"かわ", u"川", u"前の\t文\n");
+            std::string rec;
+            read_file(d / RECENT_FILE, rec);
+            if (rec.find("\tC\t") == std::string::npos || rec.find(to_utf8(u"前の 文 ")) == std::string::npos) { printf("FAIL note_commit\n"); failures++; }
+            recent_drop(d, "C");
+            read_file(d / RECENT_FILE, rec);
+            if (rec.find("\tC\t") != std::string::npos) { printf("FAIL recent_drop\n"); failures++; }
+            l.note_commit(u"かわ", u"川", u"");
+            forget_recent(d, 2000, "LHSF");   // 変換の学習を消しても確定した文は残る
+            read_file(d / RECENT_FILE, rec);
+            if (rec.find("\tC\t") == std::string::npos) { printf("FAIL forget_recent kinds\n"); failures++; }
+            forget_recent(d, 2000, "C");
+            read_file(d / RECENT_FILE, rec);
+            if (rec.find("\tC\t") != std::string::npos) { printf("FAIL forget_recent commit\n"); failures++; }
+            forget_all(d);
+            if (!l.counts(u"かわ").empty() || std::filesystem::exists(d / RECENT_FILE)) { printf("FAIL forget_all\n"); failures++; }
+            else printf("ok   forget recent learning\n");
+        }
+    }
     {   // 学習は読み 500 個を超えても消えない (以前は 500 で押し出されていた)・最後に選んだ日を覚えて、読み直しても残る
         Learning big(work / "learned_big.json");
         big.clear();
@@ -399,8 +465,10 @@ int main(int argc, char** argv) {
     // ---- 入力中の見せ方
     keys(c, "kyouha");
     expect("input text", c.view().text, u"きょうは");
+    expect("typed strip kana", c.view().typed, u"きょうは");
     keys(c, "k");
     expect("pending romaji", c.view().text, u"きょうはk");
+    expect("typed strip pending", c.view().typed, u"きょうはk");
     keys(c, "{bs}{esc}");
     expect("esc clears", c.view().text, u"");
 
@@ -628,6 +696,28 @@ int main(int argc, char** argv) {
     expect("idle space", c.take_commit(), u"　");
 
     // ---- 変換中に次を打つと確定してから
+    {   // 確定した文は既定では残さない
+        std::error_code ec;
+        std::filesystem::remove(work / RECENT_FILE, ec);
+        keys(c, "neko{sp}{enter}");
+        c.take_commit();
+        std::string rec;
+        read_file(work / RECENT_FILE, rec);
+        if (rec.find("\tC\t") != std::string::npos) { printf("FAIL learn_log default\n"); failures++; }
+        c.options.learn_log = true;
+        keys(c, "neko{sp}{enter}");
+        c.take_commit();
+        read_file(work / RECENT_FILE, rec);
+        if (rec.find("\tC\t") == std::string::npos) { printf("FAIL learn_log on\n"); failures++; }
+        c.options.secure_field = true;
+        const size_t was = rec.size();
+        keys(c, "neko{sp}{enter}");
+        c.take_commit();
+        read_file(work / RECENT_FILE, rec);
+        if (rec.size() != was) { printf("FAIL learn_log secure\n"); failures++; }
+        c.options.learn_log = false;
+        c.options.secure_field = false;
+    }
     keys(c, "neko{sp}ga");
     expect("type after convert", c.take_commit(), u"猫");
     expect("new input", c.view().text, u"が");
@@ -641,29 +731,30 @@ int main(int argc, char** argv) {
     u16 second = c.view().text;
     keys(c, "{enter}");
     c.take_commit();
-    // 1 回だけ選んだ表記はモデルの 1 位を覆さない (2 位に上がる)。2 回選ぶと 1 位 (2026-10-20 学習の審査)
+    // 手で 1 度選び直すと 2 回分で先頭へ (2026-10-30)
     c.reset_history();
     keys(c, "kawa{sp}");
-    expect("learned once: model top stays", c.view().text, first);
-    keys(c, "{sp}");
-    expect("learned once: next is the chosen one", c.view().text, second);
-    keys(c, "{enter}");
-    c.take_commit();
-    keys(c, "kawa{sp}");
-    expect("learned twice", c.view().text, second);
+    expect("learned once: chosen one goes first", c.view().text, second);
     printf("     (first was %s)\n", u8(first).c_str());
     keys(c, "{esc}{esc}");
-    {   // 読みが 5 字以上なら 1 回選んだだけで先頭へ (2026-10-28)。短い読みは今までどおり 2 位
+    {   // 手で選ぶと 2 回分。選び直さずに確定すると 1 回分足し、回数の多い方が先頭 (2026-10-30)
         Learning l(work / "learned_once.json");
         l.clear();
-        l.record(u"しんいらい", u"新依頼");
         l.record(u"かわ", u"革");
-        auto a = l.apply_order(u"しんいらい", {u"震為雷", u"新以来", u"新依頼"});
-        expect("learned once: long reading goes first", a[0], u"新依頼");
         auto b = l.apply_order(u"かわ", {u"川", u"皮", u"革"});
-        expect("learned once: short reading stays 2nd", b[0] + u"," + b[1], u"川,革");
-        expect("learned once: top() long reading", l.top(u"しんいらい"), u"新依頼");
-        expect("learned once: top() short reading", l.top(u"かわ"), u"");
+        expect("learned once: chosen goes first", b[0], u"革");
+        expect("learned once: top()", l.top(u"かわ"), u"革");
+        l.confirm(u"かわ", u"川");
+        l.confirm(u"かわ", u"川");
+        l.confirm(u"かわ", u"川");
+        b = l.apply_order(u"かわ", {u"川", u"皮", u"革"});
+        expect("learned: confirmed takes it back", b[0], u"川");
+        l.confirm(u"やま", u"山");
+        if (!l.counts(u"やま").empty()) { printf("FAIL confirm unlearned reading\n"); failures++; }
+        // 前の版のファイルの回数は手で選んだ回数なので 2 倍に
+        { std::ofstream f(work / "learned_v1.json", std::ios::binary); f << "{\"" << to_utf8(u"かわ") << "\":{\"" << to_utf8(u"革") << "\":1}}"; }
+        Learning v1(work / "learned_v1.json");
+        expect("learned: old file", v1.top(u"かわ"), u"革");
     }
 
     // ---- ユーザー辞書
@@ -705,6 +796,20 @@ int main(int argc, char** argv) {
         if (c.undoable().first != t || c.undoable().second != u"かわ") { printf("FAIL undoable\n"); failures++; }
         if (!c.undo_commit() || !c.composing()) { printf("FAIL undo commit\n"); failures++; }
         keys(c, "{esc}{esc}{esc}");
+        // 確定の取り消しは、その確定で覚えたことも戻す (2026-10-30)
+        keys(c, "yamaba{sp}{sp}{enter}");
+        const u16 picked = c.take_commit();
+        int before = 0;
+        for (auto& p : learning.counts(u"やまば")) if (p.first == picked) before = p.second;
+        if (before > 0 && c.undo_commit()) {
+            int after = 0;
+            for (auto& p : learning.counts(u"やまば")) if (p.first == picked) after = p.second;
+            if (after != before - 2) { printf("FAIL undo learning %d %d\n", before, after); failures++; }
+        }
+        keys(c, "{esc}{esc}{esc}");
+        expect("romaji reading", c.romaji_reading(u"konnichiha Sekai"), u"こんにちはせかい");
+        expect("romaji reading bad", c.romaji_reading(u"hello2"), u16());
+        expect("romaji reading word", c.romaji_reading(u"xyz"), u16());
         keys(c, "kawa{sp}{enter}a{esc}");   // ほかのキーを押したら取り消せない
         c.take_commit();
         if (!c.undoable().first.empty()) { printf("FAIL undoable after key\n"); failures++; }

@@ -15,16 +15,31 @@
 
 namespace shunti {
 
+// 最近の学習の控え (recent_learn.tsv)。時間を指定して学習を消すために、学習のたびに 1 行足す。
+// 時刻 (秒)・種類 (L 学習 / H 候補を消した / S 書き方 / F 文の流れ / C 確定した文)・元に戻すのに要る値。256MB を超えたら古い半分を捨てる
+void recent_add(const std::filesystem::path& dir, const std::vector<std::string>& fields);
+// 種類 kind の行だけ控えから消す
+void recent_drop(const std::filesystem::path& dir, const std::string& kind);
+constexpr const wchar_t* RECENT_FILE = L"recent_learn.tsv";
+
 class Learning {
 public:
     explicit Learning(std::filesystem::path file) : file_(std::move(file)) {}
 
-    // 変換で選んだ表記を覚えて、すぐ保存する
-    void record(const u16& reading, const u16& surface);
+    // record の前の値 (確定の取り消し・時間を指定した消去で元に戻す)
+    struct Undo { u16 reading, surface; int count = 0, day = 0; bool hidden = false; };   // hidden: 消した操作を戻す
+    // 手で選び直した表記を覚えて、すぐ保存する。2 回分に数える (実機の入力ログの時刻順の評価は MELTYPE_NOTES。ユーザー 2026-10-30)
+    Undo record(const u16& reading, const u16& surface, int add = 2);
+    // 選び直さずに確定した表記。すでに学習のある読みでだけ 1 回分足す (選び直した表記が 1 位を奪い続けないように)
+    Undo confirm(const u16& reading, const u16& surface);
+    // 確定した文 (読み・表記・左の文脈) を控えに足す。「学習を始める」で同意したときだけ呼ぶ
+    void note_commit(const u16& reading, const u16& surface, const u16& ctx);
+    // 控えの順に元の値へ戻す。消した (回数 -1 の) 表記は、hidden の控えでだけ戻す
+    void restore(const std::vector<Undo>& us);
     // その読みでその表記を選んだ記録を消す
     void forget(const u16& reading, const u16& surface);
     // その読みではその表記を候補に出さない (Ctrl+Delete。MS-IME と同じ。回数 -1 として覚える。選び直すと戻る)
-    void hide(const u16& reading, const u16& surface);
+    void hide(const u16& reading, const u16& surface, bool keep_recent = true);
     bool hidden(const u16& reading, const u16& surface);
     // 選んだことのある表記を回数の多い順に前へ (他の並びはそのまま)
     std::vector<u16> apply_order(const u16& reading, const std::vector<u16>& cands);
@@ -51,7 +66,7 @@ public:
     // あふれたら、回数が少なく長く使っていない読みから捨てる
     static constexpr size_t MAX_READINGS = 20000;
     static constexpr size_t MAX_SURFACES = 5;
-    static constexpr int ONCE_MIN_READING = 5;   // この字数以上の読みは 1 回選んだだけで先頭へ
+    static constexpr int TOP_MIN_COUNT = 2;      // この回数から先頭へ (手で 1 度選べば届く)
 
 private:
     struct Entry { u16 reading; std::vector<std::pair<u16, int>> counts; int day = 0; };
@@ -74,6 +89,7 @@ class StyleLog {
 public:
     explicit StyleLog(std::filesystem::path file) : file_(std::move(file)) {}
     void record(const u16& surface, const std::array<float, 2>& w);
+    void unrecord(const std::vector<std::pair<u16, std::array<float, 2>>>& items);   // record を取り消す
     const std::unordered_map<u16, StyleModel::Count>& counts() { refresh(); return m_; }
     uint64_t version() { refresh(); return version_; }
     void clear();

@@ -1,5 +1,6 @@
 #include "datetime.h"
 
+#include <algorithm>
 #include <cstdlib>
 
 namespace shunti {
@@ -352,6 +353,99 @@ bool parse_month_day(const u16& r, int& y, int& m, int& d, bool& has_year) {
 
 }  // namespace
 
+// ---------------------------------------------------------------- 数字の書き換え (スマホ版 NumberFormatter と同じ形に、和暦・丸数字を足す)
+namespace {
+const char16_t* const DIGIT_KANJI[] = {u"〇", u"一", u"二", u"三", u"四", u"五", u"六", u"七", u"八", u"九"};
+const char16_t* const SMALL_UNITS[] = {u"", u"十", u"百", u"千"};
+const char16_t* const BIG_UNITS[] = {u"", u"万", u"億", u"兆", u"京"};
+constexpr size_t MAX_DIGITS = 20;
+
+u16 group_kanji(const u16& g) {   // 1〜4 桁 (千・百・十の前の一は書かない)
+    u16 out;
+    for (size_t i = 0; i < g.size(); i++) {
+        const int d = g[i] - u'0';
+        const size_t place = g.size() - 1 - i;
+        if (d == 0) continue;
+        if (d != 1 || place == 0) out += DIGIT_KANJI[d];
+        out += SMALL_UNITS[place];
+    }
+    return out;
+}
+
+std::vector<u16> groups_of(const u16& s) {   // 右から 4 桁ずつ。[0] がいちばん下の組
+    std::vector<u16> g;
+    for (size_t end = s.size(); end > 0; end = end > 4 ? end - 4 : 0) g.push_back(s.substr(end > 4 ? end - 4 : 0, end > 4 ? 4 : end));
+    return g;
+}
+
+u16 to_kanji(const u16& s) {
+    const auto gs = groups_of(s);
+    u16 out;
+    for (size_t i = gs.size(); i-- > 0;) {
+        const u16 k = group_kanji(gs[i]);
+        if (!k.empty()) out += k + BIG_UNITS[i];
+    }
+    return out;
+}
+
+u16 to_man_mixed(const u16& s) {   // 12345678 → 1234万5678・1000000 → 100万
+    const auto gs = groups_of(s);
+    u16 out;
+    for (size_t i = gs.size(); i-- > 0;) {
+        if (gs[i].find_first_not_of(u'0') == u16::npos) continue;
+        out += (out.empty() ? gs[i] : u16(4 - gs[i].size(), u'0') + gs[i]) + BIG_UNITS[i];
+    }
+    return out;
+}
+
+u16 add_commas(const u16& s) {
+    u16 out;
+    for (size_t i = 0; i < s.size(); i++) {
+        if (i > 0 && (s.size() - i) % 3 == 0) out += u',';
+        out += s[i];
+    }
+    return out;
+}
+
+char16_t circled(int v) {   // 白丸 0〜50
+    if (v == 0) return char16_t(0x24EA);
+    if (v <= 20) return char16_t(0x2460 + v - 1);
+    if (v <= 35) return char16_t(0x3251 + v - 21);
+    return char16_t(0x32B1 + v - 36);
+}
+char16_t black_circled(int v) { return char16_t(v <= 10 ? 0x2776 + v - 1 : 0x24EB + v - 11); }   // 黒丸に白抜き 1〜20
+}  // namespace
+
+std::vector<u16> number_forms(const u16& reading) {
+    if (reading.empty() || reading.size() > MAX_DIGITS) return {};
+    u16 d;
+    for (char16_t c : reading) {
+        if (c >= u'0' && c <= u'9') d += c;
+        else if (c >= 0xFF10 && c <= 0xFF19) d += char16_t(u'0' + (c - 0xFF10));
+        else return {};
+    }
+    if (d[0] == u'0' && d.size() > 1) return {};   // 0 で始まるのは番号
+    std::vector<u16> out;
+    auto push = [&](const u16& s) {
+        if (!s.empty() && s != reading && std::find(out.begin(), out.end(), s) == out.end()) out.push_back(s);
+    };
+    int v = -1;
+    if (d.size() <= 4) {
+        v = 0;
+        for (char16_t c : d) v = v * 10 + (c - u'0');
+    }
+    if (d.size() == 4 && v >= 1926 && v <= 2100) push(era_year(v));
+    if (d.size() >= 4) {
+        push(add_commas(d));
+        push(to_man_mixed(d));
+    }
+    if (d == u"0") push(u"〇");
+    else push(to_kanji(d));
+    if (v >= 0 && v <= 50) push(u16(1, circled(v)));
+    if (v >= 1 && v <= 20) push(u16(1, black_circled(v)));
+    return out;
+}
+
 std::vector<u16> datetime_predict(const u16& reading, std::time_t now) {
     int y, mo, d, hh, mi;
     local_breakdown(now, y, mo, d, hh, mi);
@@ -372,9 +466,17 @@ std::vector<u16> datetime_predict(const u16& reading, std::time_t now) {
                 const int64_t days = days_from_civil(Y, M, D);
                 int y2, m2, d2;
                 civil_from_days(days, y2, m2, d2);
-                if (y2 == Y && m2 == M && d2 == D) return date_forms(days);
+                if (y2 == Y && m2 == M && d2 == D) {
+                    std::vector<u16> out = date_forms(days);
+                    for (auto& f : number_forms(reading)) out.push_back(f);
+                    return out;
+                }
             }
         }
+    }
+    {
+        std::vector<u16> nf = number_forms(reading);
+        if (!nf.empty()) return nf;
     }
     int off;
     if (find_offset(DAY_OFFSETS, sizeof(DAY_OFFSETS) / sizeof(DAY_OFFSETS[0]), reading, off)) return date_forms(today + off);

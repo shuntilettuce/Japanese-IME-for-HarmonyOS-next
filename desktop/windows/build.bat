@@ -66,7 +66,7 @@ set OBJ=%HERE%..\build\obj_settings%SUFFIX%
 if not exist "%OBJ%" mkdir "%OBJ%"
 rc /nologo %DEFS% /fo "%OBJ%\settings_app.res" "%HERE%settings_app.rc" || exit /b 1
 cl /nologo /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS %DEFS% /Fo"%OBJ%\\" ^
-  "%HERE%settings_app.cpp" "%HERE%strings.cpp" "%HERE%update.cpp" "%CORE%\release_info.cpp" "%CORE%\text.cpp" "%CORE%\store.cpp" "%CORE%\settings.cpp" /Fe"%DIST%\shunti_settings.exe" ^
+  "%HERE%settings_app.cpp" "%HERE%strings.cpp" "%HERE%update.cpp" "%CORE%\release_info.cpp" "%CORE%\text.cpp" "%CORE%\store.cpp" "%CORE%\flow.cpp" "%CORE%\settings.cpp" /Fe"%DIST%\shunti_settings.exe" ^
   /link /SUBSYSTEM:WINDOWS /guard:cf "%OBJ%\settings_app.res" comctl32.lib comdlg32.lib shell32.lib ole32.lib user32.lib gdi32.lib winhttp.lib ^
   /MANIFEST:EMBED "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'" || exit /b 1
 rem web installer: downloads the latest Windows release from GitHub and runs install.ps1

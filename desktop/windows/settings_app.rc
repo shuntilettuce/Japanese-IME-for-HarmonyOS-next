@@ -6,8 +6,8 @@
 STRINGS RCDATA "strings.json"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,7,4,0
- PRODUCTVERSION 0,7,4,0
+ FILEVERSION 0,7,5,0
+ PRODUCTVERSION 0,7,5,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS VOS_NT_WINDOWS32
@@ -20,11 +20,11 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "shuntilettuce"
             VALUE "FileDescription", "shunti IME の設定"
-            VALUE "FileVersion", "0.7.4"
+            VALUE "FileVersion", "0.7.5"
             VALUE "InternalName", "shunti_settings"
             VALUE "LegalCopyright", "MIT License"
             VALUE "ProductName", "shunti IME"
-            VALUE "ProductVersion", "0.7.4"
+            VALUE "ProductVersion", "0.7.5"
         END
     END
     BLOCK "VarFileInfo"

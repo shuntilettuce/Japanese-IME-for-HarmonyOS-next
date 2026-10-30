@@ -11,9 +11,11 @@
 #include <iterator>
 
 #include <algorithm>
+#include <chrono>
 #include <string>
 #include <vector>
 
+#include "../core/flow.h"
 #include "../core/settings.h"
 #include "../core/store.h"
 #include "../core/text.h"
@@ -26,11 +28,11 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr wchar_t VERSION[] = L"0.7.4";
+constexpr wchar_t VERSION[] = L"0.7.5";
 
 enum Id {
-    ID_THEME = 100, ID_PUNCT, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
-    ID_LIST, ID_READING, ID_WORD, ID_POS, ID_ADD, ID_REMOVE, ID_IMPORT, ID_ADVANCED, ID_UPDATE, ID_RESET, ID_LICENSE, ID_GITHUB, ID_ICON, ID_MODEL, ID_CANDTREE, ID_SPACELIT, ID_LATIN, ID_CAPS, ID_TYPO, ID_PERSONAL,
+    ID_PUNCT = 100, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
+    ID_LIST, ID_READING, ID_WORD, ID_POS, ID_ADD, ID_REMOVE, ID_IMPORT, ID_ADVANCED, ID_UPDATE, ID_RESET, ID_RECENT_SPAN, ID_RECENT_FORGET, ID_RECENT_SPAN_AI, ID_RECENT_FORGET_AI, ID_LEARN_LOG, ID_LEARN_CLEAR, ID_LICENSE, ID_GITHUB, ID_MODEL, ID_CANDTREE, ID_SPACELIT, ID_LATIN, ID_CAPS, ID_TYPO,
 };
 
 // 変換モデル (settings.json の model の値と、画面の表示)。名前は配布の呼び名 (開発名は出さない)
@@ -92,8 +94,6 @@ int selected(int id) { return int(SendDlgItemMessageW(g_wnd, id, CB_GETCURSEL, 0
 
 void save() {
     if (g_loading) return;
-    const char* themes[] = {"auto", "light", "dark"};
-    g_s.theme = themes[std::max(0, selected(ID_THEME))];
     g_s.punct = std::max(0, selected(ID_PUNCT));
     g_s.space_fullwidth = checked(ID_SPACE);
     g_s.digits_fullwidth = checked(ID_DIGITS);
@@ -104,7 +104,6 @@ void save() {
     g_s.latin_auto = checked(ID_LATIN);
     g_s.caps_alpha = checked(ID_CAPS);
     g_s.typo_fix = checked(ID_TYPO);
-    g_s.personal = checked(ID_PERSONAL);
     g_s.live_commit = checked(ID_LIVECOMMIT);
     g_s.model = MODELS[std::clamp(selected(ID_MODEL), 0, 1)];
     if (!save_settings(g_dir / L"settings.json", g_s))
@@ -200,7 +199,7 @@ void import_words() {
 // 記号ごとの全角/半角・テンキー・候補の数・無変換キー・再変換・プライベート・ローマ字の表・辞書の書き出し
 const wchar_t SYMS[] = L"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 enum { ADV_SYM0 = 500, ADV_NUMPAD = 600, ADV_PAGE, ADV_APPOPEN, ADV_PRIVATE, ADV_ROMAJI, ADV_EXPORT, ADV_CLOSE,
-       ADV_KEYMAP = 710, ADV_LAYOUT = 711, ADV_LAYOUT_NOTE = 712, ADV_LTHUMBS = 713, ADV_LCONT, ADV_LTAP, ADV_LREP, ADV_RLIST = 720, ADV_RKEY, ADV_RKANA, ADV_RADD, ADV_RDEL, ADV_ALIST = 730, ADV_ATOGGLE, ADV_ADEL,
+       ADV_KEYMAP = 710, ADV_LAYOUT = 711, ADV_LAYOUT_NOTE = 712, ADV_LTHUMBS = 713, ADV_LCONT, ADV_LTAP, ADV_LREP, ADV_RLIST = 720, ADV_RKEY, ADV_RKANA, ADV_RADD, ADV_RDEL, ADV_ALIST = 730, ADV_ATOGGLE, ADV_ADEL, ADV_THEME = 740, ADV_ICON,
        ADV_SLIST = 800, ADV_SKEY, ADV_SFUNC, ADV_SADD, ADV_SCHG, ADV_SDEL, ADV_SUP, ADV_SDOWN, ADV_SRESET };
 // キー割り当ての型 (Google 日本語入力 = Mozc の keymap と同じ字)
 struct Keymap { const char* id; const wchar_t* name; };
@@ -334,10 +333,24 @@ void adv_layout_relayout() {
     InvalidateRect(g_adv, nullptr, TRUE);
 }
 
+// IME を登録し直すと、登録アイコンをいまのタスクバーの色 (ダーク = 白、ライト = 黒) で選び直す (管理者の許可が要る)
+void reregister_icon() {
+    wchar_t exe[MAX_PATH], sys[MAX_PATH];
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    GetSystemDirectoryW(sys, MAX_PATH);
+    std::wstring args = L"/s \"" + (fs::path(exe).parent_path() / L"shunti_ime_x64.dll").wstring() + L"\"";
+    std::wstring reg = std::wstring(sys) + L"\\regsvr32.exe";
+    if (reinterpret_cast<INT_PTR>(ShellExecuteW(g_adv, L"runas", reg.c_str(), args.c_str(), nullptr, SW_HIDE)) > 32)
+        MessageBoxW(g_adv, T(128),
+                    L"shunti IME", MB_ICONINFORMATION);
+}
+
 void adv_save() {
     if (g_loading) return;
     HWND keep = g_wnd;
     g_wnd = g_adv;
+    const char* themes[] = {"auto", "light", "dark"};
+    g_s.theme = themes[std::max(0, selected(ADV_THEME))];
     g_s.half_symbols = g_half;
     g_s.numpad = std::max(0, selected(ADV_NUMPAD));
     g_s.page_size = 5 + std::max(0, selected(ADV_PAGE));
@@ -660,7 +673,8 @@ LRESULT CALLBACK adv_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_COMMAND) {
         int id = LOWORD(w), code = HIWORD(w);
         if (id == ADV_CLOSE || id == IDCANCEL) DestroyWindow(h);
-        else if ((id == ADV_NUMPAD || id == ADV_PAGE || id == ADV_APPOPEN) && code == CBN_SELCHANGE) adv_save();
+        else if ((id == ADV_NUMPAD || id == ADV_PAGE || id == ADV_APPOPEN || id == ADV_THEME) && code == CBN_SELCHANGE) adv_save();
+        else if (id == ADV_ICON) reregister_icon();
         else if (id >= ADV_SYM0 && id < ADV_SYM0 + 64 && code == BN_CLICKED) {   // 押すたびに全角 ⇔ 半角
             const char c = char(SYMS[id - ADV_SYM0]);
             const size_t at = g_half.find(c);
@@ -758,6 +772,11 @@ void open_advanced() {
     make(L"STATIC", T(56), 0, 24, y + 87, 120, 20, 0);
     combo(150, y + 83, 300, ADV_APPOPEN, {T(57), T(58)});
     y += 122;
+    group(T(95), y, 86);
+    make(L"STATIC", T(96), 0, 24, y + 27, 170, 20, 0);
+    combo(200, y + 23, 250, ADV_THEME, {T(97), T(98), T(99)});
+    make(L"BUTTON", T(100), BS_PUSHBUTTON | WS_TABSTOP, 24, y + 52, 250, 25, ADV_ICON);
+    y += 94;
     group(T(59), y, 90);
     make(L"BUTTON", T(60), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 22, 430, 22, ADV_PRIVATE);
     make(L"BUTTON", T(61), BS_PUSHBUTTON | WS_TABSTOP, 24, y + 54, 180, 25, ADV_EXPORT);
@@ -849,6 +868,7 @@ void open_advanced() {
     g_loading = true;
     g_half = g_s.half_symbols;
     for (int i = 0; SYMS[i]; i++) sym_label(i);
+    select(ADV_THEME, g_s.theme == "light" ? 1 : g_s.theme == "dark" ? 2 : 0);
     select(ADV_NUMPAD, g_s.numpad);
     select(ADV_PAGE, std::clamp(g_s.page_size, 5, 9) - 5);
     check(ADV_PRIVATE, g_s.private_mode);
@@ -881,26 +901,53 @@ void reset_learning() {
     if (MessageBoxW(g_wnd, T(92), T(93),
                     MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
         return;
-    Learning(g_dir / L"learned.json").clear();
+    forget_all(g_dir);
     MessageBoxW(g_wnd, T(94), L"shunti IME", MB_ICONINFORMATION);
+}
+
+// 確定した文を手元に残すのは、同意した人だけ。やめるときは残した分を消すかを聞く
+void toggle_learn_log() {
+    if (!g_s.learn_log) {
+        if (MessageBoxW(g_wnd, T(180), T(178), MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return;
+        g_s.learn_log = true;
+    } else {
+        const int r = MessageBoxW(g_wnd, T(181), T(179), MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON3);
+        if (r == IDCANCEL) return;
+        if (r == IDYES) recent_drop(g_dir, "C");
+        g_s.learn_log = false;
+    }
+    save();
+    SetDlgItemTextW(g_wnd, ID_LEARN_LOG, T(g_s.learn_log ? 179 : 178));
+}
+
+void clear_learn_log() {
+    if (MessageBoxW(g_wnd, T(183), T(182), MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
+    recent_drop(g_dir, "C");
+    MessageBoxW(g_wnd, T(184), L"shunti IME", MB_ICONINFORMATION);
+}
+
+// 指定した時間のあいだの分だけを消す。ai = 保存した確定した文、それ以外 = 変換の学習
+void forget_recent_learning(bool ai) {
+    static const long long SPANS[] = {600, 3600, 6 * 3600, 24 * 3600, 7 * 24 * 3600, 30 * 24 * 3600};
+    const int i = selected(ai ? ID_RECENT_SPAN_AI : ID_RECENT_SPAN);
+    if (i < 0 || i >= int(sizeof(SPANS) / sizeof(SPANS[0]))) return;
+    if (MessageBoxW(g_wnd, T(ai ? 186 : 175), T(ai ? 185 : 174), MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
+    const long long now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    const int n = forget_recent(g_dir, now - SPANS[i], ai ? "C" : "LHSF");
+    const std::wstring msg = n > 0 ? std::to_wstring(n) + T(176) : std::wstring(T(177));
+    MessageBoxW(g_wnd, msg.c_str(), L"shunti IME", MB_ICONINFORMATION);
 }
 
 void show_settings();
 
 void build() {
     int y = 8;
-    group(T(95), y, 86);
-    make(L"STATIC", T(96), 0, 24, y + 27, 170, 20, 0);
-    combo(200, y + 23, 250, ID_THEME, {T(97), T(98), T(99)});
-    make(L"BUTTON", T(100), BS_PUSHBUTTON | WS_TABSTOP, 24, y + 52, 250, 25, ID_ICON);
-    y += 94;
-
     group(T(32), y, 60);
     make(L"STATIC", T(101), 0, 24, y + 27, 170, 20, 0);
     combo(200, y + 23, 250, ID_MODEL, {T(102), T(103)});
     y += 68;
 
-    group(T(50), y, 335);
+    group(T(50), y, 310);
     make(L"STATIC", T(104), 0, 24, y + 27, 170, 20, 0);
     combo(200, y + 23, 120, ID_PUNCT, {T(105), T(106), T(107), T(108)});
     make(L"BUTTON", T(109), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 54, 430, 22, ID_SPACE);
@@ -913,8 +960,7 @@ void build() {
     make(L"BUTTON", T(161), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 229, 430, 22, ID_LATIN);
     make(L"BUTTON", T(163), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 254, 430, 22, ID_CAPS);
     make(L"BUTTON", T(165), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 279, 430, 22, ID_TYPO);
-    make(L"BUTTON", T(166), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 304, 430, 22, ID_PERSONAL);
-    y += 343;
+    y += 318;
 
     group(T(13), y, 216);
     g_list = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 24, y + 22, 432, 90, ID_LIST);
@@ -942,8 +988,19 @@ void build() {
          0, 222, y + 180, 240, 34, 0);
     y += 224;
 
-    group(T(123), y, 60);
-    make(L"BUTTON", T(93), BS_PUSHBUTTON | WS_TABSTOP, 24, y + 24, 140, 25, ID_RESET);
+    group(T(123), y, 90);
+    make(L"BUTTON", T(178), BS_PUSHBUTTON | WS_TABSTOP, 24, y + 22, 140, 25, ID_LEARN_LOG);
+    make(L"BUTTON", T(182), BS_PUSHBUTTON | WS_TABSTOP, 180, y + 22, 180, 25, ID_LEARN_CLEAR);
+    combo(24, y + 55, 90, ID_RECENT_SPAN_AI, {T(168), T(169), T(170), T(171), T(172), T(173)});
+    select(ID_RECENT_SPAN_AI, 1);
+    make(L"BUTTON", T(185), BS_PUSHBUTTON | WS_TABSTOP, 120, y + 54, 240, 25, ID_RECENT_FORGET_AI);
+    y += 98;
+
+    group(T(187), y, 60);
+    combo(24, y + 25, 90, ID_RECENT_SPAN, {T(168), T(169), T(170), T(171), T(172), T(173)});
+    select(ID_RECENT_SPAN, 1);
+    make(L"BUTTON", T(174), BS_PUSHBUTTON | WS_TABSTOP, 120, y + 24, 180, 25, ID_RECENT_FORGET);
+    make(L"BUTTON", T(93), BS_PUSHBUTTON | WS_TABSTOP, 306, y + 24, 150, 25, ID_RESET);
     y += 68;
     make(L"BUTTON", T(124), BS_PUSHBUTTON | WS_TABSTOP, 10, y, 120, 25, ID_ADVANCED);
     make(L"BUTTON", T(125), BS_PUSHBUTTON | WS_TABSTOP, 138, y, 120, 25, ID_UPDATE);
@@ -966,7 +1023,7 @@ void build() {
 // g_s を画面のチェックと選択に出す
 void show_settings() {
     g_loading = true;
-    select(ID_THEME, g_s.theme == "light" ? 1 : g_s.theme == "dark" ? 2 : 0);
+    SetDlgItemTextW(g_wnd, ID_LEARN_LOG, T(g_s.learn_log ? 179 : 178));
     select(ID_PUNCT, g_s.punct);
     select(ID_MODEL, g_s.model == "light" ? 0 : 1);
     check(ID_SPACE, g_s.space_fullwidth);
@@ -978,7 +1035,6 @@ void show_settings() {
     check(ID_LATIN, g_s.latin_auto);
     check(ID_CAPS, g_s.caps_alpha);
     check(ID_TYPO, g_s.typo_fix);
-    check(ID_PERSONAL, g_s.personal);
     check(ID_LIVECOMMIT, g_s.live_commit);
     g_loading = false;
 }
@@ -990,9 +1046,9 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     case WM_COMMAND: {
             int id = LOWORD(w), code = HIWORD(w);
-            if ((id == ID_THEME || id == ID_PUNCT || id == ID_MODEL) && code == CBN_SELCHANGE) save();
+            if ((id == ID_PUNCT || id == ID_MODEL) && code == CBN_SELCHANGE) save();
             else if (id == IDCANCEL) DestroyWindow(h);   // 「閉じる」と Esc
-            else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_CANDTREE || id == ID_SPACELIT || id == ID_LATIN || id == ID_CAPS || id == ID_TYPO || id == ID_PERSONAL) && code == BN_CLICKED) save();
+            else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_CANDTREE || id == ID_SPACELIT || id == ID_LATIN || id == ID_CAPS || id == ID_TYPO) && code == BN_CLICKED) save();
             else if (id == ID_ADD) add_word();
             else if (id == ID_POS && code == CBN_SELCHANGE) update_reading_box();
             else if (id == ID_IMPORT) import_words();
@@ -1000,17 +1056,10 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             else if (id == ID_UPDATE) check_update(true);
             else if (id == ID_REMOVE) remove_word();
             else if (id == ID_RESET) reset_learning();
-            else if (id == ID_ICON) {
-                // IME を登録し直すと、登録アイコンをいまのタスクバーの色 (ダーク = 白、ライト = 黒) で選び直す (管理者の許可が要る)
-                wchar_t exe[MAX_PATH], sys[MAX_PATH];
-                GetModuleFileNameW(nullptr, exe, MAX_PATH);
-                GetSystemDirectoryW(sys, MAX_PATH);
-                std::wstring args = L"/s \"" + (fs::path(exe).parent_path() / L"shunti_ime_x64.dll").wstring() + L"\"";
-                std::wstring reg = std::wstring(sys) + L"\\regsvr32.exe";
-                if (reinterpret_cast<INT_PTR>(ShellExecuteW(h, L"runas", reg.c_str(), args.c_str(), nullptr, SW_HIDE)) > 32)
-                    MessageBoxW(h, T(128),
-                                L"shunti IME", MB_ICONINFORMATION);
-            }
+            else if (id == ID_RECENT_FORGET) forget_recent_learning(false);
+            else if (id == ID_RECENT_FORGET_AI) forget_recent_learning(true);
+            else if (id == ID_LEARN_LOG) toggle_learn_log();
+            else if (id == ID_LEARN_CLEAR) clear_learn_log();
             else if (id == ID_LICENSE) {
                 wchar_t exe[MAX_PATH];
                 GetModuleFileNameW(nullptr, exe, MAX_PATH);
@@ -1039,6 +1088,15 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
 
 }  // namespace
 
+// 更新の後に 1 度だけ、確定した文を残してよいかを聞く (install.ps1 が --consent で呼ぶ。起動したときにも見る)
+void ask_consent() {
+    if (g_s.consent_asked) return;
+    g_s.consent_asked = true;
+    if (!g_s.learn_log)
+        g_s.learn_log = MessageBoxW(nullptr, T(180), T(178), MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND) == IDYES;
+    save_settings(g_dir / L"settings.json", g_s);
+}
+
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     // ショートカットキー「ユーザー辞書を開く」: --dict なら起動後にユーザー辞書の欄に移る
@@ -1058,6 +1116,8 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmd, int show) {
     std::error_code ec;
     fs::create_directories(g_dir, ec);
     load_settings(g_dir / L"settings.json", g_s);
+    ask_consent();
+    if (cmd && wcsstr(cmd, L"--consent")) return 0;
     UserDict dict(g_dir / L"userdict.json");
     g_dict = &dict;
 

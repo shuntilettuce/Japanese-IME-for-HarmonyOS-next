@@ -17,6 +17,7 @@ public:
     void load(const std::filesystem::path& path);
     void save();
     void clear();
+    void unbump(const u16& key, const u16& v);   // 数えた分を 1 つ戻す (時間を指定した消去)
     void reset();                 // 別の欄・カーソルを動かした: 途中の節はつながらない
     void boundary();              // 送信・改行: 文が終わった
     void backspace();             // 確定した文字を 1 字消した
@@ -27,6 +28,7 @@ public:
     void record_suggest(const u16& t);
 
 private:
+    void refresh();   // ほかのプロセス・設定の画面がファイルを変えていたら読み直す
     void close(const u16& punct);
     void bump(const u16& key, const u16& v);
     std::vector<u16> top(const u16& key, size_t n) const;
@@ -34,7 +36,13 @@ private:
     std::map<u16, std::map<u16, int>> table_;   // u"P" + 節 -> 句読点、u"N" + 節 -> 次の節
     u16 buf_, prev_;
     std::filesystem::path path_;
+    std::filesystem::file_time_type stamp_{};
     bool dirty_ = false;
 };
+
+// 学習を全部消す (learned.json・style.json・flow.tsv と控え)
+void forget_all(const std::filesystem::path& dir);
+// since (秒) 以降の、種類が kinds に入っている控え (recent_add の種類の字) を元に戻す。戻した件数を返す
+int forget_recent(const std::filesystem::path& dir, long long since, const std::string& kinds = "LHSFC");
 
 }  // namespace shunti

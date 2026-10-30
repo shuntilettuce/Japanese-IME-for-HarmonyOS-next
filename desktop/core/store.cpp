@@ -55,7 +55,65 @@ bool stamp_of(const fs::path& p, fs::file_time_type& t) {
 }
 }  // namespace
 
+// ---------------------------------------------------------------- 最近の学習の控え
+
+namespace {
+constexpr uintmax_t RECENT_MAX_BYTES = 256 * 1024 * 1024;
+
+long long now_sec() {
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+// 新しい半分だけ残す
+void recent_trim(const fs::path& p) {
+    std::string s;
+    if (!read_file(p, s) || s.size() < RECENT_MAX_BYTES / 2) return;
+    const size_t e = s.find('\n', s.size() - RECENT_MAX_BYTES / 2);
+    if (e != std::string::npos) write_file_atomic(p, s.substr(e + 1));
+}
+}  // namespace
+
+void recent_add(const fs::path& dir, const std::vector<std::string>& fields) {
+    std::string line = std::to_string(now_sec());
+    for (auto& f : fields) {
+        if (f.find_first_of("\t\n") != std::string::npos) return;
+        line += "\t" + f;
+    }
+    line += "\n";
+    const fs::path p = dir / RECENT_FILE;
+    {
+        std::ofstream f(p, std::ios::binary | std::ios::app);
+        if (!f) return;
+        f.write(line.data(), std::streamsize(line.size()));
+    }
+    std::error_code ec;
+    const uintmax_t size = fs::file_size(p, ec);
+    if (!ec && size >= RECENT_MAX_BYTES) recent_trim(p);
+}
+
+void recent_drop(const fs::path& dir, const std::string& kind) {
+    const fs::path p = dir / RECENT_FILE;
+    std::string s;
+    if (!read_file(p, s)) return;
+    const std::string mark = "\t" + kind + "\t";
+    std::string kept;
+    for (size_t st = 0; st < s.size();) {
+        size_t e = s.find('\n', st);
+        if (e == std::string::npos) e = s.size();
+        const size_t tab = s.find('\t', st);
+        if (tab == std::string::npos || s.compare(tab, mark.size(), mark) != 0) kept.append(s, st, e + 1 - st);
+        st = e + 1;
+    }
+    write_file_atomic(p, kept);
+}
+
 // ---------------------------------------------------------------- 学習
+
+void Learning::note_commit(const u16& reading, const u16& surface, const u16& ctx) {
+    u16 c = ctx;
+    for (auto& ch : c) if (ch == u'\t' || ch == u'\n' || ch == u'\r') ch = u' ';
+    recent_add(file_.parent_path(), {"C", to_utf8(reading), to_utf8(surface), to_utf8(c)});
+}
 
 void Learning::refresh() {
     fs::file_time_type t{};
@@ -69,7 +127,9 @@ void Learning::refresh() {
     if (!exists || !read_file(file_, s)) return;
     json::Value v;
     if (!json::Parser(s).parse(v) || v.type != json::Value::Object) { keep_broken(file_); return; }
+    bool weighted = false;
     for (auto& r : v.obj) {
+        if (r.first == "@w") weighted = true;
         if (r.second.type != json::Value::Object) continue;
         Entry e{from_utf8(r.first), {}};
         for (auto& c : r.second.obj) {
@@ -79,6 +139,10 @@ void Learning::refresh() {
         }
         if (!e.counts.empty()) entries_.push_back(std::move(e));
     }
+    // 前の版の回数は手で選んだ回数そのものなので、今の数え方 (2 回分) にそろえる
+    if (!weighted)
+        for (auto& e : entries_)
+            for (auto& c : e.counts) if (c.second > 0) c.second *= 2;
     reindex();
 }
 
@@ -108,7 +172,7 @@ std::vector<std::pair<u16, int>> Learning::marks() {
             while (!r.empty() && !s.empty() && r.back() == s.back() && r.back() >= 0x3041 && r.back() <= 0x3096) { r.pop_back(); s.pop_back(); }
             if (s.empty()) continue;
             Acc& a = by[s];
-            a.n += c.second;
+            a.n += (c.second + 1) / 2;   // 印の段階は手で選んだ回数で数える
             a.day = std::max(a.day, e.day);
         }
     const int t = today();
@@ -124,11 +188,9 @@ std::vector<std::pair<u16, int>> Learning::marks() {
 
 void Learning::save() {
     version_++;
-    std::string o = "{";
-    bool first = true;
+    std::string o = "{\"@w\":2";   // 手で選ぶと 2 回分と数えた回数
     for (auto& e : entries_) {
-        if (!first) o += ",";
-        first = false;
+        o += ",";
         o += json::quote(to_utf8(e.reading)) + ":{";
         for (size_t i = 0; i < e.counts.size(); i++) {
             if (i) o += ",";
@@ -146,10 +208,23 @@ Learning::Entry* Learning::find(const u16& reading) {
     return it == idx_.end() ? nullptr : &entries_[it->second];
 }
 
-void Learning::record(const u16& reading, const u16& surface) {
-    if (reading.empty() || surface.empty() || surface == reading) return;
+Learning::Undo Learning::confirm(const u16& reading, const u16& surface) {
     refresh();
     Entry* e = find(reading);
+    if (!e) return {};
+    return record(reading, surface, 1);
+}
+
+Learning::Undo Learning::record(const u16& reading, const u16& surface, int add) {
+    if (reading.empty() || surface.empty() || surface == reading) return {};
+    refresh();
+    Undo undo{reading, surface};
+    Entry* e = find(reading);
+    if (e) {
+        undo.day = e->day;
+        for (auto& c : e->counts) if (c.first == surface) undo.count = c.second;
+    }
+    recent_add(file_.parent_path(), {"L", to_utf8(reading), to_utf8(surface), std::to_string(undo.count), std::to_string(undo.day)});
     if (!e) {
         if (entries_.size() >= MAX_READINGS) {
             // 回数が少なく長く使っていない読みを捨てる (回数 1 は 30 日ぶん。20 回以上は同じ扱い)
@@ -157,7 +232,7 @@ void Learning::record(const u16& reading, const u16& surface) {
             auto score = [&](const Entry& x) {
                 int m = 0;
                 for (auto& c : x.counts) m = std::max(m, c.second);
-                return std::min(m, 20) * 30 - (x.day > 0 ? t - x.day : 365);
+                return std::min(m / 2, 20) * 30 - (x.day > 0 ? t - x.day : 365);
             };
             auto weakest = std::min_element(entries_.begin(), entries_.end(), [&](const Entry& a, const Entry& b) { return score(a) < score(b); });
             entries_.erase(weakest);
@@ -169,7 +244,7 @@ void Learning::record(const u16& reading, const u16& surface) {
     }
     e->day = today();
     for (auto& c : e->counts) {
-        if (c.first == surface) { c.second = c.second < 0 ? 1 : c.second + 1; save(); return; }   // 消した表記を自分で選んだら戻す
+        if (c.first == surface) { c.second = c.second < 0 ? add : c.second + add; save(); return undo; }   // 消した表記を自分で選んだら戻す
     }
     // 表記は 5 つまで。数えるのは選んだ表記だけ (消した表記 = 回数 -1 は枠を食わない。2026-10-24 の監査)。
     // 埋まっていたら、いちばん少なく選んだ表記と入れ替える (以前は 6 つ目を黙って覚えなかった)
@@ -181,14 +256,48 @@ void Learning::record(const u16& reading, const u16& surface) {
             if (it->second > 0 && (weakest == e->counts.end() || it->second < weakest->second)) weakest = it;
         if (weakest != e->counts.end()) e->counts.erase(weakest);
     }
-    e->counts.push_back({surface, 1});
+    e->counts.push_back({surface, add});
     save();
+    return undo;
 }
 
-void Learning::hide(const u16& reading, const u16& surface) {
+void Learning::restore(const std::vector<Undo>& us) {
+    refresh();
+    bool changed = false;
+    for (const Undo& u : us) {
+        if (u.reading.empty()) continue;
+        Entry* e = find(u.reading);
+        if (!e) {
+            if (u.count == 0) continue;
+            entries_.push_back({u.reading, {}});
+            idx_[u.reading] = entries_.size() - 1;
+            e = &entries_.back();
+        }
+        auto it = std::find_if(e->counts.begin(), e->counts.end(), [&](auto& c) { return c.first == u.surface; });
+        if (it != e->counts.end() && it->second < 0 && !u.hidden) continue;
+        if (u.count != 0) {
+            if (it != e->counts.end()) it->second = u.count;
+            else e->counts.push_back({u.surface, u.count});
+        } else if (it != e->counts.end()) {
+            e->counts.erase(it);
+        }
+        e->day = u.day;
+        changed = true;
+        if (e->counts.empty()) {
+            entries_.erase(entries_.begin() + (e - entries_.data()));
+            reindex();
+        }
+    }
+    if (changed) save();
+}
+
+void Learning::hide(const u16& reading, const u16& surface, bool keep_recent) {
     if (reading.empty() || surface.empty()) return;
     refresh();
     Entry* e = find(reading);
+    int prev = 0;
+    if (e) for (auto& c : e->counts) if (c.first == surface) prev = c.second;
+    if (keep_recent) recent_add(file_.parent_path(), {"H", to_utf8(reading), to_utf8(surface), std::to_string(prev), std::to_string(e ? e->day : 0)});
     if (!e) {
         entries_.push_back({reading, {}});
         idx_[reading] = entries_.size() - 1;
@@ -231,25 +340,15 @@ std::vector<u16> Learning::apply_order(const u16& reading, const std::vector<u16
     Entry* e = find(reading);
     if (!e) return cands;
     auto count = [&](const u16& s) { for (auto& c : e->counts) if (c.first == s) return c.second; return 0; };
-    // 2 回以上選んだ表記は先頭へ (回数の多い順)。1 回だけのものはモデルの 1 位を覆さず 2 位へ
-    // (1 回の誤操作や特別な文脈の選択が、どの文でも 1 位になり続けた: 一つの動詞にこだわる。ユーザー 2026-10-20、S8_DESIGN §10 の B)。
-    // ただし読みが長い (ONCE_MIN_READING 字以上) ときは 1 回でも先頭へ: 長い読みはいろいろな文で打たないので 1 回の選択が外れにくい
-    // (実機の入力ログ 4176 件の時刻順の評価: 2 回 79.74 (直した 53・壊した 12) → これ 79.86 (59・13)。ユーザー 2026-10-28)
-    const int need = int(reading.size()) >= ONCE_MIN_READING ? 1 : 2;
-    std::vector<u16> boosted, once, rest;
+    // TOP_MIN_COUNT 回以上の表記は先頭へ (回数の多い順)。手で選ぶと 2 回分、選び直さずに確定すると 1 回分足すので、
+    // 選び直した表記が先頭に上がり、そのあとモデルの 1 位のまま確定した回数が多ければ元に戻る
+    std::vector<u16> boosted, rest;
     for (auto& c : cands) {
         const int n = count(c);
         if (n < 0) continue;   // 消した表記
-        (n >= need ? boosted : n == 1 ? once : rest).push_back(c);
+        (n >= TOP_MIN_COUNT ? boosted : rest).push_back(c);
     }
     std::stable_sort(boosted.begin(), boosted.end(), [&](const u16& a, const u16& b) { return count(a) > count(b); });
-    if (!once.empty()) {
-        if (boosted.empty() && !rest.empty()) {   // モデルの 1 位 (学習していない最初の候補) の後ろに
-            boosted.push_back(rest.front());
-            rest.erase(rest.begin());
-        }
-        boosted.insert(boosted.end(), once.begin(), once.end());
-    }
     boosted.insert(boosted.end(), rest.begin(), rest.end());
     // 英カタカナ辞書の英単語 (全部小文字: いんじぇくしょん → injection) は、学習で上がっても 2 位まで (1 位はカタカナのまま)
     auto english = [](const u16& s) {
@@ -270,7 +369,7 @@ std::vector<u16> Learning::completions(const u16& prefix, size_t max) {
     std::vector<std::pair<u16, int>> all;
     for (auto& e : entries_)
         if (e.reading.size() > prefix.size() && e.reading.compare(0, prefix.size(), prefix) == 0)
-            for (auto& c : e.counts) if (c.second >= 2) all.push_back(c);   // 2 回以上だけ (1 回きりの長い文が続きに出ないように。スマホ版と同じ)
+            for (auto& c : e.counts) if (c.second >= 4) all.push_back(c);   // 手で 2 回分以上だけ (1 回きりの長い文が続きに出ないように。スマホ版と同じ)
     std::stable_sort(all.begin(), all.end(), [](auto& a, auto& b) { return a.second > b.second; });
     for (auto& c : all) {
         if (out.size() >= max) break;
@@ -290,7 +389,7 @@ u16 Learning::top(const u16& reading) {
     Entry* e = find(reading);
     if (!e) return u16();
     u16 best;
-    int n = int(reading.size()) >= ONCE_MIN_READING ? 0 : 1;   // 2 回以上選んだものだけ (1 回だけの選択で文節の変換を覆さない。長い読みは 1 回から)
+    int n = TOP_MIN_COUNT - 1;
     for (auto& c : e->counts) if (c.second > n) { n = c.second; best = c.first; }
     return best;
 }
@@ -498,7 +597,26 @@ void StyleLog::record(const u16& surface, const std::array<float, 2>& w) {
     k.w[0] += w[0];
     k.w[1] += w[1];
     k.n++;
+    char a[32], b[32];
+    snprintf(a, sizeof a, "%.3f", double(w[0]));
+    snprintf(b, sizeof b, "%.3f", double(w[1]));
+    recent_add(file_.parent_path(), {"S", to_utf8(surface), a, b});
     save();
+}
+
+void StyleLog::unrecord(const std::vector<std::pair<u16, std::array<float, 2>>>& items) {
+    refresh();
+    bool changed = false;
+    for (auto& [s, w] : items) {
+        auto it = m_.find(s);
+        if (it == m_.end()) continue;
+        changed = true;
+        auto& k = it->second;
+        if (--k.n <= 0) { m_.erase(it); continue; }
+        k.w[0] = std::max(0.f, k.w[0] - w[0]);
+        k.w[1] = std::max(0.f, k.w[1] - w[1]);
+    }
+    if (changed) save();
 }
 
 void StyleLog::clear() {

@@ -842,7 +842,7 @@ void CandWindow::paint(HDC wdc) {
     DeleteDC(dc);
 }
 
-// ---------------------------------------------------------------- 打った綴りの帯
+// ---------------------------------------------------------------- 打ったままの読みの帯
 
 namespace {
 constexpr wchar_t STRIP_CLASS_NAME[] = L"ShuntiImeKeyStrip";
@@ -901,7 +901,7 @@ void KeyStrip::show(const u16& typed, bool fixed, const std::vector<bool>& mark,
     if (!dpi) dpi = 96;
     if (dpi != dpi_ || !font_) {
         if (font_) DeleteObject(font_);
-        font_ = CreateFontW(-MulDiv(12, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Consolas");
+        font_ = CreateFontW(-MulDiv(12, int(dpi), 96), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, ui_face());
         dpi_ = dpi;
     }
     text_ = typed;
@@ -934,7 +934,7 @@ void KeyStrip::paint(HDC dc) {
     DeleteObject(br);
     HGDIOBJ old = SelectObject(dc, font_);
     SetBkMode(dc, TRANSPARENT);
-    // 直したキーだけ赤 (直した所が分からなければ、直したときは全部を直しの色に)。ほかは薄い字
+    // 直した字だけ赤 (直した所が分からなければ、直したときは全部を直しの色に)。ほかは薄い字
     const bool any = std::find(mark_.begin(), mark_.end(), true) != mark_.end();
     TEXTMETRICW tm = {};
     GetTextMetricsW(dc, &tm);

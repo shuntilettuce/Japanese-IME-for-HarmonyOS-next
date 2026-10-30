@@ -390,6 +390,7 @@ bool Composer::press_input(const KeyEvent& ev) {
             if (live_shown()) {
                 u16 t = live_top_;
                 log({"commit", kana_, t, ctx_, live_cands_, 0, {}, "live"});
+                confirm_learned(kana_, t);
                 commit_text(frozen_surface() + t);
                 to_idle();
                 return true;
@@ -639,7 +640,8 @@ bool Composer::press_convert(const KeyEvent& ev) {
                 if (s.cands.empty()) return true;
                 const u16 x = s.cands[size_t(std::max(0, std::min(s.sel, int(s.cands.size()) - 1)))];
                 if (x == s.reading || x == to_katakana(s.reading)) return true;
-                learning_->hide(s.reading, x);
+                learning_->hide(s.reading, x, !options.private_mode);
+                log({"hide", s.reading, x, left_context(focus_), s.cands, s.sel});
                 s.cands.erase(std::remove(s.cands.begin(), s.cands.end(), x), s.cands.end());
                 cand_open_ = true;
                 set_sel(std::min(s.sel, int(s.cands.size()) - 1));
@@ -725,7 +727,7 @@ void Composer::select_candidate(int index) {
             e.extra = "live,mouse";
             log(e);
         }
-        if (learning_ && !options.private_mode && !contains(sugg_set_, c)) learning_->record(kana_, c);
+        if (learning_ && !options.private_mode && !contains(sugg_set_, c)) new_learn_.push_back(learning_->record(kana_, c));
         if (flow && !options.private_mode && contains(sugg_set_, c)) flow->record_suggest(c);
         commit_text(frozen_surface() + c);
         to_idle();
@@ -1168,7 +1170,7 @@ bool Composer::unfreeze_last() {
 // M5: 使う人の印 (学習の記録) と書き方の記録を変換に渡す (変わったときだけ)。設定がオフ・プライベートなら空にする
 void Composer::sync_personal() {
     if (!conv_) return;
-    const bool on = options.personal && !options.private_mode;
+    const bool on = !options.private_mode;
     const uint64_t lv = on && learning_ ? learning_->version() : 0, sv = on && style_ ? style_->version() : 0;
     if (on == marks_on_ && lv == marks_learn_ && sv == marks_style_ && app_ == marks_app_) return;
     // 使う人の印はそれを読む M5 系のモデルだけ。書き方の癖はどのモデルでも
@@ -1193,7 +1195,7 @@ void Composer::sync_user_dict() {
         // ブログの報告 2026-10-21)。重みは変えない。選んだ回数だけ少し安くする (どこで使うかは AI が決める)。
         // 文節で覚えている (なにを → 何を) ので、後ろの同じかな (を) を外した自立語 (なに → 何) で入れる
         if (lv)
-            for (auto& st : learning_->strong(2)) {
+            for (auto& st : learning_->strong(4)) {   // 手で 2 回分
                 u16 r = st.reading, s = st.surface;
                 while (!r.empty() && !s.empty() && r.back() == s.back() && r.back() >= 0x3041 && r.back() <= 0x3096) {
                     r.pop_back();
@@ -1509,6 +1511,10 @@ void Composer::back_to_input() {
     prev_segs_.clear();
 }
 
+void Composer::confirm_learned(const u16& reading, const u16& surface) {
+    if (learning_ && !options.private_mode && !contains(sugg_set_, surface)) new_learn_.push_back(learning_->confirm(reading, surface));
+}
+
 void Composer::commit_all() {
     u16 t, reading;
     std::vector<u16> segs;
@@ -1519,9 +1525,11 @@ void Composer::commit_all() {
         segs.push_back(s.surface);
         if (s.changed) {
             changed++;
-            if (learning_ && !options.private_mode && !contains(sugg_set_, s.surface)) learning_->record(s.reading, s.surface);
+            if (learning_ && !options.private_mode && !contains(sugg_set_, s.surface)) new_learn_.push_back(learning_->record(s.reading, s.surface));
             if (flow && !options.private_mode && contains(sugg_set_, s.surface)) flow->record_suggest(s.surface);
             log({"bseg", s.reading, s.surface, u16(), s.cands, s.sel});
+        } else {
+            confirm_learned(s.reading, s.surface);
         }
     }
     if (on_log) {
@@ -1560,13 +1568,21 @@ void Composer::commit_text(const u16& t0) {
     commit_ += t;
     if (!t.empty() && !kana_.empty() && t != kana_) last_commit_ = {t, frozen_reading() + kana_};
     else last_commit_ = {};
+    last_learn_ = std::move(new_learn_);
+    new_learn_.clear();
+    last_style_.clear();
     history_ = tail(history_ + t, CTX_MAX);
     // M5: 確定した文の、かなでも漢字でも書ける語の書き方を、文の種類 (左の文脈から 丁寧・崩れ) と一緒に数える
     // (読みの網の上でたどって語を決める)
-    if (style_ && conv_ && options.personal && !options.private_mode && !t.empty() && !kana_.empty()) {
+    if (style_ && conv_ && !options.private_mode && !t.empty() && !kana_.empty()) {
         const auto w8 = conv_->style_weight(ctx_);
-        for (auto& w : conv_->path_variants(frozen_reading() + kana_, t)) style_->record(w, w8);
+        for (auto& w : conv_->path_variants(frozen_reading() + kana_, t)) {
+            style_->record(w, w8);
+            last_style_.push_back({w, w8});
+        }
     }
+    if (learning_ && options.learn_log && !options.private_mode && !options.secure_field && !t.empty() && !kana_.empty())
+        learning_->note_commit(frozen_reading() + kana_, t, ctx_);
     if (!t.empty() && !kana_.empty() && !options.private_mode) {   // 再変換のための (表記, 読み)
         recent_.push_back({t, frozen_reading() + kana_});
         if (recent_.size() > 200) recent_.erase(recent_.begin());
@@ -1612,7 +1628,37 @@ bool Composer::undo_commit() {
     // 文脈から取り消した確定を外す
     if (history_.size() >= surface.size() && history_.compare(history_.size() - surface.size(), surface.size(), surface) == 0)
         history_.resize(history_.size() - surface.size());
+    log({"undo", reading, surface, history_});
+    // その確定で覚えたことも戻す (2026-10-30)。節が閉じて数えた文の流れは戻らない
+    if (learning_) learning_->restore(last_learn_);
+    if (style_) style_->unrecord(last_style_);
+    last_learn_.clear();
+    last_style_.clear();
+    if (!recent_.empty() && recent_.back().first == surface) recent_.pop_back();
+    if (flow) for (size_t i = 0; i < surface.size(); i++) flow->backspace();
     return start_reconvert(reading);
+}
+
+u16 Composer::romaji_reading(const u16& text) const {
+    Romaji rom = romaji_;
+    rom.reset();
+    u16 s;
+    for (char16_t c : text) {
+        if (c == u' ' || c == u'\t') continue;
+        const char16_t lk = c >= u'A' && c <= u'Z' ? char16_t(c + 32) : c;
+        if (!is_lower(lk) && lk != u'-' && lk != u'\'') return u16();
+        s += lk;
+    }
+    u16 out;
+    for (size_t i = 0; i < s.size(); i++) {
+        out += rom.process(s[i]).committed;
+        // 文として書かれたローマ字の nn + 母音 は ん + な行 (konnichiha)。打つときの nn → ん とは読み方が違う
+        if (s[i] == u'n' && i + 2 < s.size() && s[i + 1] == u'n' && u16(u"aiueoy").find(s[i + 2]) != u16::npos)
+            out += rom.process(u'\'').committed;
+    }
+    out += rom.flush();
+    for (char16_t c : out) if (is_lower(c)) return u16();   // ローマ字として読めない綴りが残った
+    return out;
 }
 
 void Composer::passthrough(const KeyEvent& ev) {
@@ -1656,6 +1702,7 @@ void Composer::finish() {
         if (options.live_display && !kana_.empty()) update_live();
         if (live_shown()) {
             log({"commit", kana_, live_top_, ctx_, live_cands_, 0, {}, "live"});
+            confirm_learned(kana_, live_top_);
             commit_text(frozen_surface() + live_top_);
         } else {
             commit_text(frozen_surface() + kana_);
@@ -1804,22 +1851,28 @@ void Composer::rebuild_view() {
         }
     }
     if (state_ != State::Idle && (!kana_.empty() || !romaji_.pending().empty())) {
-        // 打った綴りの帯 (入力中はいつも)。途中を直してキーの並びが分からなくなったら読みを出す
-        v.typed = raw_valid_ && !raw_.empty() ? raw_ : kana_ + romaji_.pending();
+        // 打ったままの読みの帯 (入力中はいつも。打ちかけのローマ字はそのまま)。固定した所もキーの並びが分かれば読みに戻して頭に付ける
+        const u16 pending = romaji_.pending();
+        v.typed = kana_ + pending;
         v.typed_fixed = live_shown() && !typo_top_.empty() && live_top_ == typo_top_;
-        // 直したキー: 直した所の読みの区間を、打ったキーの位置に戻す (キーから読みを作り直した対応で。prime_keys と同じ)
-        if (v.typed_fixed && raw_valid_ && v.typed == raw_ && !typo_spans_.empty()) {
+        size_t off = 0;
+        if (raw_valid_ && !raw_.empty()) {
             u16 sim;
             std::vector<int32_t> span;
             simulate_raw(sim, span);
-            if (sim.size() >= kana_.size() && sim.compare(sim.size() - kana_.size(), kana_.size(), kana_) == 0) {
-                const size_t off = sim.size() - kana_.size();
-                v.typed_mark.assign(v.typed.size(), false);
-                for (auto& [a, b] : typo_spans_) {
-                    if (a < 0 || b <= a || size_t(b) > kana_.size()) continue;
-                    const int ks = off + size_t(a) == 0 ? 0 : span[off + size_t(a) - 1], ke = span[off + size_t(b) - 1];
-                    for (int k = ks; k < ke && size_t(k) < v.typed_mark.size(); k++) v.typed_mark[size_t(k)] = true;
-                }
+            Romaji rest = romaji_;      // simulate_raw は打ちかけも字にするので、そろえて比べる
+            const u16 tail = kana_ + rest.flush();
+            if (sim.size() >= tail.size() && sim.compare(sim.size() - tail.size(), tail.size(), tail) == 0) {
+                off = sim.size() - tail.size();
+                v.typed.insert(0, sim, 0, off);
+            }
+        }
+        // 直した字: 直した所の読みの区間
+        if (v.typed_fixed && !typo_spans_.empty()) {
+            v.typed_mark.assign(v.typed.size(), false);
+            for (auto& [a, b] : typo_spans_) {
+                if (a < 0 || b <= a || size_t(b) > kana_.size()) continue;
+                for (size_t k = off + size_t(a); k < off + size_t(b); k++) v.typed_mark[k] = true;
             }
         }
     }

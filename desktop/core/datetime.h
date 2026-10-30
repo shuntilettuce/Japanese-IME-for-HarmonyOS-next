@@ -13,5 +13,7 @@ namespace shunti {
 
 // 読み reading に対する日付・時刻の候補 (now = UNIX 時刻、ローカル時刻で扱う)。当たらなければ空。
 std::vector<u16> datetime_predict(const u16& reading, std::time_t now);
+// 数字だけの読みの書き換え (和暦・桁区切り・万の混ぜ書き・漢数字・丸数字)。数字だけでなければ空
+std::vector<u16> number_forms(const u16& reading);
 
 }  // namespace shunti

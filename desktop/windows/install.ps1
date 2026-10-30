@@ -146,6 +146,7 @@ try {
         }
         Write-Host 'Windows キー + スペース で「shunti IME」に切り替えて使ってください。'
         Write-Host '(すでに開いていたアプリでは、開き直すと使えるようになります)'
+        try { Start-Process (Join-Path $Dest 'shunti_settings.exe') -ArgumentList '--consent' } catch {}
     }
     exit 0
 } catch {

@@ -448,7 +448,7 @@ void TextService::apply_settings() {
         composer_->options.live_display = s.live_display;
         composer_->options.cand_tree = s.cand_tree;
         composer_->options.space_literal = s.space_literal;
-        composer_->options.personal = s.personal;
+        composer_->options.learn_log = s.learn_log;
         composer_->options.caps_alpha = s.caps_alpha;
         composer_->options.space_fullwidth = s.space_fullwidth;
         composer_->options.punct = s.punct;
@@ -551,9 +551,9 @@ std::string key_name(const KeyEvent& ev) {
 }  // namespace
 
 // 選んでいる文字の読み (再変換できるときだけ。できなければ空)
-u16 TextService::reconvert_reading(ITfContext* ctx) {
+u16 TextService::reconvert_reading(ITfContext* ctx, bool romaji) {
     u16 out;
-    edit(ctx, TF_ES_SYNC | TF_ES_READ, [this, ctx, &out](TfEditCookie ec) {
+    edit(ctx, TF_ES_SYNC | TF_ES_READ, [this, ctx, romaji, &out](TfEditCookie ec) {
         TF_SELECTION sel = {};
         ULONG n = 0;
         if (!composer_ || FAILED(ctx->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &n)) || n == 0 || !sel.range) return;
@@ -563,7 +563,8 @@ u16 TextService::reconvert_reading(ITfContext* ctx) {
         ULONG got = 0;
         // 256 字まで。それより長い選択は読みに戻さない (途中で切れた読みで置き換えると後ろが消える)
         if (FAILED(r->GetText(ec, 0, buf, 257, &got)) || got == 0 || got > 256) return;
-        out = composer_->reading_of(u16(reinterpret_cast<const char16_t*>(buf), got));
+        const u16 text(reinterpret_cast<const char16_t*>(buf), got);
+        out = romaji ? composer_->romaji_reading(text) : composer_->reading_of(text);
     });
     return out;
 }
@@ -630,6 +631,10 @@ TextService::Action TextService::classify(WPARAM vk, LPARAM lp, KeyEvent& ev, IT
             if (!composing && open && ctx && !read_only_context(ctx) && !reconvert_reading(ctx).empty()) return Action::Reconvert;
             continue;
         }
+        if (sc.second == "romaji_reconvert") {   // 選んだ英字をローマ字として読めるときだけ
+            if (!composing && open && ctx && !read_only_context(ctx) && !reconvert_reading(ctx, true).empty()) return Action::RomajiReconvert;
+            continue;
+        }
         if (sc.second == "open_settings") return Action::OpenSettings;
         if (sc.second == "clear_all") {   // 入力中のものを全部消す (読みが空になるまで Escape)
             if (!composing) continue;
@@ -679,7 +684,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* ctx, WPARAM wp, LPARAM lp, BOOL*
             edit(ctx, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, [this, keep, ev](TfEditCookie ec) {
                 if (!composer_) return;
                 if (!composer_->composing()) {
-                    if (INPUT_LOG_ENABLED) secure_ = is_secure_field(ec, keep.Get());
+                    if (INPUT_LOG_ENABLED || composer_->options.learn_log) {
+                        secure_ = is_secure_field(ec, keep.Get());
+                        composer_->options.secure_field = secure_;
+                    }
                     left_ctx_ = read_left_context(ec, keep.Get());
                 }
                 composer_->press(ev);
@@ -740,10 +748,11 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* ctx, WPARAM wp, LPARAM lp, BOOL*
             if (layout_.waiting()) layout_arm_timer();
             break;
         }
-        case Action::Reconvert: {
+        case Action::Reconvert:
+        case Action::RomajiReconvert: {
             // 選んでいる文字を読みに戻して変換し直す。読みが分からない (ほかで入れた漢字) ときはアプリに渡す
             ComPtr<ITfContext> keep(ctx);
-            const u16 reading = reconvert_reading(ctx);
+            const u16 reading = reconvert_reading(ctx, a == Action::RomajiReconvert);
             edit(ctx, TF_ES_SYNC | TF_ES_READWRITE, [this, keep, reading](TfEditCookie ec) {
                 if (!composer_ || reading.empty()) return;
                 left_ctx_ = read_left_context(ec, keep.Get());

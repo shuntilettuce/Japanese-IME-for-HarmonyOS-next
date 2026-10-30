@@ -70,14 +70,14 @@ public:
     bool app_open_state(bool def);
     void remember_app_open(bool open);
     bool no_shortcuts_ = false;   // このソフトではショートカットを使わない (app_open.tsv の印。Java のソフトは最初から)
-    u16 reconvert_reading(ITfContext* ctx);
+    u16 reconvert_reading(ITfContext* ctx, bool romaji = false);
     std::filesystem::file_time_type romaji_stamp_{};   // romaji.tsv を読んだときの更新時刻
     // 候補の窓をマウスで選んだ
     void on_candidate_clicked(int index);
     void on_suggestion_clicked(int index);
 
 private:
-    enum class Action { None, Compose, Open, Close, Toggle, Private, Reconvert, Undo, Layout, OpenSettings, ClearAll,
+    enum class Action { None, Compose, Open, Close, Toggle, Private, Reconvert, RomajiReconvert, Undo, Layout, OpenSettings, ClearAll,
                         SpaceFull, SpaceHalf, OpenDict, ModelToggle };
     // キー配列 (大西・Dvorak・JIS かな・NICOLA・薙刀式。core/layout.h)
     shunti::Layout layout_;

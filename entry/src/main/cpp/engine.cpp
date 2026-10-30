@@ -1098,6 +1098,16 @@ void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& ba
 }
 }  // namespace typo
 
+// 記号・絵文字だけの語か (♪・☆・🌷。きまぐれオレンジ☆ロード のように字を含む語は別)
+bool symbol_word(const ustr& s) {
+    bool sym = false;
+    for (char32_t c : s) {
+        if ((c >= 0x2190 && c <= 0x21FF) || (c >= 0x25A0 && c <= 0x27BF) || (c >= 0x2900 && c <= 0x2BFF) || (c >= 0x1F000 && c <= 0x1FAFF)) sym = true;
+        else if (c != 0xFE0F && c != 0x200D) return false;
+    }
+    return sym;
+}
+
 std::vector<Edge> edges(const Lex& L, const ustr& r, const std::vector<UserWord>* user = nullptr) {
     std::vector<Edge> out;
     int n = int(r.size());
@@ -1124,6 +1134,8 @@ std::vector<Edge> edges(const Lex& L, const ustr& r, const std::vector<UserWord>
                     if (std::all_of(sf.begin(), sf.end(), [](char32_t ch) { return ch >= U'0' && ch <= U'9'; }) &&
                         number_continues(r, size_t(s), size_t(e)))
                         continue;
+                    // 記号・絵文字は読み全体に当たるときだけ (雪が🪇・♪が は要らない。ユーザー 2026-10-30)
+                    if ((s != 0 || e != n) && symbol_word(sf)) continue;
                     const int32_t c = has_latin_word(sf) ? en.cost - LATIN_WORD_BONUS : en.cost;
                     out.push_back({s, e, std::move(sf), en.lid, en.rid, c, K_DICT});
                 }

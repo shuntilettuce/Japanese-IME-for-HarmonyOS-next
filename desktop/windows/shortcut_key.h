@@ -147,6 +147,7 @@ inline const std::vector<ShortcutFunc>& shortcut_funcs() {
         {"private_toggle", L"学習を一時的にオフ (切替)", false},
         {"undo_commit", L"確定の取り消し", false},
         {"reconvert", L"再変換", false},
+        {"romaji_reconvert", L"選んだローマ字を日本語に", false},
         {"open_settings", L"設定を開く", false},
         {"space_full", L"全角の空白を入れる", false},
         {"space_half", L"半角の空白を入れる", false},
