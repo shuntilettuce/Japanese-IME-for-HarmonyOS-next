@@ -14,7 +14,7 @@
 // 試験用: 設定のフォルダに layout_trace.on があるときだけ、配列が受け取ったキーと時刻を layout_trace.txt に書く
 static void layout_trace(const char* op, const std::string& k, uint64_t t) {
     static int on = -1;
-    if (on < 0) on = std::filesystem::exists(shunti::win::user_dir() / L"layout_trace.on") ? 1 : 0;
+    if (on < 0) { std::error_code ec; on = std::filesystem::exists(shunti::win::user_dir() / L"layout_trace.on", ec) ? 1 : 0; }
     if (!on) return;
     FILE* f = _wfopen((shunti::win::user_dir() / L"layout_trace.txt").c_str(), L"ab");
     if (!f) return;
@@ -44,7 +44,7 @@ const wchar_t* W(const u16& s) { return reinterpret_cast<const wchar_t*>(s.c_str
 // 関数を 1 つ持つだけの編集の枠 (TSF では入力欄の文字を触るのはこの中だけ)
 class EditSession : public ITfEditSession {
 public:
-    explicit EditSession(std::function<void(TfEditCookie)> f) : f_(std::move(f)) { dll_add_ref(); }
+    EditSession(IUnknown* owner, std::function<void(TfEditCookie)> f) : owner_(owner), f_(std::move(f)) { dll_add_ref(); }
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
         if (!ppv) return E_INVALIDARG;
         *ppv = nullptr;
@@ -67,6 +67,7 @@ public:
 private:
     ~EditSession() { dll_release(); }
     LONG refs_ = 1;
+    ComPtr<IUnknown> owner_;   // 後から走る編集のあいだ TextService を解放させない
     std::function<void(TfEditCookie)> f_;
 };
 
@@ -169,7 +170,13 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* tm, TfClientId cid, DWORD) {
     init_preserved_keys();
 
     ComPtr<ITfCategoryMgr> cat;
-    if (SUCCEEDED(CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&cat)))) {
+    HRESULT cat_hr = CoCreateInstance(CLSID_TF_CategoryMgr, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&cat));
+    if (FAILED(cat_hr)) {   // COM を初期化していないアプリ。msctf.lib は SDK に無いので DLL から取る
+        using CreateCat = HRESULT(WINAPI*)(ITfCategoryMgr**);
+        HMODULE msctf = GetModuleHandleW(L"msctf.dll");
+        if (auto create = msctf ? reinterpret_cast<CreateCat>(GetProcAddress(msctf, "TF_CreateCategoryMgr")) : nullptr) cat_hr = create(&cat);
+    }
+    if (SUCCEEDED(cat_hr)) {
         cat->RegisterGUID(GUID_AttrInput, &atom_input_);
         cat->RegisterGUID(GUID_AttrConverted, &atom_converted_);
         cat->RegisterGUID(GUID_AttrFocused, &atom_focused_);
@@ -270,6 +277,9 @@ bool TextService::app_open_state(bool def) {
 }
 
 void TextService::remember_app_open(bool open) {
+    // 同時に閉じるアプリが互いの行を消さないように、読むところから書くまで 1 本ずつ
+    HANDLE lock = CreateMutexW(nullptr, FALSE, L"Local\\shunti-ime-app-open");
+    if (lock) WaitForSingleObject(lock, 1000);
     std::string t, out;
     read_file(user_dir() / L"app_open.tsv", t);
     const std::string me = to_utf8(u16(reinterpret_cast<const char16_t*>(app_name().c_str())));
@@ -283,17 +293,20 @@ void TextService::remember_app_open(bool open) {
         if (line.empty() || lower_ascii(line.substr(0, line.find('\t'))) == me) continue;   // 大文字小文字の違う古い行も置き換える
         out += line + "\n";
     }
-    std::string title = own_window_title();
-    if (title.empty()) title = old.title;
+    // 窓の名前はページの題名やファイル名になるので、一覧で見分けが要るソフトの分だけ
+    std::string title = default_no_shortcut(app_name()) ? own_window_title() : "";
+    if (title.empty() && default_no_shortcut(app_name())) title = old.title;
     std::string flags = old.has_flags ? old.flags : (no_shortcuts_ ? "noshortcut" : "");
     out += me + "\t" + (open ? "1" : "0") + "\t" + title + "\t" + flags + "\n";
     write_file_atomic(user_dir() / L"app_open.tsv", out);
+    if (lock) { ReleaseMutex(lock); CloseHandle(lock); }
 }
 
 STDMETHODIMP TextService::Deactivate() {
     if (tm_) remember_app_open(is_open());   // ソフトの終了・IME の切り替え: このソフトでの状態を覚える (次に起動したとき戻す)
-    finish_composition();
+    finish_composition(TF_ES_SYNC);   // 後回しにすると下の composer_.reset() の後に動いて確定できない
     live_stop();
+    layout_stop();
     cand_.destroy();
     strip_.destroy();
     if (langbar_) {
@@ -553,9 +566,9 @@ std::string key_name(const KeyEvent& ev) {
 }  // namespace
 
 // 選んでいる文字の読み (再変換できるときだけ。できなければ空)
-u16 TextService::reconvert_reading(ITfContext* ctx, bool romaji) {
+u16 TextService::reconvert_reading(ITfContext* ctx, bool romaji, u16* selected) {
     u16 out;
-    edit(ctx, TF_ES_SYNC | TF_ES_READ, [this, ctx, romaji, &out](TfEditCookie ec) {
+    edit(ctx, TF_ES_SYNC | TF_ES_READ, [this, ctx, romaji, selected, &out](TfEditCookie ec) {
         TF_SELECTION sel = {};
         ULONG n = 0;
         if (!composer_ || FAILED(ctx->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &n)) || n == 0 || !sel.range) return;
@@ -567,6 +580,7 @@ u16 TextService::reconvert_reading(ITfContext* ctx, bool romaji) {
         if (FAILED(r->GetText(ec, 0, buf, 257, &got)) || got == 0 || got > 256) return;
         const u16 text(reinterpret_cast<const char16_t*>(buf), got);
         out = romaji ? composer_->romaji_reading(text) : composer_->reading_of(text);
+        if (selected) *selected = text;
     });
     return out;
 }
@@ -600,7 +614,30 @@ bool TextService::ensure_composer() {
     return true;
 }
 
+// 確定の取り消しができるか: カーソルの直前が確定した文のまま。動かした後の Ctrl+Backspace はアプリへ渡す
+bool TextService::undo_matches(ITfContext* ctx) {
+    bool ok = false;
+    edit(ctx, TF_ES_SYNC | TF_ES_READ, [this, ctx, &ok](TfEditCookie ec) {
+        const u16& text = composer_->undoable().first;
+        TF_SELECTION sel = {};
+        ULONG n = 0;
+        if (FAILED(ctx->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &sel, &n)) || n == 0 || !sel.range) return;
+        ComPtr<ITfRange> r;
+        r.Attach(sel.range);
+        BOOL empty = FALSE;
+        LONG moved = 0;
+        if (FAILED(r->IsEmpty(ec, &empty)) || !empty) return;
+        if (FAILED(r->ShiftStart(ec, -LONG(text.size()), &moved, nullptr)) || moved != -LONG(text.size())) return;
+        std::wstring got(text.size() + 1, L'\0');
+        ULONG gn = 0;
+        ok = SUCCEEDED(r->GetText(ec, 0, got.data(), ULONG(got.size()), &gn)) && gn == text.size() &&
+             got.compare(0, gn, reinterpret_cast<const wchar_t*>(text.data()), gn) == 0;
+    });
+    return ok;
+}
+
 TextService::Action TextService::classify(WPARAM vk, LPARAM lp, KeyEvent& ev, ITfContext* ctx) {
+    if (no_shortcuts_ && !composer_ && !is_open()) return Action::None;   // 常にオフのソフト: 辞書を読まない
     if (!ensure_composer()) return Action::None;
     bool composing = composer_->composing();
     if (!composing) apply_settings();   // 設定画面で変えた分 (ファイルの更新を見るだけなので軽い)
@@ -626,7 +663,7 @@ TextService::Action TextService::classify(WPARAM vk, LPARAM lp, KeyEvent& ev, IT
         if (sc.second == "ime_off") { if (open && !composing) return Action::Close; continue; }
         if (sc.second == "private_toggle") return Action::Private;
         if (sc.second == "undo_commit") {   // 確定した直後だけ (Ctrl+Backspace と同じ)
-            if (!composing && open && !composer_->undoable().first.empty() && !read_only_context(ctx)) return Action::Undo;
+            if (!composing && open && !composer_->undoable().first.empty() && !read_only_context(ctx) && undo_matches(ctx)) return Action::Undo;
             continue;
         }
         if (sc.second == "reconvert") {   // 選んだ文字を読みに戻せるときだけ
@@ -649,6 +686,7 @@ TextService::Action TextService::classify(WPARAM vk, LPARAM lp, KeyEvent& ev, IT
         if (sc.second == "open_dict") return Action::OpenDict;
         if (sc.second == "model_toggle") return Action::ModelToggle;
     }
+    if (!composing && (!ctx || keyboard_disabled(ctx))) return Action::None;
     if (open && layout_.loaded() && !ctrl && !alt && !read_only_context(ctx)) {
         const std::string k = layout_key(lp);
         if (!k.empty() && layout_.handles(k)) return Action::Layout;
@@ -685,13 +723,7 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* ctx, WPARAM wp, LPARAM lp, BOOL*
             ComPtr<ITfContext> keep(ctx);
             edit(ctx, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, [this, keep, ev](TfEditCookie ec) {
                 if (!composer_) return;
-                if (!composer_->composing()) {
-                    if (INPUT_LOG_ENABLED || composer_->options.learn_log) {
-                        secure_ = is_secure_field(ec, keep.Get());
-                        composer_->options.secure_field = secure_;
-                    }
-                    left_ctx_ = read_left_context(ec, keep.Get());
-                }
+                if (!composer_->composing()) begin_input(ec, keep.Get());
                 composer_->press(ev);
                 apply(ec, keep.Get());
                 // 入力中の 1 打鍵 (デバッグ用のビルドだけ): 押したキーと、押した後の入力中の文字列
@@ -754,11 +786,12 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* ctx, WPARAM wp, LPARAM lp, BOOL*
         case Action::RomajiReconvert: {
             // 選んでいる文字を読みに戻して変換し直す。読みが分からない (ほかで入れた漢字) ときはアプリに渡す
             ComPtr<ITfContext> keep(ctx);
-            const u16 reading = reconvert_reading(ctx, a == Action::RomajiReconvert);
-            edit(ctx, TF_ES_SYNC | TF_ES_READWRITE, [this, keep, reading](TfEditCookie ec) {
+            u16 selected;
+            const u16 reading = reconvert_reading(ctx, a == Action::RomajiReconvert, &selected);
+            edit(ctx, TF_ES_SYNC | TF_ES_READWRITE, [this, keep, reading, selected](TfEditCookie ec) {
                 if (!composer_ || reading.empty()) return;
                 left_ctx_ = read_left_context(ec, keep.Get());
-                if (composer_->start_reconvert(reading)) apply(ec, keep.Get());
+                if (composer_->start_reconvert(reading, selected)) apply(ec, keep.Get());
             });
             break;
         }
@@ -861,11 +894,18 @@ STDMETHODIMP TextService::OnKeyUp(ITfContext* ctx, WPARAM, LPARAM lp, BOOL* eate
     return S_OK;
 }
 
-static TextService* g_layout_owner = nullptr;   // 時間切れのタイマーの持ち主 (タイマーはスレッドに 1 つ)
+static thread_local TextService* g_layout_owner = nullptr;   // 時間切れのタイマーの持ち主 (タイマーはスレッドごと)
 
 void TextService::layout_arm_timer() {
     g_layout_owner = this;
     layout_timer_ = SetTimer(nullptr, layout_timer_, UINT(layout_.window_ms + 5), layout_timer_proc);
+}
+
+void TextService::layout_stop() {
+    if (layout_timer_) KillTimer(nullptr, layout_timer_);
+    layout_timer_ = 0;
+    layout_ctx_.Reset();
+    if (g_layout_owner == this) g_layout_owner = nullptr;
 }
 
 void CALLBACK TextService::layout_timer_proc(HWND, UINT, UINT_PTR id, DWORD) {
@@ -880,7 +920,7 @@ void CALLBACK TextService::layout_timer_proc(HWND, UINT, UINT_PTR id, DWORD) {
 
 // ライブ変換の「遅延」: 最後の打鍵からこの時間だけ打たなければ変換する
 static constexpr UINT LIVE_WAIT_MS = 200;
-static TextService* g_live_owner = nullptr;
+static thread_local TextService* g_live_owner = nullptr;
 
 void TextService::live_arm(ITfContext* ctx) {
     g_live_owner = this;
@@ -917,7 +957,7 @@ void TextService::layout_apply(ITfContext* ctx, const std::vector<shunti::Layout
         std::vector<WORD> to_app;   // 何も打っていないときの BS・Enter・矢印 (アプリへ送り直す)
         if (!composer_) return;
         for (const auto& o : outs) {
-            if (!composer_->composing()) left_ctx_ = read_left_context(ec, keep.Get());
+            if (!composer_->composing()) begin_input(ec, keep.Get());
             if (!o.text.empty()) {
                 if (letters) {
                     for (char16_t c : o.text) {
@@ -969,7 +1009,7 @@ STDMETHODIMP TextService::OnPreservedKey(ITfContext*, REFGUID, BOOL* eaten) {
 
 HRESULT TextService::edit(ITfContext* ctx, DWORD flags, std::function<void(TfEditCookie)> fn) {
     if (!ctx) return E_INVALIDARG;
-    auto* es = new EditSession(std::move(fn));
+    auto* es = new EditSession(static_cast<ITfKeyEventSink*>(this), std::move(fn));
     HRESULT hr = E_FAIL;
     HRESULT r = ctx->RequestEditSession(cid_, es, flags, &hr);
     es->Release();
@@ -1072,6 +1112,7 @@ void TextService::apply(TfEditCookie ec, ITfContext* ctx) {
                 FAILED(ctx->QueryInterface(IID_PPV_ARGS(&cc))) ||
                 FAILED(cc->StartComposition(ec, r.Get(), static_cast<ITfCompositionSink*>(this), &comp_)) || !comp_) {
                 comp_ = nullptr;
+                composer_->cancel();   // 見えない入力を次の欄に持ち越さない
                 cand_.hide();
                 strip_.hide();
                 return;
@@ -1193,14 +1234,15 @@ void TextService::update_candidates(TfEditCookie ec, ITfContext* ctx, const View
     cand_.show(v.cand_open ? v.cands : std::vector<u16>{}, v.cand_sel, rc, hwnd, v.sugg, v.sugg_sel, v.cand_notes);
 }
 
-void TextService::finish_composition() {
+void TextService::finish_composition(DWORD when) {
     if (!composer_ || !composer_->composing() || !comp_ctx_) {
+        if (composer_ && composer_->composing()) composer_->cancel();
         cand_.hide();
         strip_.hide();
         return;
     }
     ComPtr<ITfContext> keep(comp_ctx_);
-    edit(keep.Get(), TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, [this, keep](TfEditCookie ec) {
+    edit(keep.Get(), when | TF_ES_READWRITE, [this, keep](TfEditCookie ec) {
         if (!composer_) return;
         composer_->finish();
         apply(ec, keep.Get());
@@ -1249,6 +1291,29 @@ STDMETHODIMP TextService::OnCompositionTerminated(TfEditCookie, ITfComposition* 
     return S_OK;
 }
 
+// 入力を始めるとき: パスワードの欄か (何も残さない) と、カーソルの左の文脈を読む
+void TextService::begin_input(TfEditCookie ec, ITfContext* ctx) {
+    secure_ = is_secure_field(ec, ctx);
+    composer_->options.secure_field = secure_;
+    left_ctx_ = read_left_context(ec, ctx);
+}
+
+// アプリが入力を切っている欄 (Win32 のパスワード欄など)。字はそのままアプリへ渡す
+bool TextService::keyboard_disabled(ITfContext* ctx) {
+    ComPtr<ITfCompartmentMgr> mgr;
+    if (!ctx || FAILED(ctx->QueryInterface(IID_PPV_ARGS(&mgr)))) return false;
+    for (const GUID* g : {&GUID_COMPARTMENT_KEYBOARD_DISABLED, &GUID_COMPARTMENT_EMPTYCONTEXT}) {
+        ComPtr<ITfCompartment> c;
+        if (FAILED(mgr->GetCompartment(*g, &c))) continue;
+        VARIANT v;
+        VariantInit(&v);
+        const bool on = c->GetValue(&v) == S_OK && v.vt == VT_I4 && v.lVal != 0;
+        VariantClear(&v);
+        if (on) return true;
+    }
+    return false;
+}
+
 bool TextService::is_secure_field(TfEditCookie ec, ITfContext* ctx) {
     ComPtr<ITfReadOnlyProperty> prop;
     TF_SELECTION sel = {};
@@ -1284,6 +1349,8 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr*, ITfDocumentMgr*) {
     finish_composition();
     cand_.hide();
     strip_.hide();
+    layout_.reset();          // 押したまま離れたキーの通知はもう来ない
+    layout_down_.clear();
     if (composer_) composer_->reset_history();
     return S_OK;
 }

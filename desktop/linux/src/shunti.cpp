@@ -197,6 +197,7 @@ ShuntiState::ShuntiState(ShuntiEngine* engine, fcitx::InputContext* ic)
 
 void ShuntiState::keyEvent(fcitx::KeyEvent& event) {
     if (event.isRelease()) return;
+    composer_.options.secure_field = ic_->capabilityFlags().testAny(fcitx::CapabilityFlag::PasswordOrSensitive);   // パスワードの欄: 打った文を残さない
     KeyEvent ev;
     if (!to_key(event.key(), ev)) return;
     if (!composer_.composing()) {   // 設定の画面で変えた分

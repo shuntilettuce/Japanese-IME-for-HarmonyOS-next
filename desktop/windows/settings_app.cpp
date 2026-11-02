@@ -12,7 +12,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "../core/flow.h"
@@ -28,7 +30,7 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr wchar_t VERSION[] = L"0.7.6";
+constexpr wchar_t VERSION[] = L"0.7.7";
 
 enum Id {
     ID_PUNCT = 100, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
@@ -36,7 +38,7 @@ enum Id {
 };
 
 // 変換モデル (settings.json の model の値と、画面の表示)。名前は配布の呼び名 (開発名は出さない)
-std::vector<std::string> g_models = {"light", "standard"};   // 変換モデルの欄の並び
+std::vector<std::string> g_models = {"light", "standard", "s2"};   // 変換モデルの欄の並び
 
 struct PosItem { const wchar_t* label; const char* pos; const char* group; };
 // 品詞は MS-IME の分類にそろえる (MS-IME の一覧の出力をそのまま読み込めるように)
@@ -585,7 +587,7 @@ void shortcut_select() {
     const ShortcutKey k = parse_shortcut_key(g_s.shortcuts[size_t(i)].first);
     if (k.ok) {
         const WORD mods = WORD((k.ctrl ? HOTKEYF_CONTROL : 0) | (k.shift ? HOTKEYF_SHIFT : 0) | (k.alt ? HOTKEYF_ALT : 0));
-        SendMessageW(GetDlgItem(g_adv, ADV_SKEY), HKM_SETHOTKEY, MAKEWPARAM(k.vk, mods), 0);
+        SendMessageW(GetDlgItem(g_adv, ADV_SKEY), HKM_SETHOTKEY, MAKEWORD(k.vk, mods), 0);
     }
     const std::string& func = g_s.shortcuts[size_t(i)].second;
     for (int f = 0; f < int(shortcut_funcs().size()); f++)
@@ -672,6 +674,7 @@ void export_words() {
 }
 
 LRESULT CALLBACK adv_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_ACTIVATE && LOWORD(w) != WA_INACTIVE) load_settings(g_dir / L"settings.json", g_s);   // メインの窓と同じ。古い値で書き戻さない
     if (m == WM_COMMAND) {
         int id = LOWORD(w), code = HIWORD(w);
         if (id == ADV_CLOSE || id == IDCANCEL) DestroyWindow(h);
@@ -707,18 +710,8 @@ LRESULT CALLBACK adv_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefWindowProcW(h, m, w, l);
 }
 
-// 更新の確認 (GitHub の最新の Windows 版)。interactive = ボタンから (結果を必ず知らせる)。開いたときは 1 日 1 回まで、新しい版があるときだけ知らせる
-void check_update(bool interactive) {
-    const std::filesystem::path stamp = g_dir / L"update_check.txt";
-    if (!interactive) {
-        std::error_code ec;
-        const auto t = std::filesystem::last_write_time(stamp, ec);
-        if (!ec && std::filesystem::file_time_type::clock::now() - t < std::chrono::hours(24)) return;
-        write_file_atomic(stamp, "checked\n");
-    }
-    HCURSOR old = SetCursor(LoadCursor(nullptr, IDC_WAIT));
-    shunti::update::Latest l = shunti::update::find_latest();
-    SetCursor(old);
+// 更新を調べた結果を知らせる
+void show_update(const shunti::update::Latest& l, bool interactive) {
     if (l.version.empty()) {
         if (interactive) MessageBoxW(g_wnd, (T(38) + l.error).c_str(), L"shunti IME", MB_ICONWARNING);
         return;
@@ -740,6 +733,28 @@ void check_update(bool interactive) {
         return;
     }
     PostMessageW(g_wnd, WM_CLOSE, 0, 0);   // 設定画面も入れ直すので閉じる
+}
+
+// 更新の確認 (GitHub の最新の Windows 版)。interactive = ボタンから (結果を必ず知らせる)。開いたときは 1 日 1 回まで、新しい版があるときだけ知らせる
+void check_update(bool interactive) {
+    if (interactive) {
+        HCURSOR old = SetCursor(LoadCursor(nullptr, IDC_WAIT));
+        const shunti::update::Latest l = shunti::update::find_latest();
+        SetCursor(old);
+        show_update(l, true);
+        return;
+    }
+    const std::filesystem::path stamp = g_dir / L"update_check.txt";
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(stamp, ec);
+    if (!ec && std::filesystem::file_time_type::clock::now() - t < std::chrono::hours(24)) return;
+    write_file_atomic(stamp, "checked\n");
+    // 開いたときの確認は裏で (ネットが遅くても画面を止めない)。結果は WM_APP + 8 で受け取る
+    HWND wnd = g_wnd;
+    std::thread([wnd] {
+        auto* l = new shunti::update::Latest(shunti::update::find_latest());
+        if (!PostMessageW(wnd, WM_APP + 8, 0, LPARAM(l))) delete l;
+    }).detach();
 }
 
 void open_advanced() {
@@ -949,7 +964,7 @@ void build() {
     int y = 8;
     group(T(32), y, 60);
     make(L"STATIC", T(101), 0, 24, y + 27, 170, 20, 0);
-    combo(200, y + 23, 250, ID_MODEL, {T(102), T(103)});
+    combo(200, y + 23, 250, ID_MODEL, {T(102), T(103), T(189)});
     y += 68;
 
     group(T(50), y, 310);
@@ -1050,6 +1065,11 @@ void show_settings() {
 
 LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
+        case WM_APP + 8: {
+            std::unique_ptr<shunti::update::Latest> latest(reinterpret_cast<shunti::update::Latest*>(l));
+            show_update(*latest, false);
+            return 0;
+        }
         case WM_APP + 7:
         check_update(false);
         return 0;

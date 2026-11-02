@@ -418,7 +418,7 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 4; i++) big.hide(u"かい", u"消" + from_utf8(std::to_string(i)));
         for (int i = 0; i < 6; i++) big.record(u"かい", u"表" + from_utf8(std::to_string(i)));
         big.record(u"かい", u"表5");
-        if (big.top(u"かい") == u"表5") printf("ok   learning: hidden words do not take slots, 6th word replaces\n");
+        if (big.apply_order(u"かい", {u"表1", u"表5"})[0] == u"表5" && big.counts(u"かい").size() == 9) printf("ok   learning: hidden words do not take slots, 6th word replaces\n");
         else { printf("FAIL learning slots: top [%s]\n", u8(big.top(u"かい")).c_str()); failures++; }
         big.clear();
         // 壊れたファイルは別名で残す (空で上書きしない)
@@ -613,6 +613,12 @@ int main(int argc, char** argv) {
     u16 all = c.take_commit();
     printf("     hold commit: %s\n", u8(all).c_str());
     if (all.size() < 15) { printf("FAIL hold commit lost the head\n"); failures++; }
+    expect("hold commit keeps the whole reading", c.undoable().second, u"きょうはいいてんきですねさんぽにいきたいけどあめがふりそうです");
+    // 読みを消し切って固定した文だけになっても、空白で文を失わない
+    keys(c, "kyouhaiitenkidesunesanponiikitaikedoamegafurisoudesu{bs}{bs}{bs}{bs}{bs}{bs}{bs}{bs}{sp}");
+    if (c.view().text.empty()) { printf("FAIL space with only the held part\n"); failures++; }
+    keys(c, "{esc}{esc}{esc}");
+    c.take_commit();
     // 固定した所を Backspace で消すと読みに戻る
     keys(c, "kyouhaiitenkidesunesanponiikitaikedoamegafurisoudesu{home}{end}");
     u16 v1 = c.view().text;
@@ -629,6 +635,9 @@ int main(int argc, char** argv) {
     u16 shown = c.view().text;
     keys(c, "{enter}");
     expect("live display enter commits what is shown", c.take_commit(), shown);
+    keys(c, "yorosikuone{down}{enter}");   // 決まり文句は読みが打った字と違うので、打った読みでは覚えない
+    expect("phrase committed", c.take_commit(), u"よろしくお願いします");
+    if (!learning.counts(u"よろしくおね").empty()) { printf("FAIL phrase learned under the typed reading\n"); failures++; }
     keys(c, "kyouhaiiten{left}{enter}");   // 読みの途中にカーソルを動かしたら、かなで見せてかなで確定
     expect("live display falls back to kana mid-reading", c.take_commit(), u"きょうはいいてん");
     keys(c, "kyouhaiitenki");   // 英語入力に切り替えた (finish): 見えている変換のまま確定する
@@ -688,6 +697,18 @@ int main(int argc, char** argv) {
         int votes = 0;
         for (auto& x : ll.counts(u"した")) if (x.first == u"した") votes = x.second;
         if (votes != 1) { printf("FAIL live vote in a sentence %d\n", votes); failures++; }
+        // ライブ変換の 1 位にも語の置き換えが効く。文脈が同じときだけ
+        std::filesystem::remove(work / "learned_lc.json");
+        Learning lw(work / "learned_lc.json");
+        lw.record(u"した", u"下", 2, u"勉強を");
+        Composer lw_c(&conv, &lw, &dict);
+        lw_c.options.live_display = true;
+        keys(lw_c, "benkyouwoshita{enter}");
+        expect("live: learned word in the same context", lw_c.take_commit(), u"勉強を下");
+        lw_c.set_context_provider([] { return u16(); });
+        keys(lw_c, "sakanawoshita{enter}");
+        const u16 other = lw_c.take_commit();
+        if (other.find(u"下") != u16::npos) { printf("FAIL live: other context changed %s\n", u8(other).c_str()); failures++; }
     }
     {   // 回数の単位の印: 古い版が読みの項目として書き戻しても 2 倍にならない
         auto p = work / "learned_w.json";
@@ -828,7 +849,64 @@ int main(int argc, char** argv) {
         // 前の版のファイルの回数は手で選んだ回数なので 2 倍に
         { std::ofstream f(work / "learned_v1.json", std::ios::binary); f << "{\"" << to_utf8(u"かわ") << "\":{\"" << to_utf8(u"革") << "\":1}}"; }
         Learning v1(work / "learned_v1.json");
-        expect("learned: old file", v1.top(u"かわ"), u"革");
+        expect("learned: old file", v1.counts(u"かわ")[0].second == 2 ? u16(u"2") : u16(u"?"), u"2");
+        expect("learned: old file has no context", v1.top(u"かわ"), u16());
+        // 語の学習は文脈ごと: 同じ文脈なら手で 1 回、別の文脈は手で 3 回で、その文脈に反対の票が無いときだけ
+        Learning lc(work / "learned_ctx.json");
+        lc.clear();
+        lc.record(u"とった", u"撮った", 2, u"写真を");
+        expect("context: same", lc.top(u"とった", u"古い写真を"), u"撮った");
+        expect("context: other", lc.top(u"とった", u"メモを"), u16());
+        lc.record(u"とった", u"撮った", 2, u"景色を");
+        auto undone = lc.record(u"とった", u"撮った", 2, u"動画を");
+        expect("context: three picks spread", lc.top(u"とった", u"メモを"), u"撮った");
+        lc.restore({undone});
+        expect("context: undo", lc.top(u"とった", u"メモを"), u16());
+        lc.record(u"とった", u"撮った", 2, u"景色を");
+        lc.confirm(u"とった", u"取った", u"メモを");
+        expect("context: vote against", lc.top(u"とった", u"メモを"), u16());
+        expect("context: other place stays", lc.top(u"とった", u"人物を"), u"撮った");
+        Learning lc2(work / "learned_ctx.json");
+        expect("context: saved", lc2.top(u"とった", u"写真を"), u"撮った");
+        lc2.forget(u"とった", u"撮った");
+        expect("context: forget", lc2.top(u"とった", u"写真を"), u16());
+        {   // 時間を指定して消すと文脈の票も戻る
+            auto d = work / "ctx_recent";
+            std::filesystem::remove_all(d);
+            std::filesystem::create_directories(d);
+            {
+                Learning a(d / L"learned.json");
+                for (int i = 0; i < 3; i++) a.record(u"かみ", u"紙", 2, u"白い");
+            }
+            forget_recent(d, 0);
+            Learning a(d / L"learned.json");
+            a.record(u"かみ", u"神", 2, u"白い");
+            expect("context: forget_recent drops votes", a.top(u"かみ", u"白い"), u"神");
+        }
+        {   // 枠から押し出した表記・消した表記の票は残らない。取り消すと押し出した表記が戻る
+            std::filesystem::remove(work / "learned_ev.json");
+            Learning a(work / "learned_ev.json");
+            a.record(u"かい", u"表1", 2, u"右の");
+            for (int i = 2; i <= 5; i++) a.record(u"かい", u"表" + u16(1, char16_t(u'0' + i)), 4, u"左の");
+            Learning::Undo u = a.record(u"かい", u"表6", 4, u"下の");
+            bool gone = true;
+            for (auto& c : a.counts(u"かい")) if (c.first == u"表1") gone = false;
+            if (!gone) { printf("FAIL evict\n"); failures++; }
+            a.record(u"かい", u"表2", 2, u"右の");
+            expect("context: evicted votes dropped", a.top(u"かい", u"右の"), u"表2");
+            a.record(u"かい", u"表3", 4, u"右の");
+            a.hide(u"かい", u"表3");
+            expect("context: hidden votes dropped", a.top(u"かい", u"右の"), u"表2");
+            std::filesystem::remove(work / "learned_ev2.json");
+            Learning b(work / "learned_ev2.json");
+            for (int i = 1; i <= 5; i++) b.record(u"かい", u"表" + u16(1, char16_t(u'0' + i)), 4);
+            Learning::Undo v = b.record(u"かい", u"表6", 4);
+            b.restore({v});
+            int n = 0;
+            for (auto& c : b.counts(u"かい")) n += c.second > 0;
+            if (n != 5 || v.evicted.empty()) { printf("FAIL evict undo %d\n", n); failures++; }
+            (void)u;
+        }
     }
 
     // ---- ユーザー辞書
@@ -869,7 +947,8 @@ int main(int argc, char** argv) {
         const u16 t = c.take_commit();
         if (c.undoable().first != t || c.undoable().second != u"かわ") { printf("FAIL undoable\n"); failures++; }
         if (!c.undo_commit() || !c.composing()) { printf("FAIL undo commit\n"); failures++; }
-        keys(c, "{esc}{esc}{esc}");
+        keys(c, "{esc}");   // 取り消しをやめたら元の文に戻る。読みに置き換えた字を消さない
+        expect("undo cancelled", c.take_commit(), t);
         // 確定の取り消しは、その確定で覚えたことも戻す (2026-10-30)
         keys(c, "yamaba{sp}{sp}{enter}");
         const u16 picked = c.take_commit();
@@ -881,6 +960,7 @@ int main(int argc, char** argv) {
             if (after != before - 2) { printf("FAIL undo learning %d %d\n", before, after); failures++; }
         }
         keys(c, "{esc}{esc}{esc}");
+        c.take_commit();
         expect("romaji reading", c.romaji_reading(u"konnichiha Sekai"), u"こんにちはせかい");
         expect("romaji reading bad", c.romaji_reading(u"hello2"), u16());
         expect("romaji reading word", c.romaji_reading(u"xyz"), u16());
@@ -936,6 +1016,9 @@ int main(int argc, char** argv) {
     if (!c.start_reconvert(back) || c.view().text.empty()) { printf("FAIL start_reconvert\n"); failures++; }
     keys(c, "{enter}");
     expect("reconvert commit", c.take_commit(), rc_text);
+    if (!c.start_reconvert(back, rc_text)) { printf("FAIL start_reconvert original\n"); failures++; }
+    keys(c, "{bs}{esc}");   // 読みに戻してからやめても元の文に戻る
+    expect("reconvert cancelled", c.take_commit(), rc_text);
     if (c.reading_of(u"ほかで入れた漢字") != u"") { printf("FAIL reading_of unknown\n"); failures++; }
     c.options.private_mode = true;
     keys(c, "himitunokotoba{sp}{enter}");

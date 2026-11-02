@@ -232,6 +232,7 @@ void Composer::type_kana(const u16& s) {
                 continue;
             }
         }
+        if (c == u'\uE000' || c == u'\uE001') continue;   // 前の字が無い
         insert(u16(1, c));
     }
     after_input(true);
@@ -398,13 +399,14 @@ bool Composer::press_input(const KeyEvent& ev) {
                 return true;
             }
             log({"raw", kana_, kana_, ctx_});
-            confirm_learned(kana_, kana_);
+            confirm_frozen();
+            confirm_learned(kana_, kana_, conv_ctx());
             commit_text(frozen_surface() + kana_);   // 固定した所は変換した形のまま
             to_idle();
             return true;
         case Key::Escape:
             log({"clear", frozen_reading() + kana_ + romaji_.pending(), u16(), ctx_});
-            to_idle();
+            if (!cancel_reconvert()) to_idle();
             return true;
         case Key::Backspace:
             if (romaji_.pending().empty() && caret_ == 0) unfreeze_last();   // 固定した所を消す: 最後の文節を読みに戻す
@@ -472,7 +474,7 @@ bool Composer::press_input(const KeyEvent& ev) {
 }
 
 // 候補の木の二股: 文節 i (区間の頭) から区間の終わりまでの文節を 1 つにまとめる (別の区切りの候補を選んだ)
-void Composer::fork_merge(size_t i) {
+bool Composer::fork_merge(size_t i) {
     Seg& s = segs_[i];
     int st = -tree_off_;
     for (size_t k = 0; k < i; k++) st += int(segs_[k].reading.size());
@@ -482,7 +484,7 @@ void Composer::fork_merge(size_t i) {
         size_t j = i + 1;
         int e = st + int(s.reading.size());
         while (j < segs_.size() && e < b) e += int(segs_[j++].reading.size());
-        if (e != b) return;   // 区間の終わりが文節の切れ目でない (文節を伸び縮みさせた後など)
+        if (e != b) return false;   // 区間の終わりが文節の切れ目でない (文節を伸び縮みさせた後など)
         s.own_reading = s.reading;
         s.own_tail_r = s.tail_r;
         s.own_tail_s = s.tail_s;
@@ -492,8 +494,21 @@ void Composer::fork_merge(size_t i) {
         s.tail_s.clear();
         segs_.erase(segs_.begin() + long(i + 1), segs_.begin() + long(j));
         whole_.clear();
+        return true;
+    }
+    return false;
+}
+
+// 候補を選び直した後: 別の区切りの候補に入った・出たら区間の文節をまとめる・戻す (s は前の文節なので、後ろを消したり足したりしても有効)。
+// まとめられなければ選び直さない。表記は後ろの文節の分まで含むので、そのままだと二重になる
+void Composer::after_pick(Seg& s, int old) {
+    if (s.fork_idx >= 0 && old == s.fork_idx && s.sel != s.fork_idx) fork_unmerge(focus_);
+    if (s.fork_idx >= 0 && s.sel == s.fork_idx && old != s.fork_idx && !fork_merge(focus_)) {
+        s.sel = old;
+        s.surface = s.cands[size_t(old)];
         return;
     }
+    if (s.sel != old) follow_after(focus_);
 }
 
 // 文節の候補を選び直したら、その後ろの文節を、選んだ表記を左の文脈にして変換し直す (ユーザー 2026-10-23「変換候補によって
@@ -570,10 +585,7 @@ bool Composer::press_convert(const KeyEvent& ev) {
         s.surface = s.cands[size_t(s.sel)];
         s.changed = true;
         cand_open_ = true;
-        // 別の区切りの候補に入った・出た: 区間の文節をまとめる・戻す (s は前の文節なので、後ろを消したり足したりしても有効)
-        if (s.fork_idx >= 0 && old == s.fork_idx && s.sel != s.fork_idx) fork_unmerge(focus_);
-        if (s.fork_idx >= 0 && s.sel == s.fork_idx && old != s.fork_idx) fork_merge(focus_);
-        if (s.sel != old) follow_after(focus_);
+        after_pick(s, old);
     };
     switch (ev.key) {
         case Key::Char: {
@@ -632,7 +644,7 @@ bool Composer::press_convert(const KeyEvent& ev) {
             return true;
         case Key::Escape:
             if (cand_open_ && !options.always_cands) cand_open_ = false;
-            else back_to_input();
+            else if (!cancel_reconvert()) back_to_input();
             return true;
         case Key::Backspace:
             back_to_input();
@@ -643,8 +655,13 @@ bool Composer::press_convert(const KeyEvent& ev) {
                 if (s.cands.empty()) return true;
                 const u16 x = s.cands[size_t(std::max(0, std::min(s.sel, int(s.cands.size()) - 1)))];
                 if (x == s.reading || x == to_katakana(s.reading)) return true;
-                learning_->hide(s.reading, x, !options.private_mode);
+                if (!quiet()) learning_->hide(s.reading, x, !options.private_mode);
                 log({"hide", s.reading, x, left_context(focus_), s.cands, s.sel});
+                const size_t at = size_t(std::find(s.cands.begin(), s.cands.end(), x) - s.cands.begin());
+                if (at < s.scores.size()) s.scores.erase(s.scores.begin() + long(at));
+                if (int(at) < s.tree_k) s.tree_k--;
+                if (int(at) == s.fork_idx) s.fork_idx = -1;
+                else if (int(at) < s.fork_idx) s.fork_idx--;
                 s.cands.erase(std::remove(s.cands.begin(), s.cands.end(), x), s.cands.end());
                 cand_open_ = true;
                 set_sel(std::min(s.sel, int(s.cands.size()) - 1));
@@ -713,7 +730,7 @@ void Composer::select_suggestion(int index) {
         e.extra = "suggest";
         log(e);
     }
-    if (flow && !options.private_mode) flow->record_suggest(live_sugg_[size_t(index)]);
+    if (flow && !quiet()) flow->record_suggest(live_sugg_[size_t(index)]);
     commit_text(t);
     to_idle();
     rebuild_view();
@@ -723,15 +740,18 @@ void Composer::select_candidate(int index) {
     if (state_ == State::Input) {   // 打っている間の候補: それを確定する
         if (live_pending_ || index < 0 || index >= int(live_cands_.size())) return;   // 待っている間の候補は今の読みと合わない
         u16 c = live_cands_[size_t(index)];
-        flush_romaji();
+        romaji_.reset();   // 候補は打ちかけの字を含まない読みのもの
         {
             LogEvent e{"commit", kana_, c, ctx_, live_cands_, index};
             e.segs = {c};
             e.extra = "live,mouse";
             log(e);
         }
-        if (learning_ && !options.private_mode && !contains(sugg_set_, c)) new_learn_.push_back(learning_->record(kana_, c));
-        if (flow && !options.private_mode && contains(sugg_set_, c)) flow->record_suggest(c);
+        if (learning_ && !quiet() && !contains(sugg_set_, c) && !is_completion(kana_, c)) {
+            learn_picked_words(c);
+            new_learn_.push_back(learning_->record(kana_, c, 2, conv_ctx()));
+        }
+        if (flow && !quiet() && contains(sugg_set_, c)) flow->record_suggest(c);
         commit_text(frozen_surface() + c);
         to_idle();
         rebuild_view();
@@ -740,11 +760,11 @@ void Composer::select_candidate(int index) {
     if (state_ != State::Convert) return;
     Seg& s = segs_[focus_];
     if (index < 0 || index >= int(s.cands.size())) return;
-    const bool moved = s.sel != index;
+    const int old = s.sel;
     s.sel = index;
     s.surface = s.cands[size_t(index)];
     s.changed = true;
-    if (moved) follow_after(focus_);
+    after_pick(s, old);
     log({"bseg", s.reading, s.surface, left_context(focus_), s.cands, index, {}, "mouse"});
     if (!options.always_cands) cand_open_ = false;
     rebuild_view();
@@ -809,6 +829,25 @@ void Composer::update_live() {
         for (auto& x : t.cands) c.cands.push_back(pre_s + x);
         c.words = pre_w;
         c.words.insert(c.words.end(), t.words.begin(), t.words.end());
+        std::vector<TreeWord> head;   // 候補の道も文全体の位置にそろえる (候補を選んだときの語の学習が見る)
+        int at = 0;
+        for (const Word& w : pre_w) {
+            TreeWord tw;
+            tw.surface = w.surface;
+            tw.rs = at;
+            at += int(w.reading.size());
+            tw.re = at;
+            head.push_back(tw);
+        }
+        for (auto& p : t.paths) {
+            std::vector<TreeWord> q = head;
+            for (TreeWord w : p) {
+                w.rs += int(pre_r);
+                w.re += int(pre_r);
+                q.push_back(std::move(w));
+            }
+            c.paths.push_back(std::move(q));
+        }
         c.sugg = t.sugg;
         c.sugg_kinds = t.sugg_kinds;
     } else {
@@ -816,6 +855,8 @@ void Composer::update_live() {
         c = conv_->convert(conv_ctx(), kana_, kCandidates);
         typo_spans_ = conv_->typo_spans();
     }
+    live_paths_ = c.paths;
+    apply_learned_words(c, conv_ctx());
     live_words_ = c.words;
     if (options.live_commit && caret_ == kana_.size() && !alpha_run_ && live_commit(c)) {
         update_live();   // 前の方を固定した: 残りを変換し直す
@@ -871,6 +912,7 @@ void Composer::update_live() {
         if (kana_.size() >= size_t(p.min_prefix) && kana_.size() < r.size() && r.compare(0, kana_.size(), kana_) == 0) { phrase = &p; break; }
     }
     live_pred_.clear();
+    live_phrase_ = phrase ? u16(phrase->text) : u16();
     if (kana_.size() >= 2) {
         std::vector<u16> comp;
         if (learning_) for (auto& x : learning_->completions(kana_, 2)) push_unique(comp, x);
@@ -880,6 +922,7 @@ void Composer::update_live() {
         for (auto& x : comp) {
             if (inserted >= 3) break;
             if (contains(cands, x) || (phrase && x == phrase->text)) continue;
+            if (learning_ && learning_->hidden(kana_, x)) continue;
             cands.insert(cands.begin() + long(at++), x);
             live_pred_.push_back(x);
             inserted++;
@@ -946,6 +989,7 @@ bool Composer::live_commit(const Conversion& c) {
     size_t cum_r = 0, cum_s = 0, freeze_end = 0, freeze_len = 0;
     std::map<size_t, u16> segs;
     for (size_t i = 0; i + 1 < c.words.size(); i++) {   // 最後の語は確定しない
+        if (learning_ && learning_->hidden(c.words[i].reading, c.words[i].surface)) break;   // 消した語は固めない (スペースで別の候補に替えられるように)
         cum_r += c.words[i].reading.size();
         cum_s += c.words[i].surface.size();
         u16 surf = top.substr(0, std::min(cum_s, top.size()));
@@ -991,6 +1035,39 @@ bool Composer::live_commit(const Conversion& c) {
     prev_segs_.clear();
     live_key_.clear();
     return true;
+}
+
+// 文節の読みを学習で覚えた表記に置き換える (空白で変換するときの convert_phrases と同じ決まり)。
+// 置き換えた文を 1 位に、元の 1 位は 2 位に残す。c.paths は置き換える前の経路のまま
+void Composer::apply_learned_words(Conversion& c, const u16& ctx) {
+    if (!learning_ || c.cands.empty() || c.words.empty()) return;
+    std::vector<Word> out;
+    u16 left = ctx, sentence;
+    bool changed = false;
+    size_t i = 0;
+    for (auto& p : group_phrases(c.words)) {
+        const size_t first = i;
+        for (size_t r = 0; r < p.reading.size(); r += c.words[i++].reading.size()) {}
+        const u16 t = learning_->top(p.reading, left);
+        if (!t.empty() && t != p.surface) {
+            Word w = c.words[first];
+            w.reading = p.reading;
+            w.surface = t;
+            w.rid = c.words[i - 1].rid;
+            w.pass = false;
+            out.push_back(std::move(w));
+            changed = true;
+        } else {
+            out.insert(out.end(), c.words.begin() + long(first), c.words.begin() + long(i));
+        }
+        const u16& s = t.empty() ? p.surface : t;
+        left += s;
+        sentence += s;
+    }
+    if (!changed) return;
+    c.cands.erase(std::remove(c.cands.begin(), c.cands.end(), sentence), c.cands.end());
+    c.cands.insert(c.cands.begin(), sentence);
+    c.words = std::move(out);
 }
 
 // 変換の速さを測って、固定せずに AI 変換に渡す字数を決める (最初に打ったときに 1 回。決まった読みを 3 回変換して速い方の時間)。
@@ -1246,6 +1323,7 @@ std::vector<Composer::Seg> Composer::convert_phrases(const u16& ctx, const u16& 
     }
     std::vector<Word> words = c.words;
     if (words.empty()) words.push_back({reading, c.cands.empty() ? reading : c.cands[0]});
+    u16 left = ctx;
     for (auto& p : group_phrases(words)) {
         Seg s{p.reading, greeting_fix(p.reading, p.surface)};
         if (p.head_r < p.reading.size() && p.head_s < p.surface.size()) {
@@ -1254,9 +1332,10 @@ std::vector<Composer::Seg> Composer::convert_phrases(const u16& ctx, const u16& 
         }
         // 自分で選び直したことのある文節の読みは、そのとき選んだ表記にする
         if (learning_) {
-            u16 t = learning_->top(p.reading);
+            u16 t = learning_->top(p.reading, left);
             if (!t.empty()) s.surface = t;
         }
+        left += s.surface;
         out.push_back(std::move(s));
     }
     return out;
@@ -1264,7 +1343,7 @@ std::vector<Composer::Seg> Composer::convert_phrases(const u16& ctx, const u16& 
 
 void Composer::convert_all() {
     flush_romaji();
-    if (kana_.empty()) { to_idle(); return; }
+    if (kana_.empty() && !unfreeze_last()) { to_idle(); return; }   // 読みを消し切って固定した文だけのときは、最後の文節を読みに戻す
     sync_user_dict();
     segs_ = frozen_;
     std::vector<Seg> rest = convert_phrases(conv_ctx(), kana_, &whole_);
@@ -1531,20 +1610,72 @@ void Composer::back_to_input() {
     prev_segs_.clear();
 }
 
-void Composer::confirm_learned(const u16& reading, const u16& surface) {
-    if (learning_ && !options.private_mode && !contains(sugg_set_, surface)) new_learn_.push_back(learning_->confirm(reading, surface));
+// 読みの続く語と決まり文句は、打った読みとは読みが違うので、その読みでは覚えない
+bool Composer::is_completion(const u16& reading, const u16& surface) const {
+    return reading == kana_ && (contains(live_pred_, surface) || (!live_phrase_.empty() && surface == live_phrase_));
+}
+
+// 選んだ文の経路と 1 位の語を比べて、両方の語の区切りがそろう所ごとに、表記が違えば数える (読み全体だけだと次の文に効かない)
+void Composer::learn_picked_words(const u16& picked) {
+    for (auto& path : live_paths_) {
+        u16 joined;
+        for (auto& w : path) joined += w.surface;
+        if (joined != picked) continue;
+        size_t a = 0, b = 0, ea = 0, start = 0;
+        int eb = 0;
+        u16 sa, sb, left = conv_ctx();
+        while (a < live_words_.size() && b < path.size()) {
+            ea += live_words_[a].reading.size();
+            sa += live_words_[a++].surface;
+            eb = path[b].re;
+            sb += path[b++].surface;
+            while (ea != size_t(eb)) {
+                if (ea < size_t(eb)) {
+                    if (a >= live_words_.size()) return;
+                    ea += live_words_[a].reading.size();
+                    sa += live_words_[a++].surface;
+                } else {
+                    if (b >= path.size()) return;
+                    eb = path[b].re;
+                    sb += path[b++].surface;
+                }
+            }
+            if (sa != sb && ea - start < kana_.size()) new_learn_.push_back(learning_->record(kana_.substr(start, ea - start), sb, 2, left));
+            left += sb;
+            start = ea;
+            sa.clear();
+            sb.clear();
+        }
+        return;
+    }
+}
+
+void Composer::confirm_learned(const u16& reading, const u16& surface, const u16& left) {
+    if (learning_ && !quiet() && !contains(sugg_set_, surface) && !is_completion(reading, surface)) new_learn_.push_back(learning_->confirm(reading, surface, left));
+}
+
+u16 Composer::confirm_frozen() {
+    u16 left = ctx_;
+    for (auto& s : frozen_) {
+        confirm_learned(s.reading, s.surface, left);
+        left += s.surface;
+    }
+    return left;
 }
 
 // ライブ変換の確定は文節でも数える。文全体の読みだけだと、文の中の かな に票が入らない (ユーザー 2026-10-31)
 void Composer::confirm_live(const u16& top) {
-    for (auto& s : frozen_) confirm_learned(s.reading, s.surface);
-    confirm_learned(kana_, top);
+    u16 left = confirm_frozen();
+    confirm_learned(kana_, top, left);
     u16 joined;
     for (auto& w : live_words_) joined += w.surface;
     if (joined != top) return;   // 学習や挨拶で 1 位が変わった文は、語の区切りが合わない
     std::vector<Phrase> ph = group_phrases(live_words_);
     if (ph.size() < 2) return;   // 文全体と同じ
-    for (auto& p : ph) confirm_learned(p.reading, p.surface);
+    for (auto& p : ph) {
+        confirm_learned(p.reading, p.surface, left);
+        left += p.surface;
+    }
 }
 
 void Composer::commit_all() {
@@ -1552,16 +1683,17 @@ void Composer::commit_all() {
     std::vector<u16> segs;
     int changed = 0;
     for (auto& s : segs_) {
+        const u16 left = ctx_ + t;
         t += s.surface;
         reading += s.reading;
         segs.push_back(s.surface);
         if (s.changed) {
             changed++;
-            if (learning_ && !options.private_mode && !contains(sugg_set_, s.surface)) new_learn_.push_back(learning_->record(s.reading, s.surface));
-            if (flow && !options.private_mode && contains(sugg_set_, s.surface)) flow->record_suggest(s.surface);
+            if (learning_ && !quiet() && !contains(sugg_set_, s.surface) && !is_completion(s.reading, s.surface)) new_learn_.push_back(learning_->record(s.reading, s.surface, 2, left));
+            if (flow && !quiet() && contains(sugg_set_, s.surface)) flow->record_suggest(s.surface);
             log({"bseg", s.reading, s.surface, u16(), s.cands, s.sel});
         } else {
-            confirm_learned(s.reading, s.surface);
+            confirm_learned(s.reading, s.surface, left);
         }
     }
     if (on_log) {
@@ -1571,6 +1703,7 @@ void Composer::commit_all() {
         e.extra = first_via_ + ",changed=" + std::to_string(changed);
         log(e);
     }
+    kana_ = reading;   // 固定した文節は segs_ に移っているので、全文の読みで控える (確定の取り消し・再変換)
     commit_text(t);
     to_idle();
 }
@@ -1606,20 +1739,20 @@ void Composer::commit_text(const u16& t0) {
     history_ = tail(history_ + t, CTX_MAX);
     // M5: 確定した文の、かなでも漢字でも書ける語の書き方を、文の種類 (左の文脈から 丁寧・崩れ) と一緒に数える
     // (読みの網の上でたどって語を決める)
-    if (style_ && conv_ && !options.private_mode && !t.empty() && !kana_.empty()) {
+    if (style_ && conv_ && !quiet() && !t.empty() && !kana_.empty()) {
         const auto w8 = conv_->style_weight(ctx_);
         for (auto& w : conv_->path_variants(frozen_reading() + kana_, t)) {
             style_->record(w, w8);
             last_style_.push_back({w, w8});
         }
     }
-    if (learning_ && options.learn_log && !options.private_mode && !options.secure_field && !t.empty() && !kana_.empty())
+    if (learning_ && options.learn_log && !quiet() && !t.empty() && !kana_.empty())
         learning_->note_commit(frozen_reading() + kana_, t, ctx_);
-    if (!t.empty() && !kana_.empty() && !options.private_mode) {   // 再変換のための (表記, 読み)
+    if (!t.empty() && !kana_.empty() && !quiet()) {   // 再変換のための (表記, 読み)
         recent_.push_back({t, frozen_reading() + kana_});
         if (recent_.size() > 200) recent_.erase(recent_.begin());
     }
-    if (flow && !options.private_mode) {
+    if (flow && !quiet()) {
         flow->feed(t);
         post_ = flow->predict();
         flow->save();   // 節が閉じたときだけ書く (dirty)
@@ -1637,12 +1770,23 @@ u16 Composer::reading_of(const u16& text) const {
     return u16();
 }
 
-bool Composer::start_reconvert(const u16& reading) {
+bool Composer::start_reconvert(const u16& reading, const u16& original) {
     if (reading.empty() || state_ != State::Idle) return false;
     start_input();
     insert(reading);
+    raw_valid_ = false;   // 打ったキーの並びが無い
     convert_all();
+    restore_ = original;
     rebuild_view();
+    return true;
+}
+
+// 再変換をやめた: 読みに置き換えた元の文に戻す (元の文は入力欄から消えているので、変換中の文字をそれで確定する)
+bool Composer::cancel_reconvert() {
+    if (restore_.empty()) return false;
+    commit_ += restore_;
+    history_ = tail(history_ + restore_, CTX_MAX);
+    to_idle();
     return true;
 }
 
@@ -1662,13 +1806,14 @@ bool Composer::undo_commit() {
         history_.resize(history_.size() - surface.size());
     log({"undo", reading, surface, history_});
     // その確定で覚えたことも戻す (2026-10-30)。節が閉じて数えた文の流れは戻らない
+    std::reverse(last_learn_.begin(), last_learn_.end());   // 新しい順に戻す
     if (learning_) learning_->restore(last_learn_);
     if (style_) style_->unrecord(last_style_);
     last_learn_.clear();
     last_style_.clear();
     if (!recent_.empty() && recent_.back().first == surface) recent_.pop_back();
     if (flow) for (size_t i = 0; i < surface.size(); i++) flow->backspace();
-    return start_reconvert(reading);
+    return start_reconvert(reading, surface);
 }
 
 u16 Composer::romaji_reading(const u16& text) const {
@@ -1706,6 +1851,7 @@ void Composer::passthrough(const KeyEvent& ev) {
 
 void Composer::to_idle() {
     state_ = State::Idle;
+    restore_.clear();
     pred_tab_.clear();
     kana_.clear();
     caret_ = 0;
@@ -1733,13 +1879,14 @@ void Composer::finish() {
         flush_romaji();
         // ライブ変換で変換した文が見えているなら、それで確定する (Enter と同じ)。英語入力に切り替えたときに、
         // 見えていた変換がかなに戻って確定され、取り消されたように見えた (ユーザー 2026-10-09)
-        if (options.live_display && !kana_.empty()) update_live();
+        if ((options.live_display || options.space_literal) && !kana_.empty()) update_live();
         if (live_shown()) {
             log({"commit", kana_, live_top_, ctx_, live_cands_, 0, {}, "live"});
             confirm_live(live_top_);
             commit_text(frozen_surface() + live_top_);
         } else {
-            confirm_learned(kana_, kana_);
+            confirm_frozen();
+            confirm_learned(kana_, kana_, conv_ctx());
             commit_text(frozen_surface() + kana_);
         }
         to_idle();

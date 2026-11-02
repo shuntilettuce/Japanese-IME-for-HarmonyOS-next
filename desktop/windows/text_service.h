@@ -70,7 +70,7 @@ public:
     bool app_open_state(bool def);
     void remember_app_open(bool open);
     bool no_shortcuts_ = false;   // このソフトではショートカットを使わない (app_open.tsv の印。Java のソフトは最初から)
-    u16 reconvert_reading(ITfContext* ctx, bool romaji = false);
+    u16 reconvert_reading(ITfContext* ctx, bool romaji = false, u16* selected = nullptr);
     std::filesystem::file_time_type romaji_stamp_{};   // romaji.tsv を読んだときの更新時刻
     // 候補の窓をマウスで選んだ
     void on_candidate_clicked(int index);
@@ -96,7 +96,11 @@ private:
     void live_stop();
     static void CALLBACK live_timer_proc(HWND, UINT, UINT_PTR, DWORD);
     void apply_settings();
-    bool is_secure_field(TfEditCookie ec, ITfContext* ctx);   // パスワードの欄か (入力の記録を止める)
+    void begin_input(TfEditCookie ec, ITfContext* ctx);
+    bool keyboard_disabled(ITfContext* ctx);
+    bool undo_matches(ITfContext* ctx);
+    void layout_stop();
+    bool is_secure_field(TfEditCookie ec, ITfContext* ctx);   // パスワードの欄か (打った文を残さない)
     Action classify(WPARAM vk, LPARAM lp, KeyEvent& ev, ITfContext* ctx);
     bool to_key_event(WPARAM vk, LPARAM lp, KeyEvent& ev);
     HRESULT edit(ITfContext* ctx, DWORD flags, std::function<void(TfEditCookie)> fn);
@@ -106,7 +110,7 @@ private:
     void update_strip(TfEditCookie ec, ITfContext* ctx, const View& v);
     void update_candidates(TfEditCookie ec, ITfContext* ctx, const View& v);
     void end_composition(TfEditCookie ec, ITfContext* ctx);
-    void finish_composition();
+    void finish_composition(DWORD when = TF_ES_ASYNCDONTCARE);
     bool init_key_sink();
     void uninit_key_sink();
     bool init_preserved_keys();
@@ -132,7 +136,7 @@ private:
     RECT last_rc_ = {};
     HWND last_rc_root_ = nullptr;   // 最初にキーを打ったときに Composer と Core を作る
     u16 left_ctx_;
-    bool secure_ = false;   // いまの入力欄がパスワードの欄 (デバッグ用のビルドの入力の記録だけが使う)
+    bool secure_ = false;   // いまの入力欄がパスワードの欄
     CandWindow cand_;
     KeyStrip strip_;   // 打った綴りの帯
     Microsoft::WRL::ComPtr<ITfContext> post_ctx_;   // 文の流れの続きを出した入力欄 (クリックで入れるとき)

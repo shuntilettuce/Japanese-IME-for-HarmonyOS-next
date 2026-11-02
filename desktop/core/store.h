@@ -28,11 +28,12 @@ public:
     explicit Learning(std::filesystem::path file) : file_(std::move(file)) {}
 
     // record の前の値 (確定の取り消し・時間を指定した消去で元に戻す)
-    struct Undo { u16 reading, surface; int count = 0, day = 0; bool hidden = false; };   // hidden: 消した操作を戻す
+    struct Undo { u16 reading, surface; int count = 0, day = 0; bool hidden = false; u16 left; int add = 0; u16 evicted; int evicted_count = 0; };   // hidden: 消した操作を戻す。left・add: 文脈の表に足した分。evicted: 枠から押し出した表記
     // 手で選び直した表記を覚えて、すぐ保存する。2 回分に数える (実機の入力ログの時刻順の評価は MELTYPE_NOTES。ユーザー 2026-10-30)
-    Undo record(const u16& reading, const u16& surface, int add = 2);
+    // left = 左の文脈 (語の学習を文脈ごとに数える。top が見る)
+    Undo record(const u16& reading, const u16& surface, int add = 2, const u16& left = u16());
     // 選び直さずに確定した表記。すでに学習のある読みでだけ 1 回分足す (選び直した表記が 1 位を奪い続けないように)
-    Undo confirm(const u16& reading, const u16& surface);
+    Undo confirm(const u16& reading, const u16& surface, const u16& left = u16());
     // 確定した文 (読み・表記・左の文脈) を控えに足す。「学習を始める」で同意したときだけ呼ぶ
     void note_commit(const u16& reading, const u16& surface, const u16& ctx);
     // 控えの順に元の値へ戻す。消した (回数 -1 の) 表記は、hidden の控えでだけ戻す
@@ -48,8 +49,9 @@ public:
     std::vector<u16> completions(const u16& prefix, size_t max);
     // その読みで選んだ (表記, 回数)。回数 -1 は候補に出さない表記
     std::vector<std::pair<u16, int>> counts(const u16& reading);
-    // その読みでいちばん多く選んだ表記 (無ければ空)
-    u16 top(const u16& reading);
+    // 文節の読みの表記を置き換える学習。同じ左の文脈で選んだ (SAME_CTX_MIN 回分、別の表記の票を引く)、または
+    // ANY_CTX_MIN 回分選んでいてこの文脈に別の表記の票が無い表記のうち、いちばん多く選んだもの (無ければ空)
+    u16 top(const u16& reading, const u16& left = u16());
     // min 回以上選んだ (読み, 表記, 回数)。変換の網に候補として入れる (AI が文脈で選ぶ。ブログの報告 2026-10-21)
     struct Strong { u16 reading, surface; int count; };
     std::vector<Strong> strong(int min);
@@ -71,9 +73,17 @@ public:
     static constexpr size_t MAX_READINGS = 20000;
     static constexpr size_t MAX_SURFACES = 5;
     static constexpr int TOP_MIN_COUNT = 2;      // この回数から先頭へ (手で 1 度選べば届く)
+    static constexpr int SAME_CTX_MIN = 2;       // 手で 1 度
+    static constexpr int ANY_CTX_MIN = 6;        // 手で 3 度
+    static constexpr size_t CTX_CHARS = 2;       // 文脈として覚える左の字数
+    static constexpr size_t MAX_CONTEXTS = 8;    // 読みごとに覚える文脈の数 (古いものから捨てる)
 
 private:
-    struct Entry { u16 reading; std::vector<std::pair<u16, int>> counts; int day = 0; };
+    using Counts = std::vector<std::pair<u16, int>>;
+    struct Entry { u16 reading; Counts counts; int day = 0; std::vector<std::pair<u16, Counts>> ctx; };   // ctx: 左の文脈 -> (表記, 回数)
+    static u16 left_key(const u16& left);
+    static void note(Entry& e, const u16& key, const u16& surface, int add);
+    static void drop_ctx(Entry& e, const u16& surface);
     void refresh();
     void save();
     void reindex();
@@ -152,6 +162,7 @@ private:
 
 // ファイルを読む・書く (書くときは一時ファイルから置き換える)
 bool read_file(const std::filesystem::path& p, std::string& out);
+void keep_broken(const std::filesystem::path& p);
 bool write_file_atomic(const std::filesystem::path& p, const std::string& data);
 
 }  // namespace shunti

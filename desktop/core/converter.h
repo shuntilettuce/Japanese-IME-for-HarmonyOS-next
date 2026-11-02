@@ -36,6 +36,7 @@ struct Conversion {
     std::vector<TreeNode> tree;  // 候補の木 (分からなければ空)
     std::vector<u16> cands;      // 候補 (よい順)
     std::vector<Word> words;     // cands[0] の語の区切り (分からなければ空)
+    std::vector<std::vector<TreeWord>> paths;   // 上位の経路の語 (候補を選んだときに、1 位と違う語を学習する)
     // 提案 (set_suggest がオンのとき): 打ち間違いの直し・日付・住所・英単語・絵文字・顔文字・かっこ など、候補に混ぜないもの
     std::vector<u16> sugg;
     std::vector<int> sugg_kinds;   // engine.h の KKC_SUGGEST_*

@@ -134,8 +134,8 @@ public:
     u16 romaji_reading(const u16& text) const;
     // 再変換: 確定した文を読みに戻せるか (読みが分からなければ空)。かなだけの文はそのまま、漢字まじりはこれまで確定した記録から
     u16 reading_of(const u16& text) const;
-    // 再変換を始める (読みを入れて変換した状態にする)。始めたら true
-    bool start_reconvert(const u16& reading);
+    // 再変換を始める (読みを入れて変換した状態にする)。始めたら true。original = 置き換えた元の文 (Esc で戻す)
+    bool start_reconvert(const u16& reading, const u16& original = u16());
     // ローマ字の表に足す (詳細設定の「ローマ字の表」)
     void add_romaji(const u16& key, const u16& kana) { romaji_.add_pair(key, kana); }
     void reset_romaji() { romaji_ = Romaji(); }   // 足した綴りを外して元の表に
@@ -207,7 +207,7 @@ private:
     void load_cands(size_t i);
     void load_more(size_t i);   // 最後のページに来た: 候補の続き (変換の上位をもっと + その読みの辞書の語を全部) を足す
     void resize_focus(int delta);
-    void fork_merge(size_t i);     // 候補の木の二股: 文節 i から区間の終わりまでを 1 つにまとめる
+    bool fork_merge(size_t i);     // 候補の木の二股: 文節 i から区間の終わりまでを 1 つにまとめる
     void fork_unmerge(size_t i);   // まとめたのを元の文節に戻す
     bool has_latin_word(const u16& raw) const;
     void simulate_raw(u16& sim, std::vector<int32_t>& span) const;
@@ -217,6 +217,10 @@ private:
     void transform(Key f);
     u16 alpha_source(const u16& reading) const;
     void back_to_input();
+    bool cancel_reconvert();
+    void after_pick(Seg& s, int old);
+    bool quiet() const { return options.private_mode || options.secure_field; }   // 打った文を何も残さない
+    bool is_completion(const u16& reading, const u16& surface) const;
     void commit_all();
     void commit_text(const u16& t);
     void to_idle();
@@ -262,17 +266,23 @@ private:
     u16 live_read_;                      // live_top_ を作ったときの読み (待っている間はここまでを変換した形で見せる)
     bool live_pending_ = false;
     std::vector<u16> live_cands_;
+    std::vector<std::vector<TreeWord>> live_paths_;   // 打っている間の変換の経路 (kana_ の全体を変換したときだけ)
     std::vector<u16> live_sugg_;          // 提案 (Conversion::sugg。打っている間の変換のもの)
     std::vector<int> live_sugg_kinds_;
     u16 typo_top_;
     std::vector<std::pair<int, int>> typo_spans_;   // 直した所の読みの区間 (kana_ の位置。打った綴りの帯で直したキーだけ色を変える)
     std::vector<u16> live_pred_;          // 打っている間の候補に足した予測 (読みの続く語)。Tab はここから選ぶ
+    u16 live_phrase_;                     // 打っている間の候補の先頭に足した決まり文句
+    u16 restore_;                         // 再変換で置き換えた元の文
     std::vector<u16> after_emoji_;        // 1 位の文の語に当たる絵文字・顔文字 (確定の後の続き Tab の窓に)                        // 1 位にした打ち間違いの直し (“ ” で囲んで見せる)
     std::vector<u16> sugg_typo_;          // そのうち打ち間違いの直し (“ ” で囲んで見せる)
     u16 sugg_note(const u16& x) const;   // 候補の右に添える種類 (もしかして・絵文字 …)
     std::vector<u16> sugg_set_;           // 候補に混ぜた提案 (✦ を付けて見せる・学習しない)
     std::vector<u16> date_cands_;         // 日付・時刻の候補 (学習しない。sugg_note で日付と添える)
-    void confirm_learned(const u16& reading, const u16& surface);   // 選び直さずに確定した表記を学習に足す
+    void confirm_learned(const u16& reading, const u16& surface, const u16& left);   // 選び直さずに確定した表記を学習に足す
+    u16 confirm_frozen();   // 固定した文節も数える。返り値はその後ろの左の文脈
+    void apply_learned_words(Conversion& c, const u16& ctx);         // 文の語を学習で置き換える (Conversion は変換の結果)
+    void learn_picked_words(const u16& picked);                      // 打っている間の候補を選んだ: 1 位と違う語を数える
     void confirm_live(const u16& top);                              // ライブ変換の確定: 文全体と文節を学習に足す
     void add_datetime(const u16& reading, std::vector<u16>& list);   // 日付・時刻の候補を list の後ろに足す (学習しない)
     int sugg_focus_ = -1;                 // 提案の列で選んでいるもの (Shift+↓ / Shift+Tab で入る。-1 = 入っていない)

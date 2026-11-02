@@ -5,19 +5,20 @@
 # C:\Program Files\shunti IME に写し、64 ビットと 32 ビットの両方を登録して、使う人のキーボードの一覧に足す。
 # ファイルの写しと登録は管理者の権限で (UAC で頼む)、キーボードの一覧はその人の設定なので権限なしで行う。
 # 使っているアプリが DLL を開いたままでも入れ直せるように、古いファイルは名前を変えて残し、次の再起動で消す。
-param([switch]$Uninstall, [switch]$Elevated)
+param([switch]$Uninstall, [switch]$Elevated, [switch]$Pause)
 $ErrorActionPreference = 'Stop'
 
 $Dest = Join-Path $env:ProgramFiles 'shunti IME'
 $Files = @('shunti_ime_x64.dll', 'shunti_ime_x86.dll', 'shunti_settings.exe', 'kkc_lex.bin', 'kkc_model.bin', 'LICENSE.txt')
 # 軽量・高精度の変換モデル (設定で選ぶ)。無ければ標準 (kkc_model.bin) だけで動く
-$Optional = @('shunti_kana_fix.exe', 'kkc_model_light.bin', 'kkc_variants.tsv', 'kkc_register.bin')   # kkc_variants.tsv = M5 の書き方の対の表・kkc_register.bin = 文の種類の判定器
+$Optional = @('install.ps1', 'uninstall.bat', 'shunti_kana_fix.exe', 'kkc_model_light.bin', 'kkc_model_s2.bin', 'kkc_variants.tsv', 'kkc_register.bin')   # kkc_variants.tsv = 書き方の対の表・kkc_register.bin = 文の種類の判定器
 # スタートメニューの「shunti IME の設定」(全員分)
 $Shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\shunti IME の設定.lnk'
 $Is64 = [Environment]::Is64BitOperatingSystem
 $Reg64 = Join-Path $env:windir 'System32\regsvr32.exe'
 $Reg32 = if ($Is64) { Join-Path $env:windir 'SysWOW64\regsvr32.exe' } else { $Reg64 }
 # 入力の方法の印 (言語 0411 = 日本語、テキストサービスの CLSID、プロファイルの GUID)
+$UninstallKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\shunti IME'   # 設定の「インストールされているアプリ」から外せるように
 $Log = Join-Path $env:TEMP 'shunti-ime-install.log'   # 管理者の側で失敗した理由 (こちらの窓に出す)
 $Tip = '0411:{3CA2ED9D-36D7-4E5E-92FB-5A702C39A46B}{80F9DCBC-6C43-4043-B004-C6275415630E}'
 
@@ -36,7 +37,7 @@ function Remove-OrRetire([string]$path) {
     try { Remove-Item -LiteralPath $path -Force; return } catch {}
     $old = "$path.old-" + [Guid]::NewGuid().ToString('N').Substring(0, 8)
     Rename-Item -LiteralPath $path -NewName (Split-Path $old -Leaf) -Force
-    [void][Shunti.Native]::MoveFileEx($old, $null, 4)   # MOVEFILE_DELAY_UNTIL_REBOOT
+    [void][Shunti.Native]::MoveFileEx($old, [NullString]::Value, 4)   # MOVEFILE_DELAY_UNTIL_REBOOT
 }
 
 # 登録に使う regsvr32 と DLL の組 (32 ビット版の Windows では 32 ビットだけ)
@@ -58,6 +59,7 @@ function Invoke-AdminPart {
     if ($Uninstall) {
         Unregister-All
         Remove-Item -LiteralPath $Shortcut -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $UninstallKey -Force -ErrorAction SilentlyContinue
         if (Test-Path -LiteralPath $Dest) {
             Get-ChildItem -LiteralPath $Dest -File | ForEach-Object { Remove-OrRetire $_.FullName }
             try { Remove-Item -LiteralPath $Dest -Force -ErrorAction SilentlyContinue } catch {}
@@ -68,25 +70,42 @@ function Invoke-AdminPart {
     foreach ($f in $Files) {
         if (-not (Test-Path -LiteralPath (Join-Path $src $f))) { throw "$f が見つかりません ($src)。zip を全部展開してから実行してください" }
     }
-    Unregister-All
     # 開いている設定の画面を閉じる (設定は変えるたびに保存しているので失うものは無い)。残すと、名前を変えた古い版の画面が
     # 開いたままになり、切り替えが保存されないことがあった (2026-10-27)
     Get-Process -Name 'shunti_settings' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    # 古いものを外す前に全部写し切る。途中で失敗しても今の IME は動いたまま
     New-Item -ItemType Directory -Force -Path $Dest | Out-Null
     Get-ChildItem -LiteralPath $Dest -Filter '*.old-*' -File -ErrorAction SilentlyContinue | ForEach-Object {
         try { Remove-Item -LiteralPath $_.FullName -Force } catch {}
     }
     # キー配列の表 (layout_*.tsv) もあれば全部
     $Layouts = @(Get-ChildItem -LiteralPath $src -Filter 'layout_*.tsv' -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
-    foreach ($f in $Files + $Layouts + ($Optional | Where-Object { Test-Path -LiteralPath (Join-Path $src $_) })) {
+    $Copy = @($Files + $Layouts + ($Optional | Where-Object { Test-Path -LiteralPath (Join-Path $src $_) }))
+    try {
+        foreach ($f in $Copy) { Copy-Item -LiteralPath (Join-Path $src $f) -Destination (Join-Path $Dest "$f.new") -Force }
+    } catch {
+        foreach ($f in $Copy) { Remove-Item -LiteralPath (Join-Path $Dest "$f.new") -Force -ErrorAction SilentlyContinue }
+        throw
+    }
+    Unregister-All
+    foreach ($f in $Copy) {
         $to = Join-Path $Dest $f
         Remove-OrRetire $to
-        Copy-Item -LiteralPath (Join-Path $src $f) -Destination $to -Force
+        Rename-Item -LiteralPath "$to.new" -NewName $f -Force
     }
     foreach ($pair in (Get-Pairs)) {
         $p = Start-Process $pair.Reg -ArgumentList @('/s', "`"$(Join-Path $Dest $pair.Dll)`"") -Wait -PassThru
         if ($p.ExitCode -ne 0) { throw "登録に失敗しました ($($pair.Dll): $($p.ExitCode))" }
     }
+    try {
+        New-Item -Path $UninstallKey -Force | Out-Null
+        Set-ItemProperty -LiteralPath $UninstallKey -Name DisplayName -Value 'shunti IME'
+        Set-ItemProperty -LiteralPath $UninstallKey -Name InstallLocation -Value $Dest
+        Set-ItemProperty -LiteralPath $UninstallKey -Name DisplayIcon -Value (Join-Path $Dest 'shunti_settings.exe')
+        Set-ItemProperty -LiteralPath $UninstallKey -Name UninstallString -Value "powershell -NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $Dest 'install.ps1')`" -Uninstall"
+        Set-ItemProperty -LiteralPath $UninstallKey -Name NoModify -Value 1 -Type DWord
+        Set-ItemProperty -LiteralPath $UninstallKey -Name NoRepair -Value 1 -Type DWord
+    } catch {}
     try {
         $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut($Shortcut)
         $lnk.TargetPath = Join-Path $Dest 'shunti_settings.exe'
@@ -128,8 +147,8 @@ function Invoke-Elevated {
 
 try {
     if ($Uninstall) {
+        Invoke-Elevated   # 許可が得られないときは一覧も今のまま
         [void][Shunti.Native]::InstallLayoutOrTip($Tip, 1)   # キーボードの一覧から外す (ILOT_UNINSTALL)
-        Invoke-Elevated
         Write-Host ''
         Write-Host 'shunti IME を外しました。'
         Write-Host '使っていたアプリを閉じるか、パソコンを再起動すると、残りのファイルも消えます。'
@@ -153,5 +172,6 @@ try {
 } catch {
     Write-Host ''
     Write-Host "失敗しました: $_" -ForegroundColor Red
+    if ($Pause) { Read-Host 'Enter キーで閉じます' | Out-Null }
     exit 1
 }

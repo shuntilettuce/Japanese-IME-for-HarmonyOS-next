@@ -38,6 +38,7 @@ private:
     std::filesystem::path path_;
     std::filesystem::file_time_type stamp_{};
     bool dirty_ = false;
+    bool unread_ = false;   // ファイルはあるのに読めなかった: 上書きしない
 };
 
 // 学習を全部消す (learned.json・style.json・flow.tsv と控え)

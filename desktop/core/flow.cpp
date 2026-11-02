@@ -39,7 +39,11 @@ void SentenceFlow::load(const std::filesystem::path& path) {
     std::error_code ec;
     stamp_ = std::filesystem::last_write_time(path, ec);
     std::string data;
-    if (!read_file(path, data)) return;
+    unread_ = false;
+    if (!read_file(path, data)) {
+        unread_ = std::filesystem::exists(path, ec);
+        return;
+    }
     size_t st = 0;
     while (st < data.size()) {
         size_t e = data.find('\n', st);
@@ -54,7 +58,7 @@ void SentenceFlow::load(const std::filesystem::path& path) {
 }
 
 void SentenceFlow::save() {
-    if (!dirty_ || path_.empty()) return;
+    if (!dirty_ || path_.empty() || unread_) return;
     dirty_ = false;
     std::string out;
     for (const auto& kv : table_)
@@ -169,6 +173,12 @@ void forget_all(const std::filesystem::path& dir) {
     f.clear();
     std::error_code ec;
     std::filesystem::remove(dir / RECENT_FILE, ec);
+    // 壊れたときに残した控えも学習の中身
+    for (auto it = std::filesystem::directory_iterator(dir, ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+        const std::wstring n = it->path().filename().wstring();
+        std::error_code rc;
+        if (n.rfind(L"learned.json.broken-", 0) == 0 || n.rfind(L"style.json.broken-", 0) == 0) std::filesystem::remove(it->path(), rc);
+    }
 }
 
 int forget_recent(const std::filesystem::path& dir, long long since, const std::string& kinds) {
@@ -195,8 +205,9 @@ int forget_recent(const std::filesystem::path& dir, long long since, const std::
         long long t = 0;
         for (char c : f[0]) if (c >= '0' && c <= '9') t = t * 10 + (c - '0');
         if (t < since || f.size() < 2 || kinds.find(f[1]) == std::string::npos) { kept += line + "\n"; continue; }
-        if (f.size() == 6 && (f[1] == "L" || f[1] == "H"))
-            us.push_back({from_utf8(f[2]), from_utf8(f[3]), to_int(f[4].c_str()), to_int(f[5].c_str()), f[1] == "H"});
+        if ((f.size() == 6 || f.size() == 8) && (f[1] == "L" || f[1] == "H"))   // 8 項目 = 文脈の表に足した分も控えた行
+            us.push_back({from_utf8(f[2]), from_utf8(f[3]), to_int(f[4].c_str()), to_int(f[5].c_str()), f[1] == "H",
+                           f.size() == 8 ? from_utf8(f[7]) : u16(), f.size() == 8 ? to_int(f[6].c_str()) : 0});
         else if (f.size() == 5 && f[1] == "S") ss.push_back({from_utf8(f[2]), {std::strtof(f[3].c_str(), nullptr), std::strtof(f[4].c_str(), nullptr)}});
         else if (f.size() == 4 && f[1] == "F") fs_.push_back({from_utf8(f[2]), from_utf8(f[3])});
         else if (f.size() != 5 || f[1] != "C") continue;   // C は行を捨てるだけ

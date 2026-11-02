@@ -37,6 +37,7 @@ bool http_get(const std::wstring& url, std::string& body, std::wstring& err) {
     if (!WinHttpCrackUrl(url.c_str(), 0, 0, &u)) { err = T(148); return false; }
     HINTERNET s = WinHttpOpen(L"shunti-IME-updater", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!s) { err = T(149); return false; }
+    WinHttpSetTimeouts(s, 5000, 5000, 10000, 30000);   // つながらないとき設定の画面を止めない
     HINTERNET c = WinHttpConnect(s, host, u.nPort, 0);
     HINTERNET r = c ? WinHttpOpenRequest(c, L"GET", path, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                          u.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0)
@@ -99,7 +100,12 @@ bool download_and_install(const Latest& l, std::wstring& err) {
     GetTempPathW(MAX_PATH, tmp);
     const std::filesystem::path dir = std::filesystem::path(tmp) / (L"shunti-IME-update-" + l.version);
     std::error_code ec;
-    std::filesystem::remove_all(dir, ec);
+    // 前の更新の残りを消す (展開したモデルで数百 MB ある)
+    for (auto it = std::filesystem::directory_iterator(tmp, ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+        std::error_code rc;
+        if (it->path().filename().wstring().rfind(L"shunti-IME-update-", 0) == 0) std::filesystem::remove_all(it->path(), rc);
+    }
+    ec.clear();
     std::filesystem::create_directories(dir, ec);
     const std::filesystem::path zp = dir / L"package.zip";
     HANDLE f = CreateFileW(zp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -109,8 +115,12 @@ bool download_and_install(const Latest& l, std::wstring& err) {
     CloseHandle(f);
     if (!wrote) { err = T(154); return false; }
     // 展開 (Windows 10 以降の PowerShell の Expand-Archive)
-    std::wstring cmd = L"powershell -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -LiteralPath '" + zp.wstring() +
-                       L"' -DestinationPath '" + (dir / L"x").wstring() + L"' -Force\"";
+    auto quoted = [](std::wstring s) {   // PowerShell の '…' の中では ' を重ねる
+        for (size_t i = 0; (i = s.find(L'\'', i)) != std::wstring::npos; i += 2) s.insert(i, 1, L'\'');
+        return s;
+    };
+    std::wstring cmd = L"powershell -NoProfile -ExecutionPolicy Bypass -Command \"Expand-Archive -LiteralPath '" + quoted(zp.wstring()) +
+                       L"' -DestinationPath '" + quoted((dir / L"x").wstring()) + L"' -Force\"";
     STARTUPINFOW si = {sizeof si};
     si.dwFlags = STARTF_USESHOWWINDOW;
     si.wShowWindow = SW_HIDE;
@@ -127,11 +137,11 @@ bool download_and_install(const Latest& l, std::wstring& err) {
     if (code != 0) { err = T(155); return false; }
     // install.ps1 は zip の中のフォルダ (shunti-IME-windows-x.y.z) にある
     std::filesystem::path ps;
-    for (auto& e : std::filesystem::recursive_directory_iterator(dir / L"x", ec))
-        if (e.path().filename() == L"install.ps1") { ps = e.path(); break; }
+    for (auto it = std::filesystem::recursive_directory_iterator(dir / L"x", ec); !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+        if (it->path().filename() == L"install.ps1") { ps = it->path(); break; }
     if (ps.empty()) { err = T(156); return false; }
-    // install.ps1 が自分で管理者の確認 (UAC) を出して写す。窓は出したまま (結果を見られるように)
-    const std::wstring args = L"-NoProfile -ExecutionPolicy Bypass -File \"" + ps.wstring() + L"\"";
+    // install.ps1 が自分で管理者の確認 (UAC) を出して写す。失敗したら -Pause で窓を残す (結果を見られるように)
+    const std::wstring args = L"-NoProfile -ExecutionPolicy Bypass -File \"" + ps.wstring() + L"\" -Pause";
     if (reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", L"powershell.exe", args.c_str(), ps.parent_path().c_str(), SW_SHOWNORMAL)) <= 32) {
         err = T(157);
         return false;

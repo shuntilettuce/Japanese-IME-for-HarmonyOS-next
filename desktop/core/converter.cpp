@@ -50,8 +50,10 @@ Converter::~Converter() {
 }
 
 bool Converter::open(const void* lex, size_t lex_size, const void* model, size_t model_size, int threads) {
+    kkc_engine* next = kkc_open(lex, lex_size, model, model_size);
+    if (!next) return false;   // 開けなければ今のエンジンのまま
     if (e_) kkc_close(e_);
-    e_ = kkc_open(lex, lex_size, model, model_size);
+    e_ = next;
     if (e_ && threads > 0) kkc_set_threads(e_, threads);
     if (e_) kkc_set_suggest(e_, suggest_ ? 1 : 0);
     if (e_) kkc_set_latin(e_, latin_ ? 1 : 0);
@@ -149,6 +151,7 @@ bool Converter::convert_once(const u16& ctx, const u16& kana, int max, Conversio
                 w.re = r = pe[wi];
                 ws.push_back(std::move(w));
             }
+            out.paths.push_back(ws);
             paths.push_back({costs[size_t(p)], std::move(ws)});
         }
         // 1 位の経路が候補の 1 位と同じときだけ (差別語で落ちたときなどは出さない)

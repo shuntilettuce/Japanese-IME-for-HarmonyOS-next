@@ -15,7 +15,7 @@ bool load_settings(const fs::path& p, Settings& s) {
     std::string text;
     if (!read_file(p, text)) return false;
     json::Value v;
-    if (!json::Parser(text).parse(v) || v.type != json::Value::Object) return false;
+    if (!json::Parser(text).parse(v) || v.type != json::Value::Object) { keep_broken(p); return false; }
     auto str = [&](const char* k, std::string& out) {
         const json::Value* x = v.get(k);
         if (x && x->type == json::Value::String) out = x->str;
@@ -136,6 +136,7 @@ bool save_settings(const fs::path& p, const Settings& s) {
 
 const char* model_file_name(const std::string& model) {
     if (model == "light") return "kkc_model_light.bin";
+    if (model == "s2") return "kkc_model_s2.bin";   // 比較用の昔のモデル
     // 高精度 (M4) は廃止: S7 (標準) の方が精度が上で、誤字も直せる (2026-10-14)。前に high を選んでいた人も標準を読む
     return "kkc_model.bin";
 }
@@ -145,6 +146,8 @@ bool SettingsFile::refresh() {
     fs::file_time_type t = fs::last_write_time(path_, ec);
     bool exists = !ec;
     if (loaded_ && (!exists || t == stamp_)) return false;
+    std::string probe;
+    if (exists && !read_file(path_, probe)) return false;   // 読めないだけ: 前の設定のまま、次にまた読む
     loaded_ = true;
     stamp_ = t;
     load_settings(path_, s_);
