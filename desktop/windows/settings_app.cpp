@@ -30,11 +30,11 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr wchar_t VERSION[] = L"0.7.7";
+constexpr wchar_t VERSION[] = L"0.7.8";
 
 enum Id {
     ID_PUNCT = 100, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
-    ID_LIST, ID_READING, ID_WORD, ID_POS, ID_ADD, ID_REMOVE, ID_IMPORT, ID_ADVANCED, ID_UPDATE, ID_RESET, ID_RECENT_SPAN, ID_RECENT_FORGET, ID_RECENT_SPAN_AI, ID_RECENT_FORGET_AI, ID_LEARN_LOG, ID_LEARN_CLEAR, ID_LICENSE, ID_GITHUB, ID_MODEL, ID_CANDTREE, ID_SPACELIT, ID_LATIN, ID_CAPS, ID_TYPO,
+    ID_LIST, ID_READING, ID_WORD, ID_POS, ID_ADD, ID_REMOVE, ID_IMPORT, ID_ADVANCED, ID_UPDATE, ID_RESET, ID_RECENT_SPAN, ID_RECENT_FORGET, ID_RECENT_SPAN_AI, ID_RECENT_FORGET_AI, ID_LEARN_LOG, ID_LEARN_CLEAR, ID_LICENSE, ID_GITHUB, ID_MODEL, ID_CANDTREE, ID_SPACELIT, ID_LATIN, ID_CAPS, ID_TYPO, ID_PUNCTCOMMIT,
 };
 
 // 変換モデル (settings.json の model の値と、画面の表示)。名前は配布の呼び名 (開発名は出さない)
@@ -107,6 +107,7 @@ void save() {
     g_s.latin_auto = checked(ID_LATIN);
     g_s.caps_alpha = checked(ID_CAPS);
     g_s.typo_fix = checked(ID_TYPO);
+    g_s.punct_commit = checked(ID_PUNCTCOMMIT);
     g_s.live_commit = checked(ID_LIVECOMMIT);
     g_s.model = g_models[size_t(std::clamp(selected(ID_MODEL), 0, int(g_models.size()) - 1))];
     if (!save_settings(g_dir / L"settings.json", g_s))
@@ -967,7 +968,7 @@ void build() {
     combo(200, y + 23, 250, ID_MODEL, {T(102), T(103), T(189)});
     y += 68;
 
-    group(T(50), y, 310);
+    group(T(50), y, 335);
     make(L"STATIC", T(104), 0, 24, y + 27, 170, 20, 0);
     combo(200, y + 23, 120, ID_PUNCT, {T(105), T(106), T(107), T(108)});
     make(L"STATIC", T(112), 0, 24, y + 56, 170, 20, 0);
@@ -981,7 +982,8 @@ void build() {
     make(L"BUTTON", T(161), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 229, 430, 22, ID_LATIN);
     make(L"BUTTON", T(163), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 254, 430, 22, ID_CAPS);
     make(L"BUTTON", T(165), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 279, 430, 22, ID_TYPO);
-    y += 318;
+    make(L"BUTTON", T(194), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 304, 430, 22, ID_PUNCTCOMMIT);
+    y += 343;
 
     group(T(13), y, 216);
     g_list = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 24, y + 22, 432, 90, ID_LIST);
@@ -1059,6 +1061,7 @@ void show_settings() {
     check(ID_LATIN, g_s.latin_auto);
     check(ID_CAPS, g_s.caps_alpha);
     check(ID_TYPO, g_s.typo_fix);
+    check(ID_PUNCTCOMMIT, g_s.punct_commit);
     check(ID_LIVECOMMIT, g_s.live_commit);
     g_loading = false;
 }
@@ -1077,7 +1080,7 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             int id = LOWORD(w), code = HIWORD(w);
             if ((id == ID_PUNCT || id == ID_MODEL || id == ID_LIVEDISPLAY) && code == CBN_SELCHANGE) save();
             else if (id == IDCANCEL) DestroyWindow(h);   // 「閉じる」と Esc
-            else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_CANDTREE || id == ID_SPACELIT || id == ID_LATIN || id == ID_CAPS || id == ID_TYPO) && code == BN_CLICKED) save();
+            else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_CANDTREE || id == ID_SPACELIT || id == ID_LATIN || id == ID_CAPS || id == ID_TYPO || id == ID_PUNCTCOMMIT) && code == BN_CLICKED) save();
             else if (id == ID_ADD) add_word();
             else if (id == ID_POS && code == CBN_SELCHANGE) update_reading_box();
             else if (id == ID_IMPORT) import_words();

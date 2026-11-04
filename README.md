@@ -342,7 +342,7 @@ shunti IMEは広告なし・完全無料で個人が開発しているオープ�
 ### AI変換 — shuntelligence（モデル）と shuntorge（辞書）
 
 - **shuntelligence**（`kkc_model.bin`、変換モデルの重み）— **CC BY 4.0**。商用利用・改変・再配布ができますが、「shuntelligence（shuntilettuce）」の表示が必要です。
-- **shuntorge**（`kkc_lex.bin`、AI変換の辞書）— 独自部分は MIT。mozc の辞書・連接コスト・記号・絵文字データ（BSD-3-Clause / IPAdic ライセンス）と、読みの一部に SudachiDict（Apache License 2.0）を含みます。独自部分は、手入れ済みの語・地名（日本郵便 郵便番号データと照合）・ネットの読み・技術用語・教材から拾った語。
+- **shuntorge**（`kkc_lex.bin`、AI変換の辞書）— Wikipedia日本語版の固有名詞と JMdict/EDICT のよくある誤読・読みの揺れ（どちらも CC BY-SA 4.0）を含むため、**辞書ファイル全体は CC BY-SA 4.0** です（独自部分は単独では MIT）。mozc の辞書・連接コスト・記号・絵文字データ（BSD-3-Clause / IPAdic ライセンス）と、読みの一部に SudachiDict（Apache License 2.0）を含みます。独自部分は、手入れ済みの語・地名（日本郵便 郵便番号データと照合）・ネットの読み・技術用語・教材から拾った語。
 - 推論エンジン（`entry/src/main/cpp/`）— MIT。
 
 学習に使った文章と条件は [`DATA_SOURCES.md`](./DATA_SOURCES.md) を参照してください。

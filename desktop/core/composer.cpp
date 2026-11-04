@@ -83,6 +83,29 @@ std::vector<u16> bracket_variants(const u16& reading) {
     }
     if (reading == u"かっこひらき") return opens;
     if (reading == u"かっことじ") return closes;
+    // 記号 1 字も同じ扱いで、全角・半角の両方と仲間の記号を出す (MS-IME と同じく・で ／ /、￥ で ＼ \。ブログの報告 2026-11-02)
+    static const char16_t* const MARKS[][5] = {
+        {u"・", u"／", u"/"}, {u"、", u"，", u","}, {u"。", u"．", u"."}, {u"ー", u"－", u"-", u"―", u"‐"}, {u"～", u"〜", u"~"},
+        {u"￥", u"＼", u"\\"}, {u"＊", u"*", u"※", u"×"}, {u"＂", u"\"", u"“", u"”"}, {u"＇", u"'", u"‘", u"’"},
+    };
+    if (reading.size() == 1 && !contains(opens, reading) && !contains(closes, reading)) {   // 括弧は下で全種類
+        std::vector<u16> marks;
+        for (auto& g : MARKS) {
+            std::vector<u16> m;
+            for (auto* x : g) if (x) m.push_back(x);
+            if (contains(m, reading)) { marks = m; break; }
+        }
+        // ほかの記号は全角と半角 (！ と ! など)。英数字は変換の候補に出るので入れない
+        const char16_t ch = reading[0];
+        const char16_t half = ch >= 0xFF01 && ch <= 0xFF5E ? char16_t(ch - 0xFEE0) : ch;
+        if (marks.empty() && half > 0x20 && half < 0x7F && !is_digit(half) && !((half | 0x20) >= u'a' && (half | 0x20) <= u'z'))
+            marks = {u16(1, char16_t(half + 0xFEE0)), u16(1, half)};
+        if (!marks.empty()) {
+            out.push_back(reading);
+            for (auto& m : marks) if (m != reading) out.push_back(m);
+            return out;
+        }
+    }
     for (const std::vector<u16>* side : {&opens, &closes}) {
         if (!contains(*side, reading)) continue;
         out.push_back(reading);
@@ -153,6 +176,7 @@ bool Composer::press(const KeyEvent& ev) {
         case State::Convert: handled = press_convert(ev); break;
     }
     if (ev.key != Key::F9 && ev.key != Key::F10 && ev.key != Key::Muhenkan) last_f_ = Key::Char;
+    if (ev.key == Key::Char && options.punct_commit) commit_at_punct();
     if (state_ == State::Input) after_input(ev.key == Key::Char);
     if (state_ == State::Convert && options.always_cands && !segs_.empty()) {
         if (!segs_[focus_].loaded) load_cands(focus_);
@@ -314,6 +338,40 @@ void Composer::type_char(char16_t c, bool raw) {
     else insert(u16(1, japanese_symbol(c)));
 }
 
+// 入力中の読みを、見えている形で確定する (Enter・句読点で確定)
+void Composer::commit_shown() {
+    // ライブ変換: 見えている変換をそのまま確定する (打ちかけのローマ字を今流し込んだので、先に変換し直してから見る)
+    if (options.live_display || options.space_literal) update_live();
+    if (live_shown()) {
+        u16 t = live_top_;
+        log({"commit", kana_, t, ctx_, live_cands_, 0, {}, "live"});
+        confirm_live(t);
+        commit_text(frozen_surface() + t);
+        to_idle();
+        return;
+    }
+    log({"raw", kana_, kana_, ctx_});
+    confirm_frozen();
+    confirm_learned(kana_, kana_, conv_ctx());
+    commit_text(frozen_surface() + kana_);   // 固定した所は変換した形のまま
+    to_idle();
+}
+
+// 句読点で確定 (設定。ブログの要望 2026-11-03): 読みの終わりに 、。(，．)！？ を打ったら、その句読点を添えて確定する。
+// ライブ変換で見えていればその形で (Enter と同じ)、見えていなければ変換して 1 位で (空白 → Enter と同じ。かなのまま確定しない。
+// ユーザー 2026-11-03)。変換中に打ったときは、選んでいた候補を確定してから句読点だけの入力になるので、それもすぐ確定する
+void Composer::commit_at_punct() {
+    if (state_ != State::Input || kana_.empty() || caret_ != kana_.size() || !romaji_.pending().empty()) return;
+    // 感嘆符・疑問符でも文を切る (ユーザー 2026-11-03)。数字の後の . などは句読点にならないので続ける
+    if (u16(u"、。，．！？!?").find(kana_.back()) == u16::npos) return;
+    if (options.live_display || options.space_literal) update_live();
+    if (!live_shown()) {
+        convert_all();
+        if (state_ == State::Convert) { commit_all(); return; }
+    }
+    commit_shown();
+}
+
 bool Composer::press_input(const KeyEvent& ev) {
     // 提案の列: Shift+↓ / Shift+Tab で入り、←→ / Tab / Shift+Tab で選び、Enter・空白で確定、Esc・↑ で戻る。ほかのキーは列を出てふつうに
     if (sugg_focus_ >= 0) {
@@ -388,21 +446,7 @@ bool Composer::press_input(const KeyEvent& ev) {
                 update_live();
                 if (!live_sugg_.empty()) { select_suggestion(0); return true; }
             }
-            // ライブ変換: 見えている変換をそのまま確定する (打ちかけのローマ字を今流し込んだので、先に変換し直してから見る)
-            if (options.live_display || options.space_literal) update_live();
-            if (live_shown()) {
-                u16 t = live_top_;
-                log({"commit", kana_, t, ctx_, live_cands_, 0, {}, "live"});
-                confirm_live(t);
-                commit_text(frozen_surface() + t);
-                to_idle();
-                return true;
-            }
-            log({"raw", kana_, kana_, ctx_});
-            confirm_frozen();
-            confirm_learned(kana_, kana_, conv_ctx());
-            commit_text(frozen_surface() + kana_);   // 固定した所は変換した形のまま
-            to_idle();
+            commit_shown();
             return true;
         case Key::Escape:
             log({"clear", frozen_reading() + kana_ + romaji_.pending(), u16(), ctx_});
@@ -822,7 +866,31 @@ void Composer::update_live() {
         }
         if (pre_r == 0 || kana_.compare(0, pre_r, frozen_prefix_reading(pre_w)) != 0) pre_r = 0;
     }
+    // 句読点 (、。！？) の前は、句読点を打ったときに見えていた変換のまま (打つと前の方が変換し直されて、良かった変換が
+    // 変わってしまった。ブログの報告 2026-11-02)。前の結果の語のうち、句読点で終わる所か、句読点を打つ直前の全体までを使い回す
+    auto punct = [](char16_t ch) { return u16(u"、。！？!?").find(ch) != u16::npos; };
+    if (pre_r == 0 && caret_ == kana_.size() && !live_top_.empty() && live_key_ == conv_ctx() + u'\x01' + live_read_ &&
+        kana_.compare(0, live_read_.size(), live_read_) == 0) {
+        size_t r = 0;
+        u16 s;
+        std::vector<Word> w;
+        for (const Word& x : live_words_) {
+            if (x.reading.empty() || r + x.reading.size() >= kana_.size()) break;
+            r += x.reading.size();
+            s += x.surface;
+            w.push_back(x);
+            // 句読点の後 (続く字が句読点でない所)、または後ろが句読点だけになる所 (打った句読点の手前)。。。。 などの続きは分けない
+            const bool rest_punct = std::all_of(kana_.begin() + long(r), kana_.end(), punct);
+            const bool at_punct = (punct(kana_[r - 1]) && !punct(kana_[r])) || (!punct(kana_[r - 1]) && rest_punct);
+            if (at_punct && live_top_.compare(0, s.size(), s) == 0 && kana_.compare(0, r, frozen_prefix_reading(w)) == 0) {   // 見えていた 1 位と同じ語の並びのときだけ
+                pre_r = r;
+                pre_s = s;
+                pre_w = w;
+            }
+        }
+    }
     if (pre_r > 0) {
+        prime_keys(kana_.substr(pre_r));
         Conversion t = conv_->convert(conv_ctx() + pre_s, kana_.substr(pre_r), kCandidates);
         typo_spans_.clear();
         for (auto& sp : conv_->typo_spans()) typo_spans_.push_back({sp.first + int(pre_r), sp.second + int(pre_r)});
@@ -859,8 +927,19 @@ void Composer::update_live() {
     apply_learned_words(c, conv_ctx());
     live_words_ = c.words;
     if (options.live_commit && caret_ == kana_.size() && !alpha_run_ && live_commit(c)) {
-        update_live();   // 前の方を固定した: 残りを変換し直す
-        return;
+        // 前の方を固定した: 残りは今の変換の後ろをそのまま見せる。前は残りを変換し直していて、固定する打鍵だけ
+        // 変換 2 回分 (32 字で 70〜100ms) かかった。固定した文を文脈にした変換は次の打鍵で行う
+        if (!tail_after_freeze(c)) {
+            update_live();
+            return;
+        }
+        live_paths_ = c.paths;
+        live_words_ = c.words;
+        key = conv_ctx() + u'\x01' + kana_;
+        std::vector<std::pair<int, int>> spans;
+        for (auto& sp : typo_spans_)
+            if (sp.first >= int(froze_r_)) spans.push_back({sp.first - int(froze_r_), sp.second - int(froze_r_)});
+        typo_spans_.swap(spans);
     }
     live_key_ = key;
     live_read_ = kana_;
@@ -1004,6 +1083,8 @@ bool Composer::live_commit(const Conversion& c) {
     }
     prev_segs_ = std::move(segs);
     if (!freeze_end) return false;
+    froze_r_ = freeze_end;
+    froze_s_ = freeze_len;
     // 固定する語を文節にまとめて頭の文節にする (挨拶のかな書きも当てる: ここで「今日は」が固まらないように)
     std::vector<Word> fw;
     size_t rr = 0;
@@ -1034,6 +1115,46 @@ bool Composer::live_commit(const Conversion& c) {
     // 固定のあとは Backspace の打ち直し・キーの並びを使う打ち間違いの直しと英字の打ち分けが効かなくなっていた (ユーザー 2026-10-27)
     prev_segs_.clear();
     live_key_.clear();
+    return true;
+}
+
+// 固定した後の残り (kana_) の変換を、固定する前の変換 c の後ろから作る。候補は頭が固定した表記と同じものだけ、
+// 経路は固定した所をまたがないものだけ残す。作れなければ (1 位が残らない) false
+bool Composer::tail_after_freeze(Conversion& c) const {
+    if (c.cands.empty() || froze_s_ > c.cands[0].size()) return false;
+    const u16 head = c.cands[0].substr(0, froze_s_);
+    auto strip = [&](std::vector<u16>& v, std::vector<int>* kinds) {
+        std::vector<u16> out;
+        std::vector<int> ok;
+        for (size_t i = 0; i < v.size(); i++) {
+            if (v[i].size() <= froze_s_ || v[i].compare(0, froze_s_, head) != 0) continue;
+            out.push_back(v[i].substr(froze_s_));
+            if (kinds && i < kinds->size()) ok.push_back((*kinds)[i]);
+        }
+        v.swap(out);
+        if (kinds) kinds->swap(ok);
+    };
+    strip(c.cands, nullptr);
+    strip(c.sugg, &c.sugg_kinds);
+    size_t r = 0, i = 0;
+    while (i < c.words.size() && r < froze_r_) r += c.words[i++].reading.size();
+    if (c.cands.empty() || r != froze_r_) return false;
+    c.words.erase(c.words.begin(), c.words.begin() + long(i));
+    std::vector<std::vector<TreeWord>> paths;
+    for (auto& p : c.paths) {
+        std::vector<TreeWord> q;
+        bool cross = false;
+        for (TreeWord w : p) {
+            if (w.re <= int(froze_r_)) continue;
+            if (w.rs < int(froze_r_)) { cross = true; break; }
+            w.rs -= int(froze_r_);
+            w.re -= int(froze_r_);
+            q.push_back(std::move(w));
+        }
+        if (!cross) paths.push_back(std::move(q));
+    }
+    c.paths.swap(paths);
+    c.tree.clear();
     return true;
 }
 

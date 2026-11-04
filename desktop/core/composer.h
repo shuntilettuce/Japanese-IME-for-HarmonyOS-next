@@ -97,6 +97,7 @@ struct ComposerOptions {
     // 変換は途切れない (git push・今日は いい天気)。変換はライブ変換で見せ、文節に分ける変換は変換キーか Shift+空白。
     // 空白の幅は前後の字で決める (前後どちらかが半角の英数字なら半角、両側とも全角なら全角。settle_spaces)
     bool space_literal = false;
+    bool punct_commit = false;  // 句読点で確定: 読みの終わりに 、。！？ を打ったら、句読点を添えて見えている形で確定する
     bool caps_alpha = true;     // 大文字で打ち始めたら、そこから英字のまま (オフなら大文字の字だけ英字で、小文字はローマ字に戻る)
     int punct = 0;                 // 句読点: 0 = 、。 1 = ，． 2 = 、． 3 = ，。
     bool digits_fullwidth = false; // 数字を全角で入れる
@@ -227,6 +228,10 @@ private:
     void log(LogEvent e);
     void update_live();
     bool live_commit(const Conversion& c);
+    void commit_shown();
+    void commit_at_punct();
+    size_t froze_r_ = 0, froze_s_ = 0;   // 直前の live_commit で固定した読みの長さ・1 位の表記の長さ
+    bool tail_after_freeze(Conversion& c) const;   // 固定した後の残りを、固定前の変換の後ろから作る (変換し直さない)
     u16 frozen_reading() const;
     u16 frozen_surface() const;
     u16 conv_ctx() const;

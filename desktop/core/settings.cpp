@@ -33,6 +33,7 @@ bool load_settings(const fs::path& p, Settings& s) {
     boolean("live_wait", s.live_wait);
     boolean("cand_tree", s.cand_tree);
     boolean("space_literal", s.space_literal);
+    boolean("punct_commit", s.punct_commit);
     boolean("latin_auto", s.latin_auto);
     boolean("typo_fix", s.typo_fix);
     boolean("learn_log", s.learn_log);
@@ -103,6 +104,7 @@ bool save_settings(const fs::path& p, const Settings& s) {
     o += std::string("  \"live_wait\": ") + b(s.live_wait) + ",\n";
     o += std::string("  \"cand_tree\": ") + b(s.cand_tree) + ",\n";
     o += std::string("  \"space_literal\": ") + b(s.space_literal) + ",\n";
+    o += std::string("  \"punct_commit\": ") + b(s.punct_commit) + ",\n";
     o += std::string("  \"latin_auto\": ") + b(s.latin_auto) + ",\n";
     o += std::string("  \"typo_fix\": ") + b(s.typo_fix) + ",\n";
     o += std::string("  \"learn_log\": ") + b(s.learn_log) + ",\n";

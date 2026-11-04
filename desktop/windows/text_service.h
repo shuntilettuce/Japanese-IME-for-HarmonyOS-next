@@ -5,6 +5,7 @@
 #include <msctf.h>
 #include <wrl/client.h>
 
+#include <filesystem>
 #include <functional>
 #include <memory>
 
@@ -68,8 +69,11 @@ public:
     void set_open(bool open);
     static std::wstring app_name();
     bool app_open_state(bool def);
-    void remember_app_open(bool open);
+    void remember_app_open(bool open, bool keep_newer = false);
     bool no_shortcuts_ = false;   // このソフトではショートカットを使わない (app_open.tsv の印。Java のソフトは最初から)
+    int saved_open_ = -1;         // app_open.tsv に書いてある (読んだ) このソフトのオン・オフ。-1 = まだ
+    std::filesystem::file_time_type app_open_seen_{};   // 最後に読み書きしたときの app_open.tsv の更新時刻
+    void sync_app_open();
     u16 reconvert_reading(ITfContext* ctx, bool romaji = false, u16* selected = nullptr);
     std::filesystem::file_time_type romaji_stamp_{};   // romaji.tsv を読んだときの更新時刻
     // 候補の窓をマウスで選んだ

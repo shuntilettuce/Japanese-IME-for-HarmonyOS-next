@@ -29,6 +29,7 @@ FCITX_CONFIGURATION(
     fcitx::Option<bool> digitsFullwidth{this, "DigitsFullwidth", "数字を全角にする", false};
     fcitx::Option<int, fcitx::IntConstrain> punct{this, "Punct", "句読点 (0 = 、。 1 = ，． 2 = 、． 3 = ，。)", 0,
                                                   fcitx::IntConstrain(0, 3)};
+    fcitx::Option<bool> punctCommit{this, "PunctCommit", "句読点 (、。！？) を打ったら確定する", false};
     fcitx::Option<int, fcitx::IntConstrain> model{this, "Model",
                                                   "変換モデル (0 = 軽量 XS5: メモリの少ない PC 向け、1 = 標準 S8: より高精度)", 1,
                                                   fcitx::IntConstrain(0, 2)};);

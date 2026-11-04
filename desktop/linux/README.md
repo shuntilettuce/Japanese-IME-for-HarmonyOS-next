@@ -99,6 +99,6 @@ dbus-run-session -- python3 desktop/linux/tests/dbus_test.py
 
 ## ライセンス
 
-アプリのコードは MIT、AI のモデル (shuntelligence) は CC BY 4.0、辞書 (shuntorge) は mozc (BSD-3-Clause) などを含みます。入れたあとは `/usr/share/doc/fcitx5-shunti/copyright` にあります。
+アプリのコードは MIT、AI のモデル (shuntelligence) は CC BY 4.0、辞書 (shuntorge) は Wikipedia 日本語版と JMdict 由来の語を含むためファイル全体が CC BY-SA 4.0 です (mozc (BSD-3-Clause) なども含みます)。入れたあとは `/usr/share/doc/fcitx5-shunti/copyright` にあります。
 
 不具合や要望は https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/issues へ。

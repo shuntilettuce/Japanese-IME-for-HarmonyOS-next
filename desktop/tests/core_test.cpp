@@ -635,6 +635,19 @@ int main(int argc, char** argv) {
     u16 shown = c.view().text;
     keys(c, "{enter}");
     expect("live display enter commits what is shown", c.take_commit(), shown);
+    {   // 句読点を打っても、その前の見えていた変換は変わらない (後ろを打ち続けても)
+        int changed = 0;
+        for (const char* s : {"kishaninoru", "sikounohansyou", "syuusyokunoki", "kyouhaameda", "kanojohakaetta"}) {
+            keys(c, s);
+            const u16 before = c.view().text;
+            keys(c, ",soreha.");
+            const u16 after = c.view().text;
+            if (after.compare(0, before.size(), before) != 0) { printf("     punct changed: [%s] -> [%s]\n", u8(before).c_str(), u8(after).c_str()); changed++; }
+            keys(c, "{esc}{esc}{esc}");
+            c.take_commit();
+        }
+        if (changed) { printf("FAIL punct changed the live text %d\n", changed); failures++; }
+    }
     keys(c, "yorosikuone{down}{enter}");   // 決まり文句は読みが打った字と違うので、打った読みでは覚えない
     expect("phrase committed", c.take_commit(), u"よろしくお願いします");
     if (!learning.counts(u"よろしくおね").empty()) { printf("FAIL phrase learned under the typed reading\n"); failures++; }
@@ -754,6 +767,17 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < cs.size() && i < 4; i++) printf(" [%s]", u8(cs[i]).c_str());
         printf("\n");
         if (!ell) { printf("FAIL no ellipsis candidate\n"); failures++; }
+        keys(c, "{esc}{esc}");
+        c.take_commit();
+    }
+    for (auto [k, want] : {std::pair{",", u"，"}, std::pair{".", u"．"}, std::pair{"/", u"／"}, std::pair{"\\", u"\\"}, std::pair{"!", u"!"},
+                                   std::pair{"~", u"〜"}, std::pair{"*", u"×"},std::pair{"(", u"「"}}) {   // 、。・ は仲間の記号も候補に
+        keys(c, std::string(k) + "{sp}");
+        const auto& cs = c.view().cands;
+        printf("     mark cands %s:", k);
+        for (size_t i = 0; i < cs.size() && i < 4; i++) printf(" [%s]", u8(cs[i]).c_str());
+        printf("\n");
+        if (std::find(cs.begin(), cs.end(), u16(want)) == cs.end()) { printf("FAIL no mark candidate %s\n", k); failures++; }
         keys(c, "{esc}{esc}");
         c.take_commit();
     }
@@ -1107,6 +1131,45 @@ int main(int argc, char** argv) {
             if (last) printf("ok   space literal: left arrow enters phrases (%d)\n", int(v.spans.size()));
             else { printf("FAIL space literal: left arrow did not enter phrases\n"); failures++; }
         }
+        keys(s, "{esc}{esc}");
+    }
+
+    // ---- 句読点で確定 (punct_commit): 、。 を打ったら句読点を添えて確定する。変換中の句読点も、選んだ候補と句読点で確定
+    {
+        Composer s(&conv, &learning, &dict);
+        s.options.live_commit = false;
+        s.options.private_mode = true;
+        s.options.punct_commit = true;
+        s.options.live_display = true;
+        keys(s, "kyouhaiitenki.");
+        expect("punct commit live", s.take_commit(), u"今日はいい天気。");
+        if (s.composing()) { printf("FAIL punct commit: still composing\n"); failures++; }
+        s.options.live_display = false;
+        keys(s, "kyouhaiitenki,");   // ライブ変換がオフでも変換して確定する (空白 → Enter と同じ)
+        expect("punct commit converts", s.take_commit(), u"今日はいい天気、");
+        if (s.composing()) { printf("FAIL punct commit converts: still composing\n"); failures++; }
+        keys(s, "kyouha{sp}");
+        {
+            const u16 shown = s.view().text;
+            keys(s, ",");
+            expect("punct commit after convert", s.take_commit(), shown + u"、");
+        }
+        keys(s, "honntou?");   // 感嘆符・疑問符でも切る
+        {
+            u16 got = s.take_commit();
+            if (!got.empty() && got.back() == u'？' && !s.composing()) printf("ok   punct commit question: %s\n", u8(got).c_str());
+            else { printf("FAIL punct commit question: got [%s]\n", u8(got).c_str()); failures++; }
+        }
+        keys(s, "3.5{enter}");   // 数字の後の . は句読点にならないので確定しない
+        {
+            u16 got = s.take_commit();
+            if (got.find(u'5') != u16::npos) printf("ok   punct commit: decimal kept (%s)\n", u8(got).c_str());
+            else { printf("FAIL punct commit decimal: got [%s]\n", u8(got).c_str()); failures++; }
+        }
+        s.options.punct_commit = false;
+        keys(s, "kyouha,");
+        if (s.composing()) printf("ok   punct commit off: still composing\n");
+        else { printf("FAIL punct commit off: committed\n"); failures++; }
         keys(s, "{esc}{esc}");
     }
 

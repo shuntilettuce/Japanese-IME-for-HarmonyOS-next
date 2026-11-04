@@ -153,6 +153,7 @@ AI変換（設定 → 変換エンジン → AI変換）のモデル **shuntelli
 | GitHub（codeparrot/github-code-clean） | MIT・Apache-2.0・BSD・ISC・Unlicense・CC0 のファイルのみ |
 | 青空文庫（globis-university/aozorabunko-clean） | 著作権の切れた作品のうち新字新仮名のもの |
 | Wikipedia日本語版 | CC BY-SA 4.0。本文の段落のみ |
+| FineWeb-2 日本語（HuggingFaceFW/fineweb-2、jpn_Jpan） | ODC-By 1.0（元の Common Crawl の利用規約にも従う）。本文のみ |
 
 - 読み付けは SudachiPy + SudachiDict-core（Apache License 2.0）。
 - 書き分けの強化の参考: 文化庁「「異字同訓」の漢字の使い分け例（報告）」（平成26年、文化審議会国語分科会。
@@ -161,7 +162,9 @@ AI変換（設定 → 変換エンジン → AI変換）のモデル **shuntelli
   Wikidata（CC0、生き物の和名と分類）。
 - 評価だけに使ったもの（学習には入れていない）: AJIMEE-Bench（CC BY-SA 3.0）、開発者本人の入力ログ（集計値のみ）。
 
-### 辞書 shuntorge — 独自部分は MIT
+### 辞書 shuntorge — 辞書ファイル全体は CC BY-SA 4.0（独自部分は単独では MIT）
+
+下の表の Wikipedia日本語版と JMdict/EDICT の部分が CC BY-SA 4.0 のため、`kkc_lex.bin` 全体を CC BY-SA 4.0 で配布している。
 
 | 部分 | 出どころ | ライセンス |
 |---|---|---|
@@ -173,6 +176,8 @@ AI変換（設定 → 変換エンジン → AI変換）のモデル **shuntelli
 | 文章から拾った名詞 | 上記の教材に30回以上出て mozc に無い名詞（読みは SudachiDict） | MIT / SudachiDict（Apache 2.0） |
 | 英字の語の読み（Win・GitHub・Excel など） | mecab-ipadic-NEologd（`mecab-user-dict-seed.20200910`。はてなキーワード一覧ファイルほかの表記と読み）。FineWeb-2 に30回以上出る英字の名詞のみ。英字を先に出すかは教材の回数で決定 | Apache License 2.0 |
 | 英単語の一覧（each・other・hello など、ローマ字で英字のまま打ったときの英字の語） | SCOWL（en-wl/wordlist rel-2026.02.25、Copyright 2000-2026 Kevin Atkinson）の大きさ 35 の語 | MIT に近い許諾（著作権表示と許諾の表示を残す） |
+| 人名・組織・作品などの固有名詞と読み | Wikipedia日本語版（2026-10-01 のダンプ、記事の冒頭の「題名（よみ）」）。表示: "Wikipedia contributors, Japanese Wikipedia" | CC BY-SA 4.0 |
+| よくある誤読（げっきょく → 月極 など）・読みの揺れ（ばえる → 映える など） | JMdict/EDICT（電子化辞書研究開発グループ、https://www.edrdg.org/wiki/index.php/JMdict-EDICT_Dictionary_Project）。誤読は教材の書き込みからも | CC BY-SA 4.0 |
 
 差別語は辞書と候補から除いている。
 

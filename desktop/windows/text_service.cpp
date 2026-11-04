@@ -265,18 +265,37 @@ static std::string own_window_title() {
 // Java で動くソフト (Minecraft など) は、初めて使うときからショートカットを使わない (ゲームのキーとぶつかるので)
 static bool default_no_shortcut(const std::wstring& name) { return name == L"javaw.exe" || name == L"java.exe"; }
 
+static std::filesystem::file_time_type app_open_time() {
+    std::error_code ec;
+    auto t = std::filesystem::last_write_time(user_dir() / L"app_open.tsv", ec);
+    return ec ? std::filesystem::file_time_type{} : t;
+}
+
 bool TextService::app_open_state(bool def) {
     std::string t;
+    app_open_seen_ = app_open_time();
     read_file(user_dir() / L"app_open.tsv", t);
     const std::string me = to_utf8(u16(reinterpret_cast<const char16_t*>(app_name().c_str())));
     const AppRow r = read_app_row(t, me);
     // 印の欄の無い古い行 (0.7.0 まで) のソフトも、Java のソフトなら使わないにする (前から使っていた Minecraft も直るように)
     no_shortcuts_ = r.has_flags ? r.flags.find("noshortcut") != std::string::npos : default_no_shortcut(app_name());
+    saved_open_ = r.found ? int(r.open) : -1;
     if (no_shortcuts_) return false;   // 常にオフ: いつもオフで始める
     return r.found ? r.open : def;
 }
 
-void TextService::remember_app_open(bool open) {
+// 同じソフトの別の窓・別の起動 (別のスレッド) で切り替えた分を、この窓に入ったときに合わせる。
+// 前は起動したときに読むだけで、切り替えはソフトを閉じたときにしか書かなかったので、強制終了・電源を切ったとき・
+// 窓ごとにスレッドの違うソフトでは覚えなかった (ブログの報告 2026-11-02「ソフトごとのオンオフが効かない時がある」)
+void TextService::sync_app_open() {
+    if (no_shortcuts_ || app_open_time() == app_open_seen_) return;   // 常にオフのソフトは起動したときだけ (その場でオンにした分を戻さない)
+    Settings st;
+    load_settings(user_dir() / L"settings.json", st);
+    const bool want = app_open_state(st.app_default_open);
+    if (want != is_open()) set_open(want);
+}
+
+void TextService::remember_app_open(bool open, bool keep_newer) {
     // 同時に閉じるアプリが互いの行を消さないように、読むところから書くまで 1 本ずつ
     HANDLE lock = CreateMutexW(nullptr, FALSE, L"Local\\shunti-ime-app-open");
     if (lock) WaitForSingleObject(lock, 1000);
@@ -284,6 +303,19 @@ void TextService::remember_app_open(bool open) {
     read_file(user_dir() / L"app_open.tsv", t);
     const std::string me = to_utf8(u16(reinterpret_cast<const char16_t*>(app_name().c_str())));
     const AppRow old = read_app_row(t, me);
+    // 窓の名前はページの題名やファイル名になるので、一覧で見分けが要るソフトの分だけ
+    std::string title = default_no_shortcut(app_name()) ? own_window_title() : "";
+    if (title.empty() && default_no_shortcut(app_name())) title = old.title;
+    std::string flags = old.has_flags ? old.flags : (no_shortcuts_ ? "noshortcut" : "");
+    // keep_newer: 同じソフトの別の窓 (別のスレッド) が後から切り替えて書いた行を、この窓の古い状態で上書きしない。
+    // 行が同じなら書かない (切り替えのキーと OnChange の両方から呼ばれる)
+    const bool newer = keep_newer && old.found && int(old.open) != saved_open_;
+    const bool same = old.found && old.has_flags && old.open == open && old.title == title && old.flags == flags;
+    if (newer || same) {
+        if (same) saved_open_ = int(open);
+        if (lock) { ReleaseMutex(lock); CloseHandle(lock); }
+        return;
+    }
     size_t i = 0;
     while (i < t.size()) {
         size_t j = t.find('\n', i);
@@ -293,17 +325,15 @@ void TextService::remember_app_open(bool open) {
         if (line.empty() || lower_ascii(line.substr(0, line.find('\t'))) == me) continue;   // 大文字小文字の違う古い行も置き換える
         out += line + "\n";
     }
-    // 窓の名前はページの題名やファイル名になるので、一覧で見分けが要るソフトの分だけ
-    std::string title = default_no_shortcut(app_name()) ? own_window_title() : "";
-    if (title.empty() && default_no_shortcut(app_name())) title = old.title;
-    std::string flags = old.has_flags ? old.flags : (no_shortcuts_ ? "noshortcut" : "");
     out += me + "\t" + (open ? "1" : "0") + "\t" + title + "\t" + flags + "\n";
     write_file_atomic(user_dir() / L"app_open.tsv", out);
+    saved_open_ = int(open);
+    app_open_seen_ = app_open_time();
     if (lock) { ReleaseMutex(lock); CloseHandle(lock); }
 }
 
 STDMETHODIMP TextService::Deactivate() {
-    if (tm_) remember_app_open(is_open());   // ソフトの終了・IME の切り替え: このソフトでの状態を覚える (次に起動したとき戻す)
+    if (tm_) remember_app_open(is_open(), true);   // ソフトの終了・IME の切り替え: このソフトでの状態を覚える (次に起動したとき戻す)
     finish_composition(TF_ES_SYNC);   // 後回しにすると下の composer_.reset() の後に動いて確定できない
     live_stop();
     layout_stop();
@@ -429,6 +459,8 @@ STDMETHODIMP TextService::OnChange(REFGUID guid) {
     if (IsEqualGUID(guid, GUID_COMPARTMENT_KEYBOARD_OPENCLOSE)) {
         if (!is_open()) finish_composition();
         update_mode_ui();
+        // 切り替えたらすぐ覚える (閉じたときだけだと、強制終了・電源を切ったときに忘れた)。常にオフのソフトは起動時いつもオフなので書かない
+        if (!no_shortcuts_ && saved_open_ != int(is_open())) remember_app_open(is_open());
     } else if (IsEqualGUID(guid, GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION)) {
         // タスクバーの入力モードのメニューで「半角英数」などを選んだ: 日本語入力を切る
         bool ok = false;
@@ -463,6 +495,7 @@ void TextService::apply_settings() {
         composer_->options.live_wait = s.live_wait;
         composer_->options.cand_tree = s.cand_tree;
         composer_->options.space_literal = s.space_literal;
+        composer_->options.punct_commit = s.punct_commit;
         composer_->options.learn_log = s.learn_log;
         composer_->options.caps_alpha = s.caps_alpha;
         composer_->options.space_fullwidth = s.space_fullwidth;
@@ -1352,6 +1385,7 @@ STDMETHODIMP TextService::OnSetFocus(ITfDocumentMgr*, ITfDocumentMgr*) {
     layout_.reset();          // 押したまま離れたキーの通知はもう来ない
     layout_down_.clear();
     if (composer_) composer_->reset_history();
+    sync_app_open();
     return S_OK;
 }
 

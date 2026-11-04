@@ -71,6 +71,7 @@ struct Settings {
     bool typo_fix = true;            // ローマ字の打ち間違いを直す (オフなら打ったとおり。ブログの要望 2026-10-26)
     bool latin_auto = true;          // 英字の打ち分け (ローマ字で打った英単語を文脈で英字にする)。暴発が嫌ならオフ
     bool space_literal = false;      // 空白キーで変換しない (空白も読みに入れて変換を続ける。ComposerOptions::space_literal)
+    bool punct_commit = false;       // 句読点 (、。！？) を打ったら確定する (ComposerOptions::punct_commit)
     bool cand_tree = false;          // 新デザインの候補バー (候補の木: 文節の札・強さの色・別の区切り)。既定はオフ
     bool ctrl_space = false;         // Ctrl+Space でも日本語入力のオン・オフ (shortcuts に移した。古い設定の読み替え用)
     std::string model = "standard";  // 変換モデル: light (XS3・メモリの少ない PC 向け)・standard (S7)

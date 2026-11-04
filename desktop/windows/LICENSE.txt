@@ -8,12 +8,13 @@ shuntelligence (shuntilettuce)、CC BY 4.0
 https://creativecommons.org/licenses/by/4.0/
 
 ■ shuntorge (AI 変換の辞書)
-Wikipedia 由来の語を含むため、辞書ファイル (kkc_lex.bin) 全体は CC BY-SA 4.0 です。
+Wikipedia と JMdict 由来の語を含むため、辞書ファイル (kkc_lex.bin) 全体は CC BY-SA 4.0 です。
 独自の部分は MIT。以下を含みます。
 ・mozc (Google、BSD-3-Clause。IPAdic 由来の辞書データと沖縄辞書を含む)
 ・SudachiDict (Works Applications、Apache License 2.0。読みの一部)
 ・Wikipedia 日本語版 (2026-10-01 のダンプ、CC BY-SA 4.0。人名・組織・作品などの固有名詞と読み)
   表示: "Wikipedia contributors, Japanese Wikipedia" https://creativecommons.org/licenses/by-sa/4.0/
+・JMdict/EDICT (電子化辞書研究開発グループ、CC BY-SA 4.0。よくある誤読と読みの揺れ) https://www.edrdg.org/wiki/index.php/JMdict-EDICT_Dictionary_Project
 ・日本郵便 郵便番号データ (郵便番号 → 住所、地名の照合。著作権を主張しない・自由に配布してよいとされています)
 ・Unicode CLDR の絵文字の日本語名と emoji-test.txt (Unicode License v3、Copyright © 1991-2026 Unicode, Inc.)
 ・mecab-ipadic-NEologd (Toshinori Sato、Apache License 2.0。英字の語 (Win・GitHub など) の読み。NEologd ははてなキーワード一覧ファイル (株式会社はてな) ほかの表記と読みを使用)

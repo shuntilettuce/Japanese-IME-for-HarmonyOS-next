@@ -323,6 +323,7 @@ void ShuntiEngine::applyConfig(Composer& c) const {
     c.options.space_fullwidth = *config_.spaceFullwidth;
     c.options.digits_fullwidth = *config_.digitsFullwidth;
     c.options.punct = *config_.punct;
+    c.options.punct_commit = *config_.punctCommit;
 }
 
 void ShuntiEngine::setConfig(const fcitx::RawConfig& raw) {

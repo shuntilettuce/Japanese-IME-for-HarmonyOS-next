@@ -48,6 +48,13 @@ shuntorge also contains:
   "Wikipedia contributors, Japanese Wikipedia". Because of this, the
   dictionary file `kkc_lex.bin` as a whole is distributed under CC BY-SA 4.0
   as well (the same share-alike terms already apply through JMdict).
+  This project's own parts of shuntorge are also available under MIT on
+  their own.
+- **Common misreadings and reading variants from JMdict/EDICT** (e.g.
+  げっきょく → 月極 from JMdict's "irregular reading" marks, and alternative
+  readings such as ばえる → 映える), under **CC BY-SA 4.0**; see the
+  "JMdict/EDICT" section below for the attribution and EDRDG policy. The
+  JMdict copy is refreshed whenever shuntorge is rebuilt.
 - **Readings of Latin-script words** (Win, GitHub, Excel …) from
   **mecab-ipadic-NEologd** (https://github.com/neologd/mecab-ipadic-neologd,
   `seed/mecab-user-dict-seed.20200910.csv.xz`), Copyright (C) 2015-2019
