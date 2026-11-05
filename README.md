@@ -1,63 +1,61 @@
-# shunti Japanese IME — 高精度AIによる日本語入力
+# shunti IME — zenz を使わない、自作 AI の日本語入力
 
-元はHarmonyOS NEXT (API 12+) 向けに唯一存在したフリック対応日本語 IME でしたが、windows,linux,Androidにも後から対応しました。
-スマホやパソコン向けIMEとして最低限の機能を備え、独自AI(shuntelligence)によるgoogle日本語入力やCopilot Keyboardを超える高精度な漢字変換が完全ローカルで動作します。個人開発のオープンソースプロジェクトです。
+Windows・Linux・Android・HarmonyOS で動く日本語 IME です。漢字変換は、モデルの設計・学習・推論エンジンまで一から作った小さな AI（**shuntelligence**）が、端末の中だけで行います。個人開発のオープンソースです。
+
+**入手**: [Windows 版](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/windows-v0.7.9) ・ [Linux 版 (.deb)](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/linux-v0.7.7) ・ [Android 版](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/android-v1.3.4) ・ HarmonyOS 版（AppGallery で「shunti Japanese IME」）
 
 > **開発者**: shuntilettuce
 > **貢献者**: [端島](https://github.com/Bakunetsuuuuu),[HiSubway](https://github.com/HiSubway)
-> **ライセンス**: [MIT](./LICENSE)（バンドル辞書データは別ライセンス、下記参照）
-
+> **ライセンス**: [MIT](./LICENSE)（辞書とモデルの重みは別ライセンス、下記参照）
 
 ---
-## shunti IME のここがすごい
+## zenz を使わない変換 AI
 
-**25MB 以下の日本語変換エンジンで、変換精度日本一！**
+AI で変換する日本語 IME の多くは、azooKey の zenz を使っています。shunti IME の AI は、zenz の重みも、zenz を先生にした学習も使っていない別系統です（作者の調べた範囲では、ほかに見当たりません）。
 
-※ AJIMEE-Bench 基準。下の表の IME と同じ手順で測った結果（2026 年 10 月時点、作者調べ）
+- 約 640 万パラメータの小さな Transformer。重みは **8.2MB**（int8）で、スマホの CPU だけで動きます
+- 辞書で読みから表記の候補の網を作り、AI がカーソルの左の文（と、固定した前の方を直すときは後ろの文）を読んで道を選びます
+- 推論エンジンは C++ で自作し、4 つの OS で同じものが動きます
 
-### 大手IMEより遥かに高い精度
+### 大手 IME より 20 ポイント以上高い
 
-同じ打鍵（ローマ字で打つ → スペースで変換 → Enter で確定）を各 IME に流し込み、確定した文を同じやり方で採点しました（前の文脈つき、2026 年 10 月時点）。
+同じ打鍵（ローマ字で打つ → スペースで変換 → Enter で確定）を各 IME に流し込み、確定した文を同じやり方で採点しました（前の文脈つき。shunti IME は同じ問題を変換エンジンに直接渡して測った）。
 
 | 1 位の正解率 | 動き方 | AJIMEE-Bench | 日常の文 | dev |
 |---|---|---|---|---|
-| **shunti IME（S7）** | **CPU だけ・端末の中（8.2MB）** | **78.6%** | **94.3%** | **86.4%** |
+| **shunti IME（S8）** | **CPU だけ・端末の中（8.2MB）** | **81.3%** | **94.3%** | **85.6%** |
 | Google 日本語入力 | | 53.8% | 81.0% | 70.9% |
 | Microsoft IME | | 54.4% | 78.1% | 71.7% |
 | Copilot Keyboard（Microsoft） | | 54.9% | 88.6% | 68.8% |
 | zenz-v3.1-xsmall（azooKey） | 端末の中 | 70.3% | 91.4% | 79.5% |
 | zenz-v3.1-small（azooKey） | 端末の中・より大きいモデル | 88.5% | 94.3% | 85.5% |
 
-難しい変換を集めた [AJIMEE-Bench](https://github.com/azooKey/AJIMEE-Bench)（CC BY-SA 3.0。ローマ字で打てない字を含む問題は除く）で、大手 3 つより 20 ポイント以上高く当たります。より重いモデルの zenz-v3.1-small には AJIMEE で及びませんが、日常の文では並びます。
+難しい変換を集めた [AJIMEE-Bench](https://github.com/azooKey/AJIMEE-Bench)（azooKey 作、CC BY-SA 3.0。ローマ字で打てない字を含む 18 問を除いた 182 問）では、より重いモデルの zenz-v3.1-small に及びませんが、日常の文では並びます。日常の文（105 文）は普通の会話で出るような文を集めた自作のベンチです。2026 年 10〜11 月、作者調べ。
 
-### 完全ローカルAI
+### 完全ローカル
 
-- 変換するのは約 640 万パラメータの小さな Transformer（shuntelligence S7）です。スマホの CPU だけでも動きます
-- 変換は端末の中で完結し、打った文字を外へ送信することはありません。Android 版はインターネットの権限そのものを持ちません
+- 変換は端末の中で完結し、打った文字を外へ送信しません。Android 版はインターネットの権限そのものを持ちません
 - モデルの重みと推論のコードは公開しています
 
 ### タイプミスは文脈を見て直す
 
 - ローマ字の打ち違い（よろしくおねぎあします → **よろしくお願いします**、ごさしゅうくだしあ → **ご査収ください**）や、フリックの隣のキー、よくある誤読（げっきょく → 月極）を直します
 - 直した形が変換候補トップに “ ” つきで出て、微妙なときは候補の中の提案として出ます。誤字のない文を勝手に直すことはほぼありません（普通の文 400 文で 0 件）
+- Windows 版は直す強さと、読む文脈の字数を設定で変えられます
 
 ### 文脈による書き分け
 
-カーソルの左の文を読んで、同じ読みの語から文に合うものを選びます。
-
 - 絵を**描く** / 字を**書く**、庭には**二羽**鶏
 - 英字の語は、ふだん書かれる形で出ます（iphone → **iPhone**、ぎっとはぶ → **GitHub**）
-- 固有名詞は Wikipedia から約 39 万語、企業名や人名地名などなど様々
+- 固有名詞は Wikipedia から約 39 万語、企業名や人名地名など
 
 ### 変換以外も気が利く
 
-- 日付（きょう → 2026/10/14 …）・郵便番号から住所・絵文字・顔文字・括弧も、候補の中に提案として並びます
+- 日付（きょう → 2026/11/06 …）・郵便番号から住所・絵文字・顔文字・括弧も、候補の中に提案として並びます
 - 「お疲れ様です」と打つと、続けて「。」「本日の進捗報告です。」のように、よく打つ文の流れを覚えて出します
 - ＠の後ろには gmail.com などのドメインを出します
 
-### どこでも同じ変換
-
-HarmonyOS・Android・Windows・Linux の 4 つで、同じ AI と同じ辞書が動きます。
+元は HarmonyOS NEXT 向けに唯一存在したフリック対応の日本語 IME で、Windows・Linux・Android には後から対応しました。
 
 ---
 # インストール方法
@@ -94,16 +92,16 @@ Android 向けのシンプルな日本語キーボードです（Android 8.0 以
 
 ## Windows 版（shunti IME）
 
-大手の IME を超える変換精度を、約 640 万パラメータの小さな AI（shuntelligence S7）で提供します。Windows 10 / 11（64 ビット版）で動く日本語入力です。[GitHub の Releases](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases) から zip を入手し、展開して `install.bat` を実行します（署名していないため「Windows によって PC が保護されました」と出る場合がありますが「詳細情報」→「実行」）。
+大手の IME を超える変換精度を、約 640 万パラメータの小さな AI（shuntelligence S8）で提供します。Windows 10 / 11（64 ビット版）で動く日本語入力です。[GitHub の Releases](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases) から zip を入手し、展開して `install.bat` を実行します（署名していないため「Windows によって PC が保護されました」と出る場合がありますが「詳細情報」→「実行」）。
 
 | 1 位の正解率 | AJIMEE-Bench（182 問） | 日常の文（105 文） |
 |---|---|---|
 | Google 日本語入力 | 53.8% | 81.0% |
 | Microsoft IME | 54.4% | 78.1% |
-| **shunti IME（S7）** | **78.6%** | **94.3%** |
+| **shunti IME（S8）** | **81.3%** | **94.3%** |
 (日常の文=オリジナルベンチマーク。普通の会話で出るような文を大量に用意しています)
 
-どの IME にも同じ打鍵（ローマ字で打つ → スペースで変換 → Enter で確定）を TSF 越しに流し込み、確定した文を採点した（前の文脈つき、2026 年 10 月、Windows 11。shunti IME は同じ問題を変換エンジンに直接渡して測った）。AJIMEE-Bench（azooKey、CC BY-SA 3.0）は、ローマ字で打てない字を含む 18 問を除いた 182 問。全角・半角の違いは問わない。
+どの IME にも同じ打鍵（ローマ字で打つ → スペースで変換 → Enter で確定）を TSF 越しに流し込み、確定した文を採点した（前の文脈つき、2026 年 10 月、Windows 11。S8 は 11 月に測り直した。shunti IME は同じ問題を変換エンジンに直接渡して測った）。AJIMEE-Bench（azooKey、CC BY-SA 3.0）は、ローマ字で打てない字を含む 18 問を除いた 182 問。全角・半角の違いは問わない。
 
 - 変換はパソコンの中だけで行い、**通信する機能を持ちません**。
 - 変換位置調整（Shift + ← → で伸び縮み）、F6〜F10、無変換キーでカタカナ・半角カタカナ
@@ -114,10 +112,10 @@ Android 向けのシンプルな日本語キーボードです（Android 8.0 以
 
 ## Linux 版（shunti IME・試用版）
 
-Windows 版と同じ変換（shuntelligence S7・同じ入力の決まり）を、Linux の入力の仕組み **Fcitx5** の上で動かします。Ubuntu 24.04 以降・Debian 13 以降（64 ビットの Intel・AMD）向けの `.deb` を [GitHub の Releases](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases) に置いています。
+Windows 版と同じ変換（shuntelligence S8・同じ入力の決まり）を、Linux の入力の仕組み **Fcitx5** の上で動かします。Ubuntu 24.04 以降・Debian 13 以降（64 ビットの Intel・AMD）向けの `.deb` を [GitHub の Releases](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases) に置いています。
 
 ```bash
-sudo apt install ./fcitx5-shunti_0.1.0_amd64.deb
+sudo apt install ./fcitx5-shunti_0.7.7_amd64.deb
 ```
 
 入れたあと Fcitx5 に切り替えて「shunti IME」を足す。手順・設定・ユーザー辞書は [desktop/linux/README.md](./desktop/linux/README.md) にあります。通信する機能を持たないのは Windows 版と同様。
@@ -160,113 +158,13 @@ sudo apt install ./fcitx5-shunti_0.1.0_amd64.deb
 
 ---
 
-**AI変換について**: モデルの重みと推論のコードは本リポジトリで公開していますが、学習のコードと教材は公開していません。長い文は、変換が落ち着いた前の方から自動で確定し、変換するのは末尾の十数字だけにしています（数十字を同時に変換処理に入れると重いため）。辞書とモデル（計約120MB）は GitHub Releases に置いてあり、ビルド前に `python tools/fetch_ai_assets.py` で取得します。辞書の改善は実際の入力ログ（後述）を元に継続的に行っています。
+**AI変換について**: モデルの重みと推論のコードは本リポジトリで公開していますが、学習のコードと教材は公開していません。長い文は、変換が落ち着いた前の方から自動で確定し、変換するのは末尾の十数字だけにしています（数十字を同時に変換処理に入れると重いため）。辞書とモデル（計約120MB）は GitHub Releases に置いてあり、ビルド前に `python tools/fetch_ai_assets.py` で取得します。辞書の改善は作者の実際の入力ログ（開発版のみで集めるもの。[docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md)）を元に継続的に行っています。
 
 ---
 
 ## 開発
 
-### 必要環境
-
-- [DevEco Studio](https://developer.huawei.com/consumer/cn/deveco-studio/)（HarmonyOS NEXT SDK, API 12+）
-- Node.js（辞書生成・評価スクリプト用）
-- 実機または HarmonyOS エミュレータ、`hdc`（HarmonyOS Device Connector、SDK同梱）
-
-### ビルド
-
-DevEco Studio でプロジェクトを開くか、CLI から:
-
-```bash
-# AI変換の辞書とモデルを取得 (初回と更新時。無くてもビルドはでき、AI変換が使えないだけ)
-python tools/fetch_ai_assets.py
-
-# デバッグビルド (HAP)
-hvigorw assembleHap --mode module -p product=default -p buildMode=debug
-
-# 実機へインストール (デバッグ署名済みHAP)
-hdc install <出力されたhapファイル>
-```
-
-### Android 版
-
-`android/` にあります。Android SDK と NDK 27.2.12479018 が要ります（CMake は不要。変換エンジン `entry/src/main/cpp/engine.cpp` を NDK の clang で直接ビルドする）。
-
-```bash
-# 辞書とモデル (HarmonyOS 版と共有。entry/src/main/resources/rawfile/kkc_*.bin に置かれ、ビルド時に APK に同梱される)
-python tools/fetch_ai_assets.py
-
-# デバッグビルド
-cd android && ./gradlew assembleDebug
-
-# リリースビルド (android/keystore.properties に署名の鍵を書いておく。git には入れない)
-cd android && ./gradlew assembleRelease
-```
-
-### Windows 版
-
-`desktop/` にあります。`desktop/core` は PC 版の共通部分（ローマ字・AI 変換・文節・学習・ユーザー辞書・入力の状態）、`desktop/windows` は TSF のテキストサービス（x64 / x86 の DLL）と設定画面です。Visual Studio 2022 Build Tools（C++）が要ります。
-
-```bat
-rem 辞書とモデル (entry/src/main/resources/rawfile/kkc_*.bin)
-python tools/fetch_ai_assets.py
-
-rem 試験 (打鍵を流し込んで入力の決まりを確かめる)
-desktop\tests\build_test.bat
-
-rem DLL・設定画面をビルドして desktop\build\dist に集める。install.ps1 でこのパソコンに入れる (管理者の許可が要る)
-desktop\windows\build.bat
-powershell -ExecutionPolicy Bypass -File desktop\build\dist\install.ps1
-
-rem 配る zip を作る
-powershell -ExecutionPolicy Bypass -File desktop\windows\package.ps1 -Version 0.1.1
-```
-
-アイコンは `desktop/windows/art/` の Zori-chan の絵から `python desktop/tools/gen_icons.py` で作る。
-
-### Linux 版
-
-`desktop/linux` にあります。Fcitx5 の入力メソッドのアドオンで、変換は Windows 版と同じ `desktop/core` を使います。ビルドと試験の手順は [desktop/linux/README.md](./desktop/linux/README.md) の「ソースからビルドする」へ。
-
-HarmonyOS 版のソースを正本として、Android 版に取り込むもの:
-
-- `node tools/gen_android_tables.mjs` — キーの配置・QWERTY・ローマ字・記号・絵文字・顔文字・決まり文句・色・差別語の除外・ライセンス表記を `android/app/src/main/assets/` に書き出す（HarmonyOS 版の表を直したら流し直す）
-- `node tools/gen_android_golden.mjs` — NumberFormatter / DateTimePredictor / JapaneseConverter を Node でそのまま動かした正解を作る。Kotlin 版は `./gradlew testDebugUnitTest`（GoldenTest）で一致を確かめる
-
-### プロジェクト構成（抜粋）
-
-```
-entry/src/main/ets/
-  ime/          変換エンジン本体・IME拡張のロジック
-    KanaKanjiConverter.ets   かな漢字変換のコア（辞書lookup・学習・3エンジンのブレンド）
-    KeyboardController.ets   InputMethodExtensionAbility側の入力制御・状態管理
-    JapaneseConverter.ets    ローマ字/フリック入力の変換・文字種処理
-    ConjugationEngine.ets    活用形の自動展開（ユーザー辞書登録時など）
-    InputLog.ets             デバッグ専用の入力ログ収集（下記参照）
-  components/    キーボードUI（フリック/QWERTY/記号/絵文字/設定画面 等）
-  pages/         本体アプリ側の画面（設定・ユーザー辞書・プライバシーポリシー）
-tools/
-  mozc_data/     mozc/JMdict/SudachiDictから統計データエンジンの辞書を構築するスクリプト群
-  ime-eval/      変換精度の回帰テスト（corpus_test*.js）
-  blind-eval/    Google日本語入力との変換結果比較用コーパス・スコアラー
-  check_debug_log.js   InputLog呼び出し箇所の棚卸し（リリース前チェック）
-```
-
-IME本体は `InputMethodExtensionAbility` として別プロセス（`:inputMethod`）で動作するため、本体アプリとはサンドボックスが分離されています（ユーザー辞書やログの読み書きが両側で別経路になっているのはこのため）。
-
-### 変換精度の回帰テスト
-
-辞書やロジックを変更した際は、既存コーパスでのスコアを必ず確認してください。
-
-```bash
-bun tools/mozc_data/compare_engines.js corpus_test9.js
-bun tools/mozc_data/compare_engines.js corpus_test10.js
-bun tools/mozc_data/compare_engines.js corpus_test11.js
-```
-
-
-### コントリビュート
-
-Issue・Pull Request歓迎です。辞書データや変換ロジックに手を入れる変更は、上記の回帰テストで既存スコアがなるべく下がっていないことを確認のうえ送ってください。
+ビルド・試験・プロジェクト構成・開発版の入力ログ収集は [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) にまとめています。Issue・Pull Request 歓迎です。
 
 ---
 
@@ -279,31 +177,6 @@ Issue・Pull Request歓迎です。辞書データや変換ロジックに手を
 Harmony版本体アプリ（ユーザー辞書画面）のフッターからも同じ内容を確認できます。
 
 本アプリは入力内容・変換履歴を外部サーバーへ一切送信しません。すべての処理はデバイス内で完結します。
-
----
-
-## 開発版のみの機能: 入力ログ収集
-
-変換精度を実際の入力から測るため、**開発ビルドにのみ**入力ログ収集を入れてあります。
-配布版（AppGalleryなどのリリースビルド）には含めません。
-
-- 記録: 読み・確定した表記・選んだ候補の番号・文節の区切りと選択・変換範囲の変更・候補削除・未知語学習・削除した文字
-- 記録しない: パスワード等の secure field、クリップボードの内容
-- 保存先: 端末内アプリサンドボックスの 1 ファイルのみ。送信は一切しない
-- 閲覧・書き出し・消去: 本体アプリのフッター「入力ログ」から
-
-収集コードは `entry/src/main/ets/ime/InputLog.ets` に閉じており、外部の呼び出し箇所は
-すべて行末に `// [DEBUG-LOG]` が付いています。リリース前の手順:
-
-```
-node tools/check_debug_log.js   # 収集地点を全部列挙（未マークの参照があれば exit 1）
-```
-
-出力に並んだファイルを削除し、`// [DEBUG-LOG]` の付いた行を消したあと、
-もう一度実行して「収集コードはありません（リリース可）」になることを確認します。
-
-> 収集したログは private リポジトリを含め、git に入れないでください。
-> clone・バックアップ・コラボレータに渡り、履歴からは消せません。
 
 ---
 
