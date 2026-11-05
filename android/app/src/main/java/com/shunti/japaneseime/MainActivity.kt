@@ -219,14 +219,26 @@ class MainActivity : Activity() {
 
         section("学習")
         col.addView(text("選んだ候補を覚えて、次から前に出します。覚えた中身はこの端末の中だけに保存します。", 14f, secondary = true))
+        col.addView(switch("AI学習 (確定した文から、この端末の中で変換を育てます)", settings.aiLearn) { settings.aiLearn = it }, lp(top = 4))
+        col.addView(text("最初はオフです。次にキーボードを開いたときから変わります。", 12f, secondary = true))
         col.addView(button("学習をリセット") {
             AlertDialog.Builder(this)
                 .setTitle("学習をリセット")
                 .setMessage("覚えた変換をすべて消します。元に戻せません。")
                 .setPositiveButton("消す") { _, _ ->
                     Learning.get(this).apply { clear(); save() }
+                    // AI学習の中身も、どのモデルの分も (ai_learn.bin と ai_learn_<モデルの印>.bin。キーボードは次に開いたときに初めの値に戻る)
+                    filesDir.listFiles()?.filter { it.name.startsWith("ai_learn") && it.name.endsWith(".bin") }?.forEach { it.delete() }
                     SentenceFlow.init(this); SentenceFlow.clear()
                 }
+                .setNegativeButton("やめる", null)
+                .show()
+        })
+        col.addView(button("クリップボードの履歴を消す") {
+            AlertDialog.Builder(this)
+                .setTitle("クリップボードの履歴を消す")
+                .setMessage("保存したクリップボードの履歴 (固定したものも含む) をすべて消します。元に戻せません。")
+                .setPositiveButton("消す") { _, _ -> ClipStore.get(this).clear(all = true) }
                 .setNegativeButton("やめる", null)
                 .show()
         })
@@ -239,6 +251,8 @@ class MainActivity : Activity() {
         section("このアプリについて")
         val ver = packageManager.getPackageInfo(packageName, 0).versionName
         col.addView(text("バージョン $ver", 14f, secondary = true))
+        // 更新の確認: アプリは通信しない (権限も無い) ので、Android 版の Release の一覧をブラウザで開いて、版を見比べてもらう (ユーザー 2026-11-05)
+        col.addView(button("github release") { open("https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases?q=android&expanded=true") })
         col.addView(button("ライセンス") { showDoc("ライセンス", "licenses.txt") })
         col.addView(button("プライバシーポリシー") { showDoc("プライバシーポリシー", "privacy.txt") })
         col.addView(button("ソースコード (GitHub)") { open("https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next") })
@@ -263,7 +277,7 @@ class MainActivity : Activity() {
             row.addView(button("削除") {
                 dict.remove(e)
                 refreshDict()
-            })
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             dictList.addView(row)
         }
         if (dict.list().isEmpty()) dictList.addView(text("まだ登録していません", 13f, secondary = true))
@@ -319,6 +333,7 @@ class MainActivity : Activity() {
         typeface = JpFont.get(context)
         isAllCaps = false
         setOnClickListener { onClick() }
+        layoutParams = lp(top = 8)   // ボタンどうしが縦にくっつかないように (ユーザー 2026-11-05)。横に並べる所は addView で別に指定
     }
 
     @Suppress("DEPRECATION")

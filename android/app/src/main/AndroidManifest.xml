@@ -31,5 +31,11 @@
                 android:name="android.view.im"
                 android:resource="@xml/method" />
         </service>
+        <!-- クリップボードの履歴の写し (画像・動画) を、貼り付けのときだけ貼り付け先に読ませる (外からは開けない) -->
+        <provider
+            android:name=".ClipProvider"
+            android:authorities="${applicationId}.clips"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

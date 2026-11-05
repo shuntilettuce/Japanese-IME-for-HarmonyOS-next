@@ -113,7 +113,7 @@ export struct SymbolView {
   }
 
   private insert(sym: string): void {
-    this.h().commitTopCandidate();
+    this.h().commitTopWithPending();
     this.h().insertText(sym);
     this.h().recordSymbolUse(sym);
   }

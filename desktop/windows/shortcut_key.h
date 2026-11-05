@@ -153,6 +153,7 @@ inline const std::vector<ShortcutFunc>& shortcut_funcs() {
         {"space_half", L"半角の空白を入れる", false},
         {"open_dict", L"ユーザー辞書を開く", false},
         {"model_toggle", L"変換モデルの切り替え", false},
+        {"clip_history", L"クリップボードの履歴", false},
     };
     return f;
 }

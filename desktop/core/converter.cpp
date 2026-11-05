@@ -4,6 +4,9 @@
 #include <cmath>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <fstream>
 
 #include "engine.h"
 #include "pos_classes.h"
@@ -46,21 +49,271 @@ bool is_slur(const u16& s) {
 }
 
 Converter::~Converter() {
+    ai_stop_bulk();
     if (e_) kkc_close(e_);
 }
 
 bool Converter::open(const void* lex, size_t lex_size, const void* model, size_t model_size, int threads) {
     kkc_engine* next = kkc_open(lex, lex_size, model, model_size);
     if (!next) return false;   // 開けなければ今のエンジンのまま
+    ai_stop_bulk();   // 裏で学んでいるのは前のモデル (呼び出し側はこの後に外す)
+    lex_ = lex;
+    lex_size_ = lex_size;
+    model_ = model;
+    model_size_ = model_size;
     if (e_) kkc_close(e_);
     e_ = next;
     if (e_ && threads > 0) kkc_set_threads(e_, threads);
     if (e_) kkc_set_suggest(e_, suggest_ ? 1 : 0);
     if (e_) kkc_set_latin(e_, latin_ ? 1 : 0);
-    if (e_ && !typo_) kkc_set_typo(e_, 0, 0.f);
+    if (e_ && (!typo_ || typo_bias_ != 0.f)) kkc_set_typo(e_, typo_ ? 1 : 0, typo_bias_);
     if (e_ && !variants_.empty()) set_variants(variants_);
     if (e_ && !user_.empty()) set_user_words(std::vector<UserDict::Form>(user_), user_bonus_);   // モデルを替えて開き直したとき
+    ai_ready_ = false;
+    if (e_ && !ai_base_.empty()) set_ai_learn(std::filesystem::path(ai_base_));   // 新しいモデルの保存先に替わる
     return e_ != nullptr;
+}
+
+// ---------------------------------------------------------------- AI学習
+// 保存の形: "SHA2" + 学んだ記録の時刻 (int64、確定した文の記録 = recent_learn.tsv の C 行のうち、この時刻までは学んだ)
+// + 学んだときの記録の大きさ (int64、変わっていなければ記録を読み直さない) + 個数 (int32) + float の並び。
+// モデルを替えて個数が合わなければ初めから育て直す
+namespace {
+// 学ぶ速さ (v・W・網・初めの値へ引き戻す強さ・上乗せの上限)。確定の記録で 1 位が最もよく、文の確率の損失も下がった組
+void ai_config(kkc_engine* e) { kkc_romance_config(e, 0.2f, 0.01f, 0.05f, 0.01f, 2.0f); }
+
+long long unix_now() {
+    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+long long log_bytes(const std::filesystem::path& dir) {
+    std::error_code ec;
+    const auto n = std::filesystem::file_size(dir / RECENT_FILE, ec);
+    return ec ? 0 : static_cast<long long>(n);
+}
+
+bool ai_read(const std::filesystem::path& path, kkc_engine* e, long long& until, long long& bytes) {
+    std::ifstream f(path, std::ios::binary);
+    char magic[4] = {};
+    int64_t u = 0, b = 0;
+    int32_t n = 0;
+    if (!f.read(magic, 4) || std::string(magic, 4) != "SHA2" || !f.read(reinterpret_cast<char*>(&u), 8) ||
+        !f.read(reinterpret_cast<char*>(&b), 8) || !f.read(reinterpret_cast<char*>(&n), 4) || n != kkc_romance_size(e))
+        return false;
+    std::vector<float> v(static_cast<size_t>(n));
+    if (!f.read(reinterpret_cast<char*>(v.data()), std::streamsize(v.size() * 4))) return false;
+    kkc_romance_set(e, v.data(), n);
+    until = u;
+    bytes = b;
+    return true;
+}
+
+bool ai_write(const std::filesystem::path& path, kkc_engine* e, long long until, long long bytes) {
+    const int n = kkc_romance_size(e);
+    if (n <= 0) return false;
+    std::vector<float> v(static_cast<size_t>(n));
+    if (kkc_romance_get(e, v.data(), n) != n) return false;
+    std::filesystem::path tmp = path;
+    tmp += ".tmp";
+    bool ok;
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        const int64_t u = until, b = bytes;
+        const int32_t n32 = n;
+        f.write("SHA2", 4);
+        f.write(reinterpret_cast<const char*>(&u), 8);
+        f.write(reinterpret_cast<const char*>(&b), 8);
+        f.write(reinterpret_cast<const char*>(&n32), 4);
+        f.write(reinterpret_cast<const char*>(v.data()), std::streamsize(v.size() * 4));
+        ok = bool(f);
+    }
+    std::error_code ec;
+    if (ok) std::filesystem::rename(tmp, path, ec);
+    return ok && !ec;
+}
+
+// 確定した読みをモデルで変換し直して網を作り、その網で確定した表記の経路の確率を上げる。返り値 = 学ぶ前の損失 (学ばなかったら負)
+float ai_step(kkc_engine* e, const u16& ctx, const u16& reading, const u16& text) {
+    if (reading.empty() || text.empty() || text == reading) return -1;
+    std::vector<uint16_t> buf(size_t(reading.size()) * 40 + 256);
+    const int n = kkc_convert(e, p16(ctx), int(ctx.size()), p16(reading), int(reading.size()), 10, 1, buf.data(), int(buf.size()));
+    if (n <= 0) return -1;   // 長すぎる読みなどは学ばない
+    float loss = 0;
+    return kkc_romance_learn(e, p16(text), int(text.size()), &loss) == 1 ? loss : -1;
+}
+
+// 確定した文の記録のうち、時刻が since より後の分を古い順に学ぶ。返り値 = 読んだ最後の時刻 (無ければ since)
+long long ai_learn_log(kkc_engine* e, const std::filesystem::path& dir, long long since, const std::atomic<bool>& stop, int& learned) {
+    std::string s;
+    if (!read_file(dir / RECENT_FILE, s)) return since;
+    long long last = since;
+    for (size_t st = 0; st < s.size() && !stop;) {
+        size_t en = s.find('\n', st);
+        if (en == std::string::npos) en = s.size();
+        const std::string line = s.substr(st, en - st);
+        st = en + 1;
+        // 時刻 \t C \t 読み \t 表記 \t 左の文脈
+        std::vector<std::string> f;
+        for (size_t a = 0;;) {
+            const size_t t = line.find('\t', a);
+            f.push_back(line.substr(a, t == std::string::npos ? t : t - a));
+            if (t == std::string::npos) break;
+            a = t + 1;
+        }
+        if (f.size() != 5 || f[1] != "C") continue;
+        long long t = 0;
+        for (char c : f[0]) if (c >= '0' && c <= '9') t = t * 10 + (c - '0');
+        if (t <= since) continue;
+        if (ai_step(e, from_utf8(f[4]), from_utf8(f[2]), from_utf8(f[3])) >= 0) learned++;
+        last = std::max(last, t);
+    }
+    return last;
+}
+
+std::FILE* open_new(const std::filesystem::path& p) {   // 無いときだけ作る (ほかの窓と取り合わない)
+#ifdef _WIN32
+    return _wfopen(p.c_str(), L"wx");
+#else
+    return std::fopen(p.c_str(), "wx");
+#endif
+}
+}  // namespace
+
+// 保存先はモデルごと (…/ai_learn.bin → …/ai_learn_<モデルの印>.bin)。AI学習の中身はモデルの内側の数に掛ける重みで、
+// ほかのモデルには使えない。分けておけば、軽量・標準を切り替えても消えない (2026-11-06)
+static std::filesystem::path ai_model_path(const std::filesystem::path& base, kkc_engine* e) {
+    if (base.empty() || !e) return base;
+    char tag[16];
+    std::snprintf(tag, sizeof tag, "_%08x", unsigned(kkc_model_tag(e)));
+    return base.parent_path() / (base.stem().string() + tag + ".bin");
+}
+
+namespace {
+// 前の 1 つだけの保存 (ai_learn.bin) を、個数が合えば今のモデルの名前に移す。使っていないモデルの分は新しい 4 つまで
+void ai_adopt_and_prune(const std::filesystem::path& base, const std::filesystem::path& path, kkc_engine* e) {
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec) && std::filesystem::exists(base, ec)) {
+        long long u = 0, b = 0;
+        std::vector<float> keep(size_t(std::max(kkc_romance_size(e), 0)));
+        if (!keep.empty()) kkc_romance_get(e, keep.data(), int(keep.size()));
+        if (ai_read(base, e, u, b)) std::filesystem::rename(base, path, ec);
+        if (!keep.empty()) kkc_romance_set(e, keep.data(), int(keep.size()));
+    }
+    std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> others;
+    for (auto it = std::filesystem::directory_iterator(path.parent_path(), ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+        const std::string n = it->path().filename().string();
+        if (it->path() == path || n.rfind("ai_learn_", 0) != 0 || it->path().extension() != ".bin") continue;
+        std::error_code tc;
+        others.push_back({std::filesystem::last_write_time(it->path(), tc), it->path()});
+    }
+    std::sort(others.begin(), others.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    for (size_t k = 4; k < others.size(); k++) std::filesystem::remove(others[k].second, ec);
+}
+}  // namespace
+
+void Converter::set_ai_learn(const std::filesystem::path& base) {
+    if (ai_ready_ && base == ai_base_) return;
+    const std::filesystem::path path = ai_model_path(base, e_);
+    ai_stop_bulk();
+    ai_ready_ = e_ != nullptr;
+    ai_base_ = base;
+    ai_path_ = path;
+    ai_seen_ = {};
+    ai_until_ = 0;
+    ai_bytes_ = 0;
+    if (!e_) return;
+    kkc_romance_enable(e_, path.empty() ? 0 : 1);
+    if (path.empty()) return;
+    kkc_romance_reset(e_);
+    ai_config(e_);
+    ai_adopt_and_prune(base, path, e_);
+    ai_sync();
+    ai_start_bulk();
+}
+
+void Converter::ai_sync() {
+    if (ai_busy_) return;   // 記録から学んでいる間は、終わって保存したものを後で読む
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(ai_path_, ec);
+    if (ec) {   // 無い: 消された (学習の全消去) なら初めの値に戻す
+        if (ai_seen_ != std::filesystem::file_time_type{}) kkc_romance_reset(e_);
+        ai_seen_ = {};
+        ai_until_ = ai_bytes_ = 0;
+        return;
+    }
+    if (t == ai_seen_) return;
+    ai_seen_ = t;
+    if (!ai_read(ai_path_, e_, ai_until_, ai_bytes_)) { kkc_romance_reset(e_); ai_until_ = ai_bytes_ = 0; }
+}
+
+void Converter::ai_save() {
+    ai_until_ = unix_now();   // 確定した文は、学ぶ前に記録に書いてある
+    ai_bytes_ = log_bytes(ai_path_.parent_path());
+    std::error_code ec;
+    if (ai_write(ai_path_, e_, ai_until_, ai_bytes_)) ai_seen_ = std::filesystem::last_write_time(ai_path_, ec);
+}
+
+// オンにしたとき、まだ学んでいない確定した文の記録 (設定の「学習を始める」で残した分) を裏でまとめて学ぶ。
+// 変換と取り合わないよう、別に開いたエンジンで学び、終わったら保存する (変換の側は次に使うときに読み直す)
+void Converter::ai_start_bulk() {
+    const std::filesystem::path dir = ai_path_.parent_path();
+    const long long bytes = log_bytes(dir);
+    if (bytes == 0 || bytes == ai_bytes_ || !lex_ || !model_) return;   // 記録が無い・前に学んだときから変わっていない
+    // ほかの窓 (別のプロセス) が学んでいる最中なら任せる。30 分より古い印は、途中で落ちた残りとして取り直す
+    const std::filesystem::path lock = dir / L"ai_learn.lock";
+    std::error_code ec;
+    const auto lt = std::filesystem::last_write_time(lock, ec);
+    if (!ec && std::filesystem::file_time_type::clock::now() - lt < std::chrono::minutes(30)) return;
+    if (!ec) std::filesystem::remove(lock, ec);
+    std::FILE* lf = open_new(lock);
+    if (!lf) return;
+    std::fclose(lf);
+    const int n = kkc_romance_size(e_);
+    std::vector<float> init(static_cast<size_t>(std::max(n, 0)));
+    if (n > 0) kkc_romance_get(e_, init.data(), n);
+    ai_stop_ = false;
+    ai_busy_ = true;
+    ai_bulk_ = std::thread([this, path = ai_path_, dir, lock, init, until = ai_until_] {
+        kkc_engine* b = kkc_open(lex_, lex_size_, model_, model_size_);
+        if (b) {
+            kkc_set_threads(b, 1);   // 打つ側の邪魔をしない
+            kkc_romance_enable(b, 1);
+            ai_config(b);
+            if (!init.empty()) kkc_romance_set(b, init.data(), int(init.size()));
+            long long u = until, bytes = 0;
+            int learned = 0;
+            for (int pass = 0; pass < 4 && !ai_stop_; pass++) {   // 学んでいる間に増えた分も
+                bytes = log_bytes(dir);
+                const long long nu = ai_learn_log(b, dir, u, ai_stop_, learned);
+                if (nu == u) break;
+                u = nu;
+            }
+            if (!ai_stop_) ai_write(path, b, u, bytes);
+            ai_bulk_learned_ = learned;
+            kkc_close(b);
+        }
+        std::error_code rc;
+        std::filesystem::remove(lock, rc);
+        ai_busy_ = false;
+    });
+}
+
+void Converter::ai_stop_bulk() {
+    if (!ai_bulk_.joinable()) return;
+    ai_stop_ = true;
+    ai_bulk_.join();
+}
+
+void Converter::ai_wait() {
+    if (ai_bulk_.joinable()) ai_bulk_.join();
+}
+
+float Converter::ai_learn(const u16& ctx, const u16& reading, const u16& text) {
+    if (!e_ || ai_path_.empty() || ai_busy_) return -1;   // 記録から学んでいる間の分は、その記録から学ぶ
+    ai_sync();   // ほかの窓で学んだ分の続きから
+    const float loss = ai_step(e_, ctx, reading, text);
+    if (loss >= 0) ai_save();
+    return loss;
 }
 
 bool Converter::convert_once(const u16& ctx, const u16& kana, int max, Conversion& out) {
@@ -275,6 +528,7 @@ std::vector<TreeNode> build_tree(const std::vector<std::pair<double, std::vector
 Conversion Converter::convert(const u16& ctx, const u16& kana, int max) {
     Conversion out;
     if (!e_ || kana.empty()) return out;
+    if (!ai_path_.empty()) ai_sync();
     if (convert_once(ctx, kana, max, out)) return out;
     // 長すぎる: 前と後ろに分けて変換し、1 位どうしをつなぐ (後ろは前の 1 位を文脈にする)
     size_t sp = split_point(kana);
@@ -353,10 +607,11 @@ std::vector<u16> Converter::path_variants(const u16& reading, const u16& text) c
     return out;
 }
 
-void Converter::set_typo(bool on) {
-    if (on == typo_) return;
+void Converter::set_typo(bool on, float bias) {
+    if (on == typo_ && bias == typo_bias_) return;
     typo_ = on;
-    if (e_) kkc_set_typo(e_, on ? 1 : 0, 0.f);
+    typo_bias_ = bias;
+    if (e_) kkc_set_typo(e_, on ? 1 : 0, bias);
 }
 
 void Converter::set_latin(bool on) {

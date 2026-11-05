@@ -68,10 +68,15 @@ struct Settings {
     bool learn_log = false;          // 確定した文を手元に残す (設定の「学習を始める」で同意した人だけ)
     bool consent_asked = false;      // 同意を聞く画面を出した (更新の後に 1 度だけ出す)
     bool typed_strip = true;         // 入力中の字の上に読みの帯を出す
+    int typo_level = 1;              // 打ち間違いの直しの強さ (詳細設定): 0 控えめ・1 普通・2 強め (typo_bias_of)
+    int ctx_left = 40;               // 文脈を読む字数 (詳細設定、0〜CTX_LIMIT): 左 (確定した文)。40 字より長くしても点は変わらなかった (dev6 89.5)
+    int ctx_right = 80;              // 後ろ (固定した前の方を直すときの、後で打った文)
     bool typo_fix = true;            // ローマ字の打ち間違いを直す (オフなら打ったとおり。ブログの要望 2026-10-26)
     bool latin_auto = true;          // 英字の打ち分け (ローマ字で打った英単語を文脈で英字にする)。暴発が嫌ならオフ
     bool space_literal = false;      // 空白キーで変換しない (空白も読みに入れて変換を続ける。ComposerOptions::space_literal)
     bool punct_commit = false;       // 句読点 (、。！？) を打ったら確定する (ComposerOptions::punct_commit)
+    bool clip_history = true;        // クリップボードの履歴を残す (Windows: shunti_clip.exe が常駐して記録する。2026-11-05)
+    bool ai_learn = false;           // AI学習: 確定した文から変換の点に上乗せする小さいモデルを育てる (Converter::set_ai_learn)。既定はオフ
     bool cand_tree = false;          // 新デザインの候補バー (候補の木: 文節の札・強さの色・別の区切り)。既定はオフ
     bool ctrl_space = false;         // Ctrl+Space でも日本語入力のオン・オフ (shortcuts に移した。古い設定の読み替え用)
     std::string model = "standard";  // 変換モデル: light (XS3・メモリの少ない PC 向け)・standard (S7)
@@ -109,6 +114,10 @@ const char* model_file_name(const std::string& model);
 
 // 読む (無い・壊れていれば既定のまま)。書く (一時ファイルから置き換える)
 bool load_settings(const std::filesystem::path& p, Settings& s);
+// 打ち間違いの直しの強さの段 -> 打ち間違いの辺の点数から引く値 (控えめ 1・普通 0・強め -1)。
+// 2026-11-06 にエンジンで測った (S8): 1 で AJIMEE 81.3 -> 82.4・誤字_wiki 42.8 -> 29.9、-1 で AJIMEE 79.7・誤字_wiki 52.6
+float typo_bias_of(int level);
+constexpr int CTX_LIMIT = 80;   // 文脈を読む字数の上限 (Windows は入力欄から左をこの字数まで読む)
 bool save_settings(const std::filesystem::path& p, const Settings& s);
 
 // ファイルが変わっていたら読み直すための控え

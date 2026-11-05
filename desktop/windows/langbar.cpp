@@ -27,6 +27,12 @@ void open_settings() {
     std::wstring exe = (module_dir() / L"shunti_settings.exe").wstring();
     ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
+
+// 手書き入力の窓 (shunti_hand.exe)。認識は Windows の日本語の手書き認識。窓はフォーカスを取らず、選んだ字を今の入力欄へ送る
+void open_hand() {
+    std::wstring exe = (module_dir() / L"shunti_hand.exe").wstring();
+    ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNOACTIVATE);
+}
 }  // namespace
 
 
@@ -88,6 +94,8 @@ STDMETHODIMP LangBarButton::OnClick(TfLBIClick click, POINT pt, const RECT*) {
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING, 1, ts_ && ts_->is_open() ? T(58) : T(57));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, 3, T(202));
+    AppendMenuW(m, MF_STRING, 4, T(203));
     AppendMenuW(m, MF_STRING, 2, T(134));
     HWND owner = menu_owner();
     SetForegroundWindow(owner);   // こうしないと、外をクリックしてもメニューが閉じない
@@ -96,16 +104,22 @@ STDMETHODIMP LangBarButton::OnClick(TfLBIClick click, POINT pt, const RECT*) {
     DestroyMenu(m);
     if (cmd == 1 && ts_) ts_->set_open(!ts_->is_open());
     if (cmd == 2) open_settings();
+    if (cmd == 3) open_hand();
+    if (cmd == 4) open_clip_history();
     return S_OK;
 }
 // タスクバーのアイコンを右クリックすると、Windows がここで中身を頼んできて、Windows 自身がメニューを出す
-enum { MENU_TOGGLE = 1, MENU_SETTINGS = 2 };
+enum { MENU_TOGGLE = 1, MENU_SETTINGS = 2, MENU_HAND = 3, MENU_CLIP = 4 };
 
 STDMETHODIMP LangBarButton::InitMenu(ITfMenu* menu) {
     if (!menu) return E_INVALIDARG;
     const wchar_t* toggle = ts_ && ts_->is_open() ? T(58) : T(57);
     menu->AddMenuItem(MENU_TOGGLE, 0, nullptr, nullptr, toggle, ULONG(wcslen(toggle)), nullptr);
     menu->AddMenuItem(UINT(-1), TF_LBMENUF_SEPARATOR, nullptr, nullptr, L"", 0, nullptr);
+    const wchar_t* hand = T(202);
+    menu->AddMenuItem(MENU_HAND, 0, nullptr, nullptr, hand, ULONG(wcslen(hand)), nullptr);
+    const wchar_t* clip = T(203);
+    menu->AddMenuItem(MENU_CLIP, 0, nullptr, nullptr, clip, ULONG(wcslen(clip)), nullptr);
     const wchar_t* settings = T(134);
     menu->AddMenuItem(MENU_SETTINGS, 0, nullptr, nullptr, settings, ULONG(wcslen(settings)), nullptr);
     return S_OK;
@@ -114,6 +128,8 @@ STDMETHODIMP LangBarButton::InitMenu(ITfMenu* menu) {
 STDMETHODIMP LangBarButton::OnMenuSelect(UINT id) {
     if (id == MENU_TOGGLE && ts_) ts_->set_open(!ts_->is_open());
     if (id == MENU_SETTINGS) open_settings();
+    if (id == MENU_HAND) open_hand();
+    if (id == MENU_CLIP) open_clip_history();
     return S_OK;
 }
 

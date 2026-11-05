@@ -80,4 +80,14 @@ cl /nologo /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICOD
   "%HERE%setup.cpp" "%HERE%strings.cpp" "%HERE%update.cpp" "%CORE%\release_info.cpp" "%CORE%\text.cpp" /Fe"%HERE%..\build\shunti-IME-setup.exe" ^
   /link /SUBSYSTEM:WINDOWS /guard:cf "%OBJ%\settings_app.res" shell32.lib user32.lib winhttp.lib ^
   /MANIFEST:EMBED "/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'" || exit /b 1
+rem handwriting pad: Windows の日本語の手書き認識 (Windows.UI.Input.Inking、C++/WinRT) を呼ぶ小さな窓。モデルは持たない
+rc /nologo %DEFS% /fo "%OBJ%\hand_app.res" "%HERE%hand_app.rc" || exit /b 1
+cl /nologo /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS %DEFS% /Fo"%OBJ%\\" ^
+  "%HERE%hand_app.cpp" "%HERE%strings.cpp" /Fe"%DIST%\shunti_hand.exe" ^
+  /link /SUBSYSTEM:WINDOWS /guard:cf "%OBJ%\hand_app.res" windowsapp.lib user32.lib gdi32.lib || exit /b 1
+rem clipboard history: 常駐してコピーを記録し、Zori-chan の右クリック・ショートカットで履歴の窓を出す (clip_app.cpp)
+rc /nologo %DEFS% /fo "%OBJ%\clip_app.res" "%HERE%clip_app.rc" || exit /b 1
+cl /nologo /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS %DEFS% /Fo"%OBJ%\\" ^
+  "%HERE%clip_app.cpp" "%HERE%strings.cpp" /Fe"%DIST%\shunti_clip.exe" ^
+  /link /SUBSYSTEM:WINDOWS /guard:cf "%OBJ%\clip_app.res" user32.lib gdi32.lib gdiplus.lib shell32.lib shlwapi.lib ole32.lib advapi32.lib || exit /b 1
 exit /b 0

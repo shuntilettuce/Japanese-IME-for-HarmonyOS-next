@@ -21,6 +21,9 @@ namespace shunti {
 void recent_add(const std::filesystem::path& dir, const std::vector<std::string>& fields);
 // 種類 kind の行だけ控えから消す
 void recent_drop(const std::filesystem::path& dir, const std::string& kind);
+// 時刻が since (秒) 以降の、種類が kinds の行を、学習を元に戻さずに控えから消す。既定は C (AI学習のために保存した文 =
+// 設定の「AI用データ」)。覚えた変換と AI学習の重みは残る。返り値 = 消した行数
+int recent_cut(const std::filesystem::path& dir, long long since, const std::string& kinds = "C");
 constexpr const wchar_t* RECENT_FILE = L"recent_learn.tsv";
 
 class Learning {
@@ -50,7 +53,8 @@ public:
     // その読みで選んだ (表記, 回数)。回数 -1 は候補に出さない表記
     std::vector<std::pair<u16, int>> counts(const u16& reading);
     // 文節の読みの表記を置き換える学習。同じ左の文脈で選んだ (SAME_CTX_MIN 回分、別の表記の票を引く)、または
-    // ANY_CTX_MIN 回分選んでいてこの文脈に別の表記の票が無い表記のうち、いちばん多く選んだもの (無ければ空)
+    // ANY_CTX_MIN 回分選んでいてこの文脈に別の表記の票が無く、その読みでほかの表記がほとんど選ばれていない (1/4 以下) 表記のうち、
+    // いちばん多く選んだもの (無ければ空)
     u16 top(const u16& reading, const u16& left = u16());
     // min 回以上選んだ (読み, 表記, 回数)。変換の網に候補として入れる (AI が文脈で選ぶ。ブログの報告 2026-10-21)
     struct Strong { u16 reading, surface; int count; };

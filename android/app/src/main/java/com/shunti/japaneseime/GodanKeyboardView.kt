@@ -62,7 +62,7 @@ class GodanKeyboardView(
             listOf(k("H", "r:h", l = "r:p", u = "r:f", r = "r:b", d = "p:3"), k("M", "r:m", l = "p:/", u = "r:l", r = "r:-", d = "p:6"),
                 k("Y", "r:y", l = "p:（", u = "r:x", r = "p:）", d = "p:9"), k("R", "r:r", l = "p:。", u = "p:？", r = "p:！", d = "p:、"),
                 k("W", "r:w", l = "p:「", u = "r:v", r = "p:」")),
-            listOf(s("⌫", "bs"), s("▶", "right"), s(if (h.inputState == InputHandler.InputState.IDLE) "␣" else "変換", "space"),
+            listOf(s("⌫", "bs"), s("▶", "right"), s(h.spaceLabel("␣"), "space"),
                 s(if (enter == "改行") "→" else enter, "enter", span = 2, accent = true)),
         )
     }
@@ -90,6 +90,7 @@ class GodanKeyboardView(
     private var downX = 0f
     private var downY = 0f
     private var activeKey: Key? = null
+    private var activeId = -1   // 押しているキーの指
     private var dirNow = 0
 
     override fun onDraw(canvas: Canvas) {
@@ -143,12 +144,16 @@ class GodanKeyboardView(
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                val c = (e.x / colW()).toInt().coerceIn(0, 4)
-                val r = ((e.y - 2 * dp) / rowH()).toInt().coerceIn(0, 4)
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                // 2 本目の指が触れたら、前の指のキーをその時点で確定して、新しい指に移る (速く打つと指が重なる)
+                if (e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) release(e)
+                val i = e.actionIndex
+                activeId = e.getPointerId(i)
+                val c = (e.getX(i) / colW()).toInt().coerceIn(0, 4)
+                val r = ((e.getY(i) - 2 * dp) / rowH()).toInt().coerceIn(0, 4)
                 activeKey = keyAt(layout()[c], r)?.first
-                downX = e.x
-                downY = e.y
+                downX = e.getX(i)
+                downY = e.getY(i)
                 dirNow = 0
                 haptic()
                 when (activeKey?.acts?.get(0)) {   // 押し続けると繰り返す
@@ -159,23 +164,34 @@ class GodanKeyboardView(
                 invalidate()
             }
             MotionEvent.ACTION_MOVE -> {
-                val d = dir(e.x - downX, e.y - downY)
-                if (d != dirNow) { dirNow = d; invalidate() }
+                val i = e.findPointerIndex(activeId)
+                if (i >= 0) {
+                    val d = dir(e.getX(i) - downX, e.getY(i) - downY)
+                    if (d != dirNow) { dirNow = d; invalidate() }
+                }
             }
-            MotionEvent.ACTION_UP -> {
-                stopRepeat()
-                val key = activeKey
-                activeKey = null
-                if (key != null && key.acts[0] !in listOf("bs", "left", "right")) fire(key.at(dir(e.x - downX, e.y - downY)))
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (e.getPointerId(e.actionIndex) == activeId) release(e)   // 前の指が後から離れたときは確定済み
                 invalidate()
             }
             MotionEvent.ACTION_CANCEL -> {
                 stopRepeat()
                 activeKey = null
+                activeId = -1
                 invalidate()
             }
         }
         return true
+    }
+
+    /** 押している指のキーを確定する (フリックの向きは、その指のいまの位置で決める) */
+    private fun release(e: MotionEvent) {
+        stopRepeat()
+        val key = activeKey
+        val i = e.findPointerIndex(activeId)
+        activeKey = null
+        activeId = -1
+        if (key != null && i >= 0 && key.acts[0] !in listOf("bs", "left", "right")) fire(key.at(dir(e.getX(i) - downX, e.getY(i) - downY)))
     }
 
     private fun fire(act: String) {

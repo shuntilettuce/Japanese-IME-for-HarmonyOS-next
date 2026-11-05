@@ -162,3 +162,9 @@ desktop/windows の画面に出る日本語の文言。番号は strings.json �
 | 155 | 展開できません | update.cpp (download_and_install) |
 | 156 | zip の中に install.ps1 がありません | update.cpp (download_and_install) |
 | 157 | 入れる処理を起動できません | update.cpp (download_and_install) |
+| 196 | 手書き入力 | hand_app.cpp (窓の題) |
+| 197 | ここに 1 字ずつ書いてください… | hand_app.cpp (何も書いていないときの案内) |
+| 198 | 1 画戻す | hand_app.cpp (ボタン) |
+| 199 | 消す | hand_app.cpp (ボタン) |
+| 201 | 日本語の手書きを認識できません… | hand_app.cpp (認識器が無いとき) |
+| 202 | 手書き入力... | langbar.cpp (Zori-chan の右クリックのメニュー) |

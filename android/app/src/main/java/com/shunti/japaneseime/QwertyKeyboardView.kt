@@ -38,6 +38,7 @@ class QwertyKeyboardView(
 
     private var shift = 0   // 0 なし, 1 次の 1 字だけ大文字, 2 ずっと大文字
     private var pressed: Key? = null
+    private var activeId = -1   // 押しているキーの指
     private var laidOut: List<Pair<Key, RectF>> = emptyList()
     private val timers = Handler(Looper.getMainLooper())
     private var repeating: Runnable? = null
@@ -51,8 +52,7 @@ class QwertyKeyboardView(
         val modeLabel = if (kana) "あA" else "Aあ"
         val space = when {
             !kana -> "space"
-            h.inputState == InputHandler.InputState.IDLE -> "空白"
-            else -> "変換"
+            else -> h.spaceLabel("空白")
         }
         return listOf(
             tables.QWERTY_NUMBER_ROW.map { Key(it, "digit:$it") },
@@ -115,8 +115,12 @@ class QwertyKeyboardView(
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                pressed = keyAt(e.x, e.y)
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                // 2 本目の指が触れたら、前の指のキーをその時点で確定して、新しい指に移る (速く打つと指が重なる)
+                if (e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) release()
+                val i = e.actionIndex
+                activeId = e.getPointerId(i)
+                pressed = keyAt(e.getX(i), e.getY(i))
                 haptic()
                 longFired = false
                 when (pressed?.action) {
@@ -130,28 +134,36 @@ class QwertyKeyboardView(
             }
             MotionEvent.ACTION_MOVE -> {
                 // 押したまま隣のキーへずらしたら、離した所のキーにする (打ち間違いを直せる)
-                val k = keyAt(e.x, e.y)
+                val i = e.findPointerIndex(activeId)
+                val k = if (i >= 0) keyAt(e.getX(i), e.getY(i)) else null
                 if (k != null && k !== pressed && pressed?.action !in setOf("del", "left", "right")) {
                     cancelLong()
                     pressed = k
                     invalidate()
                 }
             }
-            MotionEvent.ACTION_UP -> {
-                stopRepeat()
-                cancelLong()
-                if (!longFired) pressed?.let { press(it) }
-                pressed = null
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (e.getPointerId(e.actionIndex) == activeId) release()   // 前の指が後から離れたときは確定済み
                 invalidate()
             }
             MotionEvent.ACTION_CANCEL -> {
                 stopRepeat()
                 cancelLong()
                 pressed = null
+                activeId = -1
                 invalidate()
             }
         }
         return true
+    }
+
+    /** 押している指のキーを確定する */
+    private fun release() {
+        stopRepeat()
+        cancelLong()
+        if (!longFired) pressed?.let { press(it) }
+        pressed = null
+        activeId = -1
     }
 
     private fun press(k: Key) {

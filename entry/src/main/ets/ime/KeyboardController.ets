@@ -4,6 +4,7 @@ import type { Want } from '@kit.AbilityKit';
 import display from '@ohos.display';
 import dataPreferences from '@ohos.data.preferences';
 import pasteboard from '@ohos.pasteboard';
+import image from '@ohos.multimedia.image';
 import vibrator from '@ohos.vibrator';
 import bundleManager from '@ohos.bundle.bundleManager';
 
@@ -19,7 +20,7 @@ import { PredictiveConversion } from './PredictiveConversion';
 import { UnknownWordLearner } from './UnknownWordLearner';
 import { ShortTermMemory } from './ShortTermMemory';
 // デバッグビルドでだけ記録する (BuildProfile.DEBUG に連動、InputLog.ets 冒頭参照)。
-import { InputLog, DEBUG_INPUT_LOG } from './InputLog';
+import { InputLog, DEBUG_INPUT_LOG, SECURE_PATTERNS } from './InputLog';
 import { SuppressedCandidates, SUPPRESSED_STORE, SUPPRESSED_KEY } from './SuppressedCandidates';
 import { DateTimePredictor } from './DateTimePredictor';
 import { NumberFormatter } from './NumberFormatter';
@@ -29,6 +30,7 @@ import { AppMaintenance } from './AppMaintenance';
 import { AiConverter } from './AiConverter';
 import { SentenceFlow } from './SentenceFlow';
 import { ClipboardPins } from './ClipboardPins';
+import { ClipHistory, ClipItem } from './ClipHistory';
 
 interface InputMethodSubtype {
   id: string;
@@ -61,6 +63,7 @@ interface HostEditOp {
   t?: number;                           // 記録した時刻 (続けて消した分をまとめるため)
   text: string;
   at: number;   // IME自己完結の相対座標(ホストの絶対indexではない)
+  quiet?: boolean;   // 貼り付けた分: 取り消しても入力ログに中身を残さない (文字数だけ)
 }
 
 // 開き括弧 -> 閉じ括弧。pendingBracketClose の元ネタ。
@@ -429,6 +432,8 @@ export class InputHandler {
   // 辞書の自由入力中に、確定文字の送り先を切り替えるための印。
   // '' = ホストアプリ / 'yomi' | 'word' = パネル内のその欄。
   private captureTarget: string = '';
+  // パスワードの欄か (onInputStart で判定)。打った字は組み立てずそのまま入れ、学習・文の流れ・括弧の自動閉じを通さない。
+  private secureField: boolean = false;
   private suppressedDirty: boolean = false;
   private suppressedSaveTimer: number = -1;
   // The last (up to) two committed words, at word granularity, used as the
@@ -441,6 +446,7 @@ export class InputHandler {
   private predictionWordGroups: string[][] = [];
   private symbolPrefs: dataPreferences.Preferences | undefined = undefined;
   private symbolSaveTimer: number = -1;
+  private symbolDirty: boolean = false;
   // Per-symbol tap counts, used to rank the symbol panel's "recent" tab by
   // actual usage instead of a fixed guess. Static so SymbolView's AppStorage
   // read and InputHandler's own updates always see the same data.
@@ -471,11 +477,15 @@ export class InputHandler {
         try {
           const data = JSON.parse(String(val)) as Record<string, Record<string, number>>;
           KanaKanjiConverter.setLearned(data);
+          AiConverter.setLearnedWords(KanaKanjiConverter.strongForms());
         } catch (_e) {
           InputHandler.keepBroken(this.learningPrefs, val);
         }
         this.learningPrefs?.get('day', '{}').then((v: dataPreferences.ValueType) => {
           try { KanaKanjiConverter.setLearnedDay(JSON.parse(String(v)) as Record<string, number>); } catch (_e) {}
+        });
+        this.learningPrefs?.get('ctx', '{}').then((v: dataPreferences.ValueType) => {
+          try { KanaKanjiConverter.setLearnedCtx(JSON.parse(String(v)) as Record<string, Record<string, Record<string, number>>>); } catch (_e) {}
         });
       })
       .catch((e: Error) => { InputLog.recordInit('shunti_learning', e); });
@@ -622,14 +632,19 @@ export class InputHandler {
     // when the symbol panel opens instead (SymbolView.aboutToAppear →
     // refreshFrequentSymbols), so positions stay put during a tapping session
     // and only settle into their new frequency order the next time it opens.
+    this.symbolDirty = true;
     clearTimeout(this.symbolSaveTimer);
-    this.symbolSaveTimer = setTimeout(() => {
-      const prefs = this.symbolPrefs;
-      if (!prefs) { return; }
-      prefs.put('v1', JSON.stringify(InputHandler.symbolFreq))
-        .then(() => prefs.flush())
-        .catch((_e: Error) => {});
-    }, 2000);
+    this.symbolSaveTimer = setTimeout(() => { this.writeSymbolFreq(); }, 2000);
+  }
+
+  private writeSymbolFreq(): void {
+    if (!this.symbolDirty) { return; }
+    const prefs = this.symbolPrefs;
+    if (!prefs) { return; }
+    this.symbolDirty = false;
+    prefs.put('v1', JSON.stringify(InputHandler.symbolFreq))
+      .then(() => prefs.flush())
+      .catch((_e: Error) => { this.symbolDirty = true; });
   }
 
   // Re-sort the "recent" symbol tab by current tap frequency. Called on
@@ -698,6 +713,8 @@ export class InputHandler {
         AppStorage.setOrCreate('oneHandedSide', s.oneHandedSide);
         AppStorage.setOrCreate('conversionEngine', s.conversionEngine);
         AppStorage.setOrCreate('numericPadEnabled', s.numericPadEnabled);
+        AppStorage.setOrCreate('aiLearn', s.aiLearn);
+        if (this.imeContext) { AiConverter.setAiLearn(s.aiLearn, this.imeContext.filesDir); }
         // 提案を分ける・英数字キーボードの変換・キーボード内の表示は設定を廃止して決め打ち
         // (ユーザー 2026-10-14「もういらない」。前に保存した値は無視)
         s.separateSuggest = true;
@@ -978,6 +995,15 @@ export class InputHandler {
     }
   }
 
+  // AI学習 (設定、既定オフ)
+  setAiLearnEnabled(enabled: boolean): void {
+    AppStorage.setOrCreate('aiLearn', enabled);
+    if (this.imeContext) {
+      AiConverter.setAiLearn(enabled, this.imeContext.filesDir);
+      SettingsStore.saveAiLearn(this.imeContext, enabled);
+    }
+  }
+
   setNumericPadEnabled(enabled: boolean): void {
     AppStorage.setOrCreate('numericPadEnabled', enabled);
     if (!enabled && AppStorage.get<string>('keyboardSubMode') === 'numeric') {
@@ -1217,8 +1243,10 @@ export class InputHandler {
     const prefs = this.learningPrefs;
     if (!prefs) { return; }
     this.learningDirty = false;
+    AiConverter.setLearnedWords(KanaKanjiConverter.strongForms());   // 確定の種類によらず、強くなった語・消した語を網にそろえる
     prefs.put('v1', JSON.stringify(KanaKanjiConverter.getLearned()))
       .then(() => prefs.put('day', JSON.stringify(KanaKanjiConverter.getLearnedDay())))
+      .then(() => prefs.put('ctx', JSON.stringify(KanaKanjiConverter.getLearnedCtx())))
       .then(() => prefs.flush())
       // 書けなかったら次の機会に書き直す (前は dirty を先に落として学習が消えた。2026-10-25)
       .catch((_e: Error) => { this.learningDirty = true; });
@@ -1349,13 +1377,10 @@ export class InputHandler {
   // そのまま変換に反映される。登録済みの語は未知語リストから外す。
   // 品詞つきで登録する。品詞は活用展開 (ConjugationEngine.buildUserExpansion) を
   // 駆動するので、動詞や形容詞は指定しないと「〜ます」「〜た」等で引けない。
-  // pos が 'noun' のときは UserPosStore 側で保存しない (既定扱い)。
+  // pos が 'noun' のときは UserPosStore 側で保存しない (既定扱い)。前の品詞が残っていれば set がそこで消す
+  // (動詞で登録した語を名詞で登録し直しても、古い活用が効き続けていた)。
   registerUserWordWithPos(reading: string, surface: string, pos: string, group: string): void {
     if (!this.imeContext) { return; }
-    if (pos === 'noun') {
-      this.registerUserWord(reading, surface);
-      return;
-    }
     const ctx = this.imeContext;
     const entry: UserPosEntry = group.length > 0
       ? { pos: pos as PosKind, group: group as VerbGroup }
@@ -1385,7 +1410,7 @@ export class InputHandler {
         const next: Record<string, string[]> = {};
         for (const k of Object.keys(dict)) { next[k] = dict[k]; }
         const cur = next[reading];
-        if (cur === undefined) {
+        if (!Array.isArray(cur)) {   // constructor などの読みは Object の関数が返る
           next[reading] = [surface];
         } else if (cur.indexOf(surface) < 0) {
           const merged: string[] = [surface];
@@ -1455,7 +1480,11 @@ export class InputHandler {
   private backspaceCaptured(): void {
     const key = this.captureTarget === 'yomi' ? 'dictEditYomi' : 'dictEditWord';
     const cur = AppStorage.get<string>(key) ?? '';
-    if (cur.length > 0) { AppStorage.setOrCreate(key, cur.slice(0, cur.length - 1)); }
+    if (cur.length === 0) { return; }
+    // 絵文字など 2 単位の字は半分だけ消さない
+    const last = cur.charCodeAt(cur.length - 1);
+    const n = last >= 0xDC00 && last <= 0xDFFF && cur.length >= 2 ? 2 : 1;
+    AppStorage.setOrCreate(key, cur.slice(0, cur.length - n));
   }
 
   clearDictEdit(): void {
@@ -1534,16 +1563,59 @@ export class InputHandler {
   // 設定・辞書には一切届かない (別サンドボックス)。壊れた状態からの復旧手段が
   // 実質機能していなかったので、こちらにも用意する。
 
+  // 消す前に、待っている保存を捨てる (消した後に古い内容を書き戻さないように)。
+  private dropPendingSaves(): void {
+    clearTimeout(this.flowSaveTimer);
+    clearTimeout(this.learningSaveTimer);
+    clearTimeout(this.nextWordSaveTimer);
+    clearTimeout(this.unknownWordSaveTimer);
+    clearTimeout(this.suppressedSaveTimer);
+    clearTimeout(this.symbolSaveTimer);
+    this.flowDirty = false;
+    this.learningDirty = false;
+    this.nextWordDirty = false;
+    this.unknownWordDirty = false;
+    this.suppressedDirty = false;
+    this.symbolDirty = false;
+  }
+
+  // ファイルを消した後: メモリの表も空にして、消したファイルを指す Preferences を開き直す。
+  // 残すと予測が出続け、次の保存で古い表が書き戻る。
+  private clearLearningInMemory(ctx: InputMethodExtensionContext): void {
+    KanaKanjiConverter.setLearned({});
+    AiConverter.setLearnedWords([]);
+    KanaKanjiConverter.setLearnedDay({});
+    KanaKanjiConverter.setLearnedCtx({});
+    NextWordPredictor.setLearned({});
+    InputHandler.symbolFreq = {};
+    InputHandler.publishFrequentSymbols();
+    UnknownWordLearner.setLearned({});
+    SentenceFlow.setLearned({});
+    SentenceFlow.reset();
+    AiConverter.suggUse = {};
+    ShortTermMemory.reset();
+    SuppressedCandidates.clear();
+    const open = (name: string, done: (p: dataPreferences.Preferences) => void): void => {
+      dataPreferences.getPreferences(ctx, name).then(done).catch((_e: Error) => {});
+    };
+    open('shunti_learning', (p: dataPreferences.Preferences) => { this.learningPrefs = p; });
+    open('shunti_flow', (p: dataPreferences.Preferences) => { this.flowPrefs = p; });
+    open('shunti_nextword', (p: dataPreferences.Preferences) => { this.nextWordPrefs = p; });
+    open('shunti_unknownword', (p: dataPreferences.Preferences) => { this.unknownWordPrefs = p; });
+    open(SUPPRESSED_STORE, (p: dataPreferences.Preferences) => { this.suppressedPrefs = p; });
+    open('shunti_symbol_freq', (p: dataPreferences.Preferences) => { this.symbolPrefs = p; });
+  }
+
   resetLearningData(): void {
     if (!this.imeContext) { return; }
-    AppMaintenance.resetLearning(this.imeContext)
+    const ctx = this.imeContext;
+    this.dropPendingSaves();
+    AiConverter.forgetAiLearn(ctx.filesDir);   // AI学習の中身も
+    AppMaintenance.resetLearning(ctx)
       .then(() => {
-        KanaKanjiConverter.setLearned({});
-        NextWordPredictor.setLearned({});
-        InputHandler.symbolFreq = {};
-        InputHandler.publishFrequentSymbols();
-        UnknownWordLearner.setLearned({});
+        this.clearLearningInMemory(ctx);
         this.publishDictRows();
+        this.publishSuppressedRows();
         console.info('shuntiIME resetLearningData ok');
       })
       .catch((e: ESObject) => { console.error('shuntiIME resetLearningData failed', JSON.stringify(e)); });
@@ -1551,14 +1623,12 @@ export class InputHandler {
 
   resetAllData(): void {
     if (!this.imeContext) { return; }
-    AppMaintenance.resetAll(this.imeContext)
+    const ctx = this.imeContext;
+    this.dropPendingSaves();
+    AiConverter.forgetAiLearn(ctx.filesDir);
+    AppMaintenance.resetAll(ctx)
       .then(() => {
-        KanaKanjiConverter.setLearned({});
-        NextWordPredictor.setLearned({});
-        InputHandler.symbolFreq = {};
-        InputHandler.publishFrequentSymbols();
-        UnknownWordLearner.setLearned({});
-        SuppressedCandidates.clear();
+        this.clearLearningInMemory(ctx);
         this.userDictRaw = {};
         AiConverter.setUserDict({}, {});
         this.publishDictRows();
@@ -1626,7 +1696,7 @@ export class InputHandler {
   // 抑制だけして登録に残すと、「登録済み」に一生変換に出ない語が並んでしまう。
   private unregisterIfUserWord(reading: string, surface: string): void {
     const cur = this.userDictRaw[reading];
-    if (cur === undefined || cur.indexOf(surface) < 0) { return; }
+    if (!Array.isArray(cur) || cur.indexOf(surface) < 0) { return; }   // constructor などの読みは Object の関数が返る
     if (!this.imeContext) { return; }
     const ctx = this.imeContext;
     const next: Record<string, string[]> = {};
@@ -1675,10 +1745,12 @@ export class InputHandler {
     clearTimeout(this.nextWordSaveTimer);
     clearTimeout(this.unknownWordSaveTimer);
     clearTimeout(this.suppressedSaveTimer);
+    clearTimeout(this.symbolSaveTimer);
     this.writeLearning();
     this.writeNextWord();
     this.writeUnknownWords();
     this.writeSuppressed();
+    this.writeSymbolFreq();
   }
 
   // Re-read the deletion list from disk. The main app's 削除した候補 screen is a
@@ -1689,7 +1761,8 @@ export class InputHandler {
     if (!this.imeContext) { return; }
     SuppressedCandidates.load(this.imeContext, true)
       .then((data: Record<string, string[]>) => {
-        SuppressedCandidates.setSuppressed(data);
+        // 読めなかったときの {} を入れると、次の削除の保存で一覧が全部消える
+        if (SuppressedCandidates.lastError.length === 0) { SuppressedCandidates.setSuppressed(data); }
       })
       .catch((_e: Error) => {});
   }
@@ -1717,10 +1790,12 @@ export class InputHandler {
   // back. Bundled dictionaries are never modified -- see SuppressedCandidates.
   // Returns the deleted surface (for the confirmation toast), or '' if the
   // deletion was refused (e.g. the as-typed kana, which must stay committable).
-  suppressCandidate(index: number): string {
+  // expected は長押しのメニューに出した語。メニューを開いている間に変換の結果が届いて並びが変わっても、別の語を消さない。
+  suppressCandidate(index: number, expected: string = ''): string {
     const candidates = AppStorage.get<string[]>('candidates') ?? [];
-    if (index < 0 || index >= candidates.length) { return ''; }
-    const surface = candidates[index];
+    const at = expected.length > 0 ? candidates.indexOf(expected) : index;
+    if (at < 0 || at >= candidates.length) { return ''; }
+    const surface = candidates[at];
     const state = AppStorage.get<string>('inputState') ?? InputState.IDLE;
     const bunsetsu = state === InputState.BUNSETSU;
     const reading = bunsetsu
@@ -1728,7 +1803,7 @@ export class InputHandler {
       : this.conversionTarget();
     if (reading.length === 0 || surface.length === 0) { return ''; }
     if (!SuppressedCandidates.suppress(reading, surface)) { return ''; }
-    InputLog.recordDeleteCandidate(reading, surface, index, candidates.length,
+    InputLog.recordDeleteCandidate(reading, surface, at, candidates.length,
       this.candidatePickVia(), '');
     KanaKanjiConverter.forgetChoice(reading, surface);
     UnknownWordLearner.forget(reading, surface);
@@ -1811,6 +1886,12 @@ export class InputHandler {
   // (conversion or tapped prediction); the strip stays visible in IDLE until a
   // new composition starts (which clears it -- see updateCandidates).
   private pushPredictions(newWords: string[]): void {
+    if (this.secureField) {   // パスワードの欄: 語を覚えない・帯も出さない
+      this.recentWords = [];
+      this.predictionWordGroups = [];
+      AppStorage.setOrCreate('predictions', [] as string[]);
+      return;
+    }
     let w1 = this.recentWords.length >= 2 ? this.recentWords[this.recentWords.length - 2] : '';
     let w2 = this.recentWords.length >= 1 ? this.recentWords[this.recentWords.length - 1] : '';
     for (const w of newWords) {
@@ -1936,11 +2017,13 @@ export class InputHandler {
     this.publishPreviewMode();
     // 入力ログは、この欄が secure (パスワード等) か分かるまで保留にする。
     InputLog.beginField();
+    this.secureField = false;
     client.getEditorAttribute()
       .then((attr: inputMethodEngine.EditorAttribute) => {
         this.previewSupported = attr.isTextPreviewSupported === true;
         this.previewSupportPending = false;
         this.publishPreviewMode();
+        this.secureField = SECURE_PATTERNS.indexOf(attr.inputPattern) >= 0;
         InputLog.setFieldPattern(attr.inputPattern);
       })
       .catch((_e: Error) => {
@@ -1954,6 +2037,7 @@ export class InputHandler {
     this.reloadSettings();
     this.reloadSuppressed();
     if (this.imeContext) { ClipboardPins.load(this.imeContext).catch((_e: Error) => {}); }
+    if (this.imeContext) { ClipHistory.load(this.imeContext, this.imeContext.filesDir).catch((_e: Error) => {}); }
     AppStorage.setOrCreate('composingText', '');
     AppStorage.setOrCreate('pendingRomaji', '');
     AppStorage.setOrCreate('candidates', [] as string[]);
@@ -1982,6 +2066,7 @@ export class InputHandler {
     // 欄を離れる前にプレビューを畳む (inputClient を捨てた後では解除できない)。
     this.cancelPreviewText();
     this.previewSupported = false;
+    this.secureField = false;
     this.publishPreviewMode();
     this.kbController = undefined;
     this.inputClient = undefined;
@@ -2033,7 +2118,7 @@ export class InputHandler {
       return;
     }
 
-    if (state === InputState.SELECTING) {
+    if (state === InputState.SELECTING || state === InputState.BUNSETSU) {
       // New key → commit top candidate first, then start new composition
       this.commitTopCandidate();
     }
@@ -2047,6 +2132,8 @@ export class InputHandler {
         : result.committed;
       const current = AppStorage.get<string>('composingText') ?? '';
       AppStorage.setOrCreate('composingText', current + kana);
+      this.conversionEnd = (current + kana).length;   // appendRaw・handleDirectKana と同じ (2000 + en で「えん」が範囲の外に残った)
+      AppStorage.setOrCreate('convEnd', this.conversionEnd);
       this.updateCandidates();
     }
 
@@ -2075,6 +2162,11 @@ export class InputHandler {
       this.insertText(' ');
       return;
     }
+    // 打ちかけのローマ字を先に読みへ足す (k だけ打って空白を押すと、読みが空の扱いで全角空白が入り、k が後ろに回った)
+    if (state === InputState.COMPOSING) {
+      this.appendPendingRomaji();
+      composing = AppStorage.get<string>('composingText') ?? '';
+    }
     if (state === InputState.IDLE || composing.length === 0) {
       const mode = AppStorage.get<string>('inputMode') ?? InputMode.HIRAGANA;
       if (mode === InputMode.ALPHANUMERIC) {
@@ -2087,16 +2179,23 @@ export class InputHandler {
       return;
     }
 
+    // 空白キーの「変換」は「文節」に (ユーザー 2026-11-05。フリックは前から、QWERTY も同じに): 入力中は文節に分ける
+    if (state === InputState.COMPOSING && composing.length >= 2) {
+      this.handleBunsetsu();
+      return;
+    }
+    // 文節の中: 今の文節の候補を順に (候補の一覧はそのまま、選んでいる位置と文節の表記だけ動かす)
+    if (state === InputState.BUNSETSU) {
+      const bc = AppStorage.get<string[]>('candidates') ?? [];
+      if (bc.length === 0) { return; }
+      let bi = (AppStorage.get<number>('selectedCandidateIndex') ?? 0) + 1;
+      if (bi >= bc.length) { bi = 0; }
+      AppStorage.setOrCreate('selectedCandidateIndex', bi);
+      this.bChosen[this.bCur] = bc[bi];
+      AppStorage.setOrCreate('bunsetsuTexts', this.bChosen.slice());
+      return;
+    }
     if (state === InputState.COMPOSING) {
-      // Flush any pending romaji first
-      const pending = this.converter.flushPending();
-      const mode = AppStorage.get<string>('inputMode') ?? InputMode.HIRAGANA;
-      if (pending.length > 0) {
-        const kana = mode === InputMode.KATAKANA ? toKatakana(pending) : pending;
-        composing = composing + kana;
-        AppStorage.setOrCreate('composingText', composing);
-        AppStorage.setOrCreate('pendingRomaji', '');
-      }
       // 候補は打っている間と同じ一覧 (AI 変換)。以前はここだけ旧エンジンで引き直していた
       this.updateCandidates();
       AppStorage.setOrCreate('selectedCandidateIndex', 0);
@@ -2235,7 +2334,7 @@ export class InputHandler {
       this.commitTopCandidate();
     } else if (state === InputState.COMPOSING) {
       this.commitRaw();
-    } else {
+    } else if (this.captureTarget.length === 0) {   // 辞書の登録中はアプリへ送らない
       // 送信/改行してしまうと、保留中の閉じ括弧が出る機会は永遠に失われる
       // (手動モードでは ► を押すまで待ち続けるので、なおさら取り残されや
       // すい)。開きっぱなしの文が飛んでいくのを防ぐため、送信の直前に
@@ -2264,6 +2363,7 @@ export class InputHandler {
     } else if (state === InputState.COMPOSING) {
       this.commitRaw();
     }
+    if (this.captureTarget.length > 0) { return; }   // 辞書の登録中はアプリへ送らない
     this.inputClient?.insertText('\n');
     this.markSentenceBoundary();
   }
@@ -2287,10 +2387,14 @@ export class InputHandler {
 
   commitRaw(): void {
     const composing = AppStorage.get<string>('composingText') ?? '';
-    const pending = this.converter.flushPending();
+    const pending = this.flushPendingKana();
     const all = composing + pending;
     InputLog.recordRaw(composing, all);
     if (all.length > 0) { this.insertText(all); }
+    const rawLeft = KanaKanjiConverter.recentContext();
+    if (!this.secureField && all.length > 0) { KanaKanjiConverter.addContext(all); }
+    // かなのまま確定したことも数える (数えないと、かなで打ち続けても覚えた漢字が 1 位のまま下がらない)
+    if (!this.secureField && KanaKanjiConverter.confirmChoice(all, all, rawLeft)) { this.saveLearning(); }
     // Committing as raw kana is not a conversion, so it closes any word the
     // user was assembling rather than extending it.
     this.endUnknownWordRun();
@@ -2325,7 +2429,7 @@ export class InputHandler {
       text = candidates[0] + text.slice(from.length);
     }
     InputLog.recordCommit(parts[0], text, -1, candidates.length, candidates, 'suggest', [] as string[]);
-    AiConverter.recordSuggestUse(list[index]);
+    if (!this.secureField) { AiConverter.recordSuggestUse(list[index]); }
     this.insertText(text);
     KanaKanjiConverter.addContext(text);
     AppStorage.setOrCreate('suggestList', [] as string[]);
@@ -2361,8 +2465,10 @@ export class InputHandler {
         this.saveLearning();
         this.observeUnknownWord(reading, text);
       }
+      // AI学習 (設定でオンのときだけ。パスワードの欄では学ばない)
+      if (!this.secureField) { AiConverter.aiLearn(KanaKanjiConverter.recentContext(), reading, text); }
       this.insertText(text);
-      KanaKanjiConverter.addContext(text);
+      if (!this.secureField) { KanaKanjiConverter.addContext(text); }
       const words = this.committedWords(text);
       // 残りがあるなら、それはまだ変換していない入力。確定させずに composing に
       // 戻して続けて変換できるようにする (continueWithTail のコメント参照)。
@@ -2383,6 +2489,8 @@ export class InputHandler {
   // date/time value -- and so must bypass reading→surface conversion learning
   // (かいし→会社 or きょう→"2026年7月23日" would both be wrong to learn).
   private isNonLearningCandidate(composing: string, text: string): boolean {
+    if (this.secureField) { return true; }   // パスワードの欄では何も覚えない
+    if (findPredictiveCompletion(composing) === text) { return true; }   // 決まり文句も読みの途中で出る
     if (PredictiveConversion.predict(composing, KanaKanjiConverter.getLearned(),
         KanaKanjiConverter.prefixCompletions(composing, PREDICT_DICT_HITS),
         ShortTermMemory.hitsForPrefix(composing)).indexOf(text) >= 0) {
@@ -2411,6 +2519,17 @@ export class InputHandler {
   private static readonly MAX_WHOLE_LEARN_LEN = 12;
 
   private learnCommit(composing: string, text: string): void {
+    // 1 位以外を選んだ: 選び直した語だけを語として数える (読み全体だけだと次の文に効かない)
+    const words = (AiConverter.changedWords(composing, text) ?? []).filter((w: string[]) => w[0] !== composing);
+    if (words.length > 0) {
+      for (const w of words) { KanaKanjiConverter.recordChoice(w[0], w[1], w[2]); }
+      if (composing.length <= InputHandler.MAX_WHOLE_LEARN_LEN) {
+        KanaKanjiConverter.recordChoice(composing, text, KanaKanjiConverter.recentContext());
+        ShortTermMemory.record(composing, text);
+      }
+      AiConverter.setLearnedWords(KanaKanjiConverter.strongForms());
+      return;
+    }
     const a = this.lastAlignment;
     if (a !== undefined && text.length > a.prefixText.length && text.startsWith(a.prefixText)) {
       const lastSurface = text.slice(a.prefixText.length);
@@ -2429,8 +2548,8 @@ export class InputHandler {
         KanaKanjiConverter.recordChoice(composing, text);
         ShortTermMemory.record(composing, text);
       }
-    } else {
-      KanaKanjiConverter.recordChoice(composing, text);
+    } else if (composing.length <= InputHandler.MAX_WHOLE_LEARN_LEN) {
+      KanaKanjiConverter.recordChoice(composing, text, KanaKanjiConverter.recentContext());
       ShortTermMemory.record(composing, text);
     }
   }
@@ -2457,7 +2576,7 @@ export class InputHandler {
         this.observeUnknownWord(reading, chosen);
       }
       this.insertText(chosen);
-      KanaKanjiConverter.addContext(chosen);
+      if (!this.secureField) { KanaKanjiConverter.addContext(chosen); }
       const words = this.committedWords(chosen);
       if (tail.length > 0) {
         this.pushPredictions(words);
@@ -2471,12 +2590,43 @@ export class InputHandler {
     this.commitPending();
   }
 
+  // 記号・絵文字・サブタイプの切り替えの前の確定。打ちかけのローマ字があると、候補はそれを含まない読みのものなので、
+  // 読みに足して変換し直してから確定する (nihon + 記号 で ん が消えた)。
+  commitTopWithPending(): void {
+    if ((AppStorage.get<string>('pendingRomaji') ?? '').length > 0) {
+      this.appendPendingRomaji();
+      const composing = AppStorage.get<string>('composingText') ?? '';
+      const r = AiConverter.convertNow(KanaKanjiConverter.recentContext(), composing, 1);
+      AppStorage.setOrCreate('candidates', r.cands.length > 0 ? [r.cands[0]] : [composing]);
+      AppStorage.setOrCreate('selectedCandidateIndex', 0);
+    }
+    this.commitTopCandidate();
+  }
+
   private commitPending(): void {
     const composing = AppStorage.get<string>('composingText') ?? '';
-    const pending = this.converter.flushPending();
+    const pending = this.flushPendingKana();
     const all = composing + pending;
     if (all.length > 0) { this.insertText(all); }
     this.resetComposition();
+  }
+
+  // 打ちかけのローマ字を今のモードの字にして取り出す (語末の n は ん)。
+  private flushPendingKana(): string {
+    const pending = this.converter.flushPending();
+    const mode = AppStorage.get<string>('inputMode') ?? InputMode.HIRAGANA;
+    return mode === InputMode.KATAKANA ? toKatakana(pending) : pending;
+  }
+
+  // 打ちかけのローマ字を読みの末尾に足す。足さないと変換器に残り、次の打鍵か確定で句読点の後ろに回る (にほ。ん)。
+  private appendPendingRomaji(): void {
+    const pending = this.flushPendingKana();
+    if (pending.length === 0) { return; }
+    const composing = (AppStorage.get<string>('composingText') ?? '') + pending;
+    AppStorage.setOrCreate('composingText', composing);
+    AppStorage.setOrCreate('pendingRomaji', '');
+    this.conversionEnd = composing.length;
+    AppStorage.setOrCreate('convEnd', this.conversionEnd);
   }
 
   // 変換範囲を縮めて確定したときの「残り」を、続けて変換できる状態にする。
@@ -2626,6 +2776,7 @@ export class InputHandler {
         InputHandler.dismissedClipSig = '';
         InputHandler.setClipboardPreviewState(text, false, false, '');
         this.recordClipboardHistory(text);
+        InputHandler.currentClipSig = 'T:' + text;
         return;
       }
       // A file (from Files/a Gallery share sheet) shows up as a URI record.
@@ -2634,6 +2785,7 @@ export class InputHandler {
       // of isImage. Preview it as a filename rather than the raw URI.
       const uri = data.getPrimaryUri();
       if (uri && uri.length > 0) {
+        this.recordMediaHistory(data, isImage, 'U:' + uri, InputHandler.formatFileClipPreview(uri), uri);
         if (InputHandler.clipSig('', uri, isImage) === InputHandler.dismissedClipSig) {
           InputHandler.setClipboardPreviewState('', false, false, '');
           return;
@@ -2644,6 +2796,9 @@ export class InputHandler {
         return;
       }
       if (isImage) {
+        let stamp = 0;
+        try { stamp = data.getProperty().timestamp; } catch (_e) { stamp = 0; }
+        this.recordMediaHistory(data, true, 'I:' + stamp, '', '');
         // Raw pixels only, no URI to point at (e.g. some apps' plain
         // "コピー" on an image) -- pasteClipboard() still works fine here
         // since sendPasteExtendAction doesn't need the URI, just the
@@ -2691,11 +2846,62 @@ export class InputHandler {
 
   private recordClipboardHistory(text: string): void {
     if (text.length === 0) { return; }
+    ClipHistory.addText(text);   // 保存する履歴 (2026-11-05)。clipboardHistory (文だけ・メモリ) は件数の表示などの古い呼び出し用に残す
     const history = AppStorage.get<string[]>('clipboardHistory') ?? [];
     if (history[0] === text) { return; }
     const next = [text, ...history.filter((t: string) => t !== text)]
       .slice(0, InputHandler.MAX_CLIPBOARD_HISTORY);
     AppStorage.setOrCreate('clipboardHistory', next);
+  }
+
+  // 今クリップボードにあるものの印 (履歴の画像・ファイルのうち、貼れるのはこれと同じものだけ)
+  private static currentClipSig: string = '';
+
+  // 画像・動画・ファイルを履歴へ (画像は見本を縮小して保存。同じものは見本を作り直さない)
+  private recordMediaHistory(data: pasteboard.PasteData, isImage: boolean, sig: string, name: string, uri: string): void {
+    InputHandler.currentClipSig = sig;
+    const lower = uri.toLowerCase().split('?')[0];
+    const kind = isImage ? 'image' : (/\.(mp4|m4v|mov|3gp|webm|mkv|avi)$/.test(lower) ? 'video' : 'file');
+    if (ClipHistory.has(sig)) {
+      ClipHistory.addMedia(kind, name, sig, '');
+      return;
+    }
+    let pm: image.PixelMap | undefined = undefined;
+    if (isImage) {
+      try { pm = data.getPrimaryPixelMap(); } catch (_e) { pm = undefined; }
+    }
+    if (!pm) {
+      ClipHistory.addMedia(kind, name, sig, '');
+      return;
+    }
+    ClipHistory.saveThumb(pm).then((thumb: string) => {
+      ClipHistory.addMedia(kind, name, sig, thumb);
+    }).catch((_e: Error) => { ClipHistory.addMedia(kind, name, sig, ''); });
+  }
+
+  // 履歴の 1 件を貼る。文はそのまま入れる。画像・ファイルは今クリップボードにあるものだけ、入力欄のアプリに貼り付けを頼む
+  // (拡張からはクリップボードに書けないので、古いものは貼れない)。貼れたら true
+  pasteClipItem(c: ClipItem): boolean {
+    if (c.kind === 'text') {
+      InputLog.recordPaste('history', c.text.length);
+      this.suppressInsertLog = true;
+      this.insertText(c.text, { raw: true } as InsertTextOptions);
+      this.suppressInsertLog = false;
+      return true;
+    }
+    if (c.sig !== InputHandler.currentClipSig) { return false; }
+    if (!this.sendPasteExtendAction()) { return false; }
+    InputLog.recordPaste(c.kind === 'image' ? 'image' : 'file', 0);
+    return true;
+  }
+
+  // 今クリップボードにあるものか (履歴の画像に「貼れる」印を出す)
+  isCurrentClip(c: ClipItem): boolean {
+    return c.kind === 'text' || c.sig === InputHandler.currentClipSig;
+  }
+
+  removeClipItem(id: number): void {
+    ClipHistory.remove(id);
   }
 
   // No input method on any platform can inject non-text content into an
@@ -2868,6 +3074,7 @@ export class InputHandler {
       InputHandler.dismissedClipSig = InputHandler.clipSig(history[0], '', false);
     }
     AppStorage.setOrCreate('clipboardHistory', [] as string[]);
+    ClipHistory.clear();
   }
 
   // ホスト側(確定済み、IDLE状態)テキストへの1回の操作を記録する。
@@ -2902,7 +3109,7 @@ export class InputHandler {
       this.hostCursor -= text.length;
       return;
     }
-    this.hostUndoStack.push({ kind, text, at, t: now });
+    this.hostUndoStack.push({ kind, text, at, t: now, quiet: this.suppressInsertLog });
     if (this.hostUndoStack.length > InputHandler.MAX_HOST_UNDO) {
       this.hostUndoStack = this.hostUndoStack.slice(-InputHandler.MAX_HOST_UNDO);
     }
@@ -2964,7 +3171,8 @@ export class InputHandler {
   private async undoLastHostEdit(): Promise<void> {
     const op = this.hostUndoStack.pop();
     if (op === undefined) { return; }
-    InputLog.recordUndo(`${op.kind}:${op.text}`);
+    // 貼り付けた分は中身を残さない (クリップボードの中身は入力ログに残さない方針。文字数だけ)
+    InputLog.recordUndo(op.quiet === true ? `${op.kind}:paste#${op.text.length}` : `${op.kind}:${op.text}`);
     if (op.kind === 'move') {
       await this.moveHostCursorTo(op.at);
       return;
@@ -2979,6 +3187,9 @@ export class InputHandler {
         this.markSelfEdit();
         this.hostCursor -= op.text.length;
         for (let i = 0; i < op.text.length; i++) { this.insertedBuffer.pop(); }
+        // 取り消した語が次の確定とつながって、語の組み立てや文の流れに数えられないように
+        UnknownWordLearner.abandonRun();
+        SentenceFlow.reset();
       } catch (_e) { /* 欄が外れた等。ここで失敗しても入力は続けられる。 */ }
     } else {
       // 削除の取り消し = 元あった位置へ打ち戻す。
@@ -3228,7 +3439,7 @@ export class InputHandler {
     let aiCands: string[] = [];
     if (aiMode) {
       aiCands = AiConverter.candidates(KanaKanjiConverter.recentContext(), target, () => {
-        if (this.conversionTarget() === target) { this.updateCandidates(); }
+        if (this.conversionTarget() === target) { this.onConversionDone(); }
       });
     }
     // 長い入力で前の方が固定されても入力欄には確定しない (AiConverter が固定した部分に候補を持たせ、一覧から選び直せる)
@@ -3250,7 +3461,7 @@ export class InputHandler {
     tagNew(candidates, aiMode ? 'ai' : 'kana');
     // ユーザー辞書に登録した語は、読みがちょうど一致したら先頭に (AI 変換の網にも入っているが、確実に出す。Android 版と同じ)
     const user = this.userDictRaw[target];
-    if (user !== undefined && user.length > 0) {
+    if (Array.isArray(user) && user.length > 0) {   // constructor などの読みは Object の関数が返る
       candidates = [...user, ...candidates.filter((c: string) => !user.includes(c))];
     }
     tagNew(candidates, 'user');
@@ -3385,6 +3596,12 @@ export class InputHandler {
       const rest = shown.filter((c: string) => sugg.indexOf(c) < 0 && dates.indexOf(c) < 0);
       if (rest.length > 0) { shown = rest; }
     }
+    // 読みのままの形は 5 番目までに必ず出す (あいうえおんがく のような題名。スマホには無変換キーが無い。ユーザー 2026-10-31)
+    const kanaAt = shown.indexOf(target);
+    if (kanaAt > 4) {
+      shown.splice(kanaAt, 1);
+      shown.splice(4, 0, target);
+    }
     AppStorage.setOrCreate('candidates', shown);
     AppStorage.setOrCreate('selectedCandidateIndex', 0);
     if (DEBUG_INPUT_LOG) {
@@ -3401,6 +3618,23 @@ export class InputHandler {
       // updateCandidates が先に走ってこのタイマーは捨てられる。
       this.enrichPending = true;
       this.enrichTimer = setTimeout(() => { this.enrichCandidates(composing); }, ENRICH_DELAY_MS);
+    }
+  }
+
+  // 裏の変換の結果が届いた。文節を選んでいる間は一覧を替えない (全文の候補に替わると、押したときに今の文節へ全文が入る)。
+  // 候補を選んでいる間は、選んでいた候補を保つ (無くなっていたら同じ位置)。
+  private onConversionDone(): void {
+    const state = AppStorage.get<string>('inputState') ?? InputState.IDLE;
+    if (state === InputState.COMPOSING) {
+      this.updateCandidates();
+    } else if (state === InputState.SELECTING) {
+      const before = AppStorage.get<string[]>('candidates') ?? [];
+      const idx = AppStorage.get<number>('selectedCandidateIndex') ?? 0;
+      const picked = idx < before.length ? before[idx] : '';
+      this.updateCandidates();
+      const now = AppStorage.get<string[]>('candidates') ?? [];
+      const at = now.indexOf(picked);
+      AppStorage.setOrCreate('selectedCandidateIndex', at >= 0 ? at : Math.max(0, Math.min(idx, now.length - 1)));
     }
   }
 
@@ -3515,6 +3749,12 @@ export class InputHandler {
     if (state === InputState.SELECTING || state === InputState.BUNSETSU) {
       this.commitTopCandidate();
     }
+    if (this.secureField) {   // パスワードの欄は組み立てず、打った字をそのまま入れる
+      this.commitPending();
+      this.insertText(ch, { raw: true } as InsertTextOptions);
+      return;
+    }
+    this.appendPendingRomaji();
     const current = AppStorage.get<string>('composingText') ?? '';
     AppStorage.setOrCreate('composingText', current + ch);
     AppStorage.setOrCreate('pendingRomaji', '');
@@ -3550,6 +3790,7 @@ export class InputHandler {
       this.commitTopCandidate();
     }
 
+    this.appendPendingRomaji();
     const current = AppStorage.get<string>('composingText') ?? '';
     AppStorage.setOrCreate('composingText', current + kana);
     AppStorage.setOrCreate('pendingRomaji', '');
@@ -3567,15 +3808,8 @@ export class InputHandler {
   handleBunsetsu(): void {
     const state = AppStorage.get<string>('inputState') ?? InputState.IDLE;
     if (state !== InputState.COMPOSING) { return; }
-    let composing = AppStorage.get<string>('composingText') ?? '';
-    const pending = this.converter.flushPending();
-    const mode = AppStorage.get<string>('inputMode') ?? InputMode.HIRAGANA;
-    if (pending.length > 0) {
-      const kana = mode === InputMode.KATAKANA ? toKatakana(pending) : pending;
-      composing = composing + kana;
-      AppStorage.setOrCreate('composingText', composing);
-      AppStorage.setOrCreate('pendingRomaji', '');
-    }
+    this.appendPendingRomaji();
+    const composing = AppStorage.get<string>('composingText') ?? '';
     if (composing.length === 0) { return; }
     this.splitBunsetsu(composing);
     this.bCur = 0;
@@ -3590,7 +3824,9 @@ export class InputHandler {
     const top = r.cands.length > 0 ? r.cands[0] : composing;
     this.bSegs = [];
     this.bChosen = [];
-    if (r.ends.length === 0) {
+    // 数字にする・打ち間違いを直すなどで 1 位が差し替わると、語の区切りは 1 位と合わない (2000円 に 二千|円 の長さ)。切ると字が欠けるので 1 文節に
+    const segLen = r.lens.reduce((sum: number, len: number) => sum + len, 0);
+    if (r.ends.length === 0 || segLen !== top.length) {
       this.bSegs.push(composing);
       this.bChosen.push(top);
       return;
@@ -3645,8 +3881,15 @@ export class InputHandler {
     if (state !== InputState.BUNSETSU) { return; }
     const text = this.bChosen.join('');
     InputLog.recordBunsetsuFinal(this.bSegs.join(''), text, this.bChosen);
-    for (let i = 0; i < this.bSegs.length; i++) {
-      KanaKanjiConverter.recordChoice(this.bSegs[i], this.bChosen[i]);
+    const learnSegs = this.secureField ? 0 : this.bSegs.length;   // パスワードの欄では何も覚えない
+    for (let i = 0; i < learnSegs; i++) {
+      // かなのままの文節 (助詞など) は、その読みの学習があるときだけ数える (recordSegmentedChoice・PC 版と同じ。全部数えると読みの枠を食う)
+      const segLeft = KanaKanjiConverter.recentContext() + this.bChosen.slice(0, i).join('');
+      if (this.bSegs[i] === this.bChosen[i]) {
+        KanaKanjiConverter.confirmChoice(this.bSegs[i], this.bChosen[i], segLeft);
+      } else {
+        KanaKanjiConverter.recordChoice(this.bSegs[i], this.bChosen[i], segLeft);
+      }
       // 「足立レイ」のような、辞書が読み全体では出せず自動で2文節に割れて
       // 毎回セグメントごとにタップし直している名前も、UnknownWordLearner
       // から見れば PIECEWISE (音+街+ウナ 方式) と全く同じ信号のはず -- 唯一の
@@ -3662,6 +3905,7 @@ export class InputHandler {
     }
     this.saveUnknownWords();
     this.insertText(text);
+    if (!this.secureField) { KanaKanjiConverter.addContext(text); }
     // 複数文節にまたがる文の確定はここが通り道で、commitCandidate/
     // commitTopCandidate と違って pushPredictions() が一度も呼ばれていな
     // かった。次単語予測の学習(NextWordPredictor.record)も予測ストリップの
@@ -3683,8 +3927,7 @@ export class InputHandler {
       InputLog.recordBunsetsuPick(this.bSegs[this.bCur], candidates[index], index,
         candidates.length, candidates, this.candidatePickVia(),
         [] as string[]);
-      KanaKanjiConverter.recordChoice(this.bSegs[this.bCur], candidates[index]);
-      this.bChosen[this.bCur] = candidates[index];
+      this.bChosen[this.bCur] = candidates[index];   // 数えるのは commitBunsetsu で 1 回だけ (ここでも数えると 1 回の操作で 2 回分になる)
     }
     // Advance to next segment if available
     if (this.bCur + 1 < this.bSegs.length) {
@@ -3729,8 +3972,9 @@ export class InputHandler {
     // 括弧の自動閉じ (設計意図は BRACKET_PAIRS のコメント参照)。
     // カーソルは一切動かさず、開きだけを今確定して、閉じは次の確定の
     // 直後まで保留する。
+    // パスワードの欄も掛けない (伏せ字で気づけないまま閉じ括弧が入り、ログインに失敗する)。
     let finalText = text;
-    if (opts?.raw !== true) {
+    if (opts?.raw !== true && !this.secureField) {
       let newOpen: string | undefined;
       let newClose: string | undefined;
       if (text.length === 2 && BRACKET_PAIRS[text[0]] === text[1]) {
@@ -3792,14 +4036,17 @@ export class InputHandler {
     this.markSelfEdit();
     if (!previewCommitted && this.cursorIntoPair) {
       // 括弧を組で入れた: 同期の API で入れてすぐ中へ動かす (待ってから動かすとカーソルが跳ぶのが見えた。ユーザー 2026-10-13)
+      let inserted = false;
       try {
         this.inputClient?.insertTextSync(finalText);
+        inserted = true;
         this.inputClient?.moveCursorSync(inputMethodEngine.Direction.CURSOR_LEFT);
         this.cursorIntoPair = false;
         this.markSelfEdit();
         this.hostCursor -= 1;
       } catch (_e) {
-        this.inputClient?.insertText(finalText);   // 同期の API が使えない: 下で少し待ってから動かす
+        // 同期の API が使えない: 下で少し待ってから動かす。入れた後に動かせなかっただけなら入れ直さない (二重になる)
+        if (!inserted) { this.inputClient?.insertText(finalText); }
       }
     } else if (!previewCommitted) { this.inputClient?.insertText(finalText); }
     if (!this.suppressInsertLog) {
@@ -3820,7 +4067,8 @@ export class InputHandler {
       // @ を入れた (あっと の変換・記号の欄・英数字キーボード): 予測の帯にメールのドメインを出す (ユーザー 2026-10-13)。
       // 確定の後に呼ばれる pushPredictions が帯を書き換えるので、その後で
       // 文の流れ (SentenceFlow) にも入れて、確定の後の帯に「。」や次の文を出す (メールのドメインが先)
-      SentenceFlow.feed(finalText);
+      // パスワードの欄の字は入れない (句読点で節が閉じて、平文で保存される)
+      if (!this.secureField) { SentenceFlow.feed(finalText); }
       if (this.cursorIntoPair) {
         this.cursorIntoPair = false;
         // insertText の直後に間を置かず動かすと無視される実機バグがあった (moveHostCursorTo のコメント) ので、少し待ってから
@@ -3829,7 +4077,7 @@ export class InputHandler {
         }, 30);
       }
       setTimeout(() => {
-        if (!this.showEmailDomains()) { this.showFlowPredictions(); }
+        if (!this.secureField && !this.showEmailDomains()) { this.showFlowPredictions(); }
       }, 0);
     }
   }
@@ -4562,7 +4810,7 @@ export class KeyboardController {
         };
         const mode = modeMap[subtype.id];
         if (mode) {
-          this.inputHandle.commitTopCandidate();
+          this.inputHandle.commitTopWithPending();
           AppStorage.setOrCreate('inputMode', mode);
         }
       });

@@ -63,6 +63,11 @@ private:
 };
 Core& core();
 
+// クリップボードの履歴 (shunti_clip.exe)。open = 今の入力欄に貼るための窓を出す。
+// start_listener = 常駐していなければ記録のために起動する (IME が使われ始めたとき。設定で切っていれば呼ばない)
+void open_clip_history();
+void start_clip_listener();
+
 // Windows がダークモード (アプリ) か
 bool apps_dark();
 // タスクバーがダークか

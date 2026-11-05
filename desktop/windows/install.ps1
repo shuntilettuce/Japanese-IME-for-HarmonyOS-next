@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 $Dest = Join-Path $env:ProgramFiles 'shunti IME'
 $Files = @('shunti_ime_x64.dll', 'shunti_ime_x86.dll', 'shunti_settings.exe', 'kkc_lex.bin', 'kkc_model.bin', 'LICENSE.txt')
 # 軽量・高精度の変換モデル (設定で選ぶ)。無ければ標準 (kkc_model.bin) だけで動く
-$Optional = @('install.ps1', 'uninstall.bat', 'shunti_kana_fix.exe', 'kkc_model_light.bin', 'kkc_model_s2.bin', 'kkc_variants.tsv', 'kkc_register.bin')   # kkc_variants.tsv = 書き方の対の表・kkc_register.bin = 文の種類の判定器
+$Optional = @('install.ps1', 'uninstall.bat', 'shunti_hand.exe', 'shunti_clip.exe', 'shunti_kana_fix.exe', 'kkc_model_light.bin', 'kkc_model_s2.bin', 'kkc_variants.tsv', 'kkc_register.bin')   # kkc_variants.tsv = 書き方の対の表・kkc_register.bin = 文の種類の判定器
 # スタートメニューの「shunti IME の設定」(全員分)
 $Shortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\shunti IME の設定.lnk'
 $Is64 = [Environment]::Is64BitOperatingSystem
@@ -60,6 +60,7 @@ function Invoke-AdminPart {
         Unregister-All
         Remove-Item -LiteralPath $Shortcut -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $UninstallKey -Force -ErrorAction SilentlyContinue
+        Get-Process -Name 'shunti_settings', 'shunti_hand', 'shunti_clip' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         if (Test-Path -LiteralPath $Dest) {
             Get-ChildItem -LiteralPath $Dest -File | ForEach-Object { Remove-OrRetire $_.FullName }
             try { Remove-Item -LiteralPath $Dest -Force -ErrorAction SilentlyContinue } catch {}
@@ -72,7 +73,7 @@ function Invoke-AdminPart {
     }
     # 開いている設定の画面を閉じる (設定は変えるたびに保存しているので失うものは無い)。残すと、名前を変えた古い版の画面が
     # 開いたままになり、切り替えが保存されないことがあった (2026-10-27)
-    Get-Process -Name 'shunti_settings' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Get-Process -Name 'shunti_settings', 'shunti_hand', 'shunti_clip' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     # 古いものを外す前に全部写し切る。途中で失敗しても今の IME は動いたまま
     New-Item -ItemType Directory -Force -Path $Dest | Out-Null
     Get-ChildItem -LiteralPath $Dest -Filter '*.old-*' -File -ErrorAction SilentlyContinue | ForEach-Object {

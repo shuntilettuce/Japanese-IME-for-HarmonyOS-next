@@ -197,7 +197,7 @@ export struct EmojiView {
                   .borderRadius(8)
                   .shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
                   .onClick(() => {
-                    this.h().commitTopCandidate();
+                    this.h().commitTopWithPending();
                     this.h().insertText(emoji);
                   })
               }, (emoji: string) => 'e' + emoji)

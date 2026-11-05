@@ -1,6 +1,9 @@
 // 変換エンジン (engine.cpp) の窓口。差別語の候補を弾き、長すぎる読みは分けて変換し、1 位の候補を文節に分ける。
 #pragma once
 #include <cstddef>
+#include <atomic>
+#include <filesystem>
+#include <thread>
 #include <vector>
 
 #include "store.h"
@@ -62,7 +65,8 @@ public:
     bool has_right_ctx() const;
     // 提案を候補に混ぜず Conversion::sugg に分けて出すか (設定「提案を分けて表示する」)
     void set_suggest(bool on);
-    void set_typo(bool on);    // ローマ字の打ち間違いの直し (既定オン)
+    // ローマ字の打ち間違いの直し (既定オン)。bias = 打ち間違いの辺の点数から引く値 (0 = 学習どおり、大きいほど控えめ。typo_bias_of)
+    void set_typo(bool on, float bias = 0.f);
     void set_latin(bool on);   // 英字の打ち分け (既定オン)
     // M5 の個人化 (版 6 のモデルのときだけ効く)。書き方の対の表 (TSV)・表記ごとの使う人の印
     bool personal() const;
@@ -83,8 +87,22 @@ public:
     std::vector<u16> complete(const u16& prefix, int max, int max_extra = 6);
     // ユーザー辞書の語を網に入れ直す (前の分は消す)
     int set_user_words(const std::vector<UserDict::Form>& forms, int bonus = 800);
+    // AI学習 (設定、既定オフ): 確定した文から、変換の点に上乗せする小さいモデルを育てる (engine.h の kkc_romance_*)。
+    // path = 育てた中身の保存先 (空ならオフ)。ほかの窓 (別のプロセス) が書き換えたら、次に使うときに読み直す。
+    // オンにしたとき、まだ学んでいない確定した文の記録 (recent_learn.tsv) があれば、裏でまとめて学ぶ
+    void set_ai_learn(const std::filesystem::path& path);
+    // 確定した文 (左の文脈 ctx・読み・表記) から 1 歩学ぶ。返り値 = 学ぶ前の損失 (学ばなかったら負)。オフなら何もしない
+    float ai_learn(const u16& ctx, const u16& reading, const u16& text);
+    const std::filesystem::path& ai_file() const { return ai_path_; }   // 今のモデルの保存先 (試験用)
+    bool ai_busy() const { return ai_busy_; }   // 記録からまとめて学んでいる最中
+    void ai_wait();                             // まとめて学ぶのが終わるまで待つ (試験用)
+    int ai_bulk_learned() const { return ai_bulk_learned_; }   // 最後にまとめて学んだ件数
 
 private:
+    void ai_sync();   // 保存した中身がほかで書き換わった・消されたら合わせる
+    void ai_save();
+    void ai_start_bulk();
+    void ai_stop_bulk();
     // 返り値 false = 読みが長すぎる
     bool convert_once(const u16& ctx, const u16& kana, int max, Conversion& out);
 
@@ -94,9 +112,22 @@ private:
     bool suggest_ = true;
     bool latin_ = true;
     bool typo_ = true;
+    float typo_bias_ = 0.f;
     std::string variants_;   // モデルを替えて開き直したときに入れ直す
     StyleModel style_;
     bool restyle_ = false;
+    std::filesystem::path ai_base_;   // 渡された保存先 (…/ai_learn.bin)
+    std::filesystem::path ai_path_;   // 今のモデルの保存先 (…/ai_learn_<モデルの印>.bin。2026-11-06)
+    std::filesystem::file_time_type ai_seen_{};   // 最後に読んだか書いたときの保存先の時刻 (無ければ既定値)
+    bool ai_ready_ = false;   // 今のエンジンに ai_path_ のオン・オフを入れた
+    long long ai_until_ = 0, ai_bytes_ = 0;   // 保存した中身が学んだ記録の時刻・そのときの記録の大きさ
+    std::thread ai_bulk_;
+    std::atomic<bool> ai_stop_{false}, ai_busy_{false};
+    std::atomic<int> ai_bulk_learned_{0};
+    const void* lex_ = nullptr;     // 開いた辞書とモデル (裏で学ぶエンジンを開く)
+    size_t lex_size_ = 0;
+    const void* model_ = nullptr;
+    size_t model_size_ = 0;
 };
 
 // 語をつないで差別語になった候補か (HarmonyOS 版 AiConverter.SLURS と同じ)

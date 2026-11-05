@@ -1373,6 +1373,12 @@ void kanji_continuation_edges(const Lex& L, const ustr& ctx, const ustr& r, std:
 // user_latin: ユーザー辞書の英字の語 (小文字・空白なしの綴り -> 語。ShuntiLettuce)。空白を挟んで打った区間 (shunti lettuce) も当てる
 // ローマ字としてありえないキーの並びがあるか (大文字、または js・ml・ck のような子音の続き)。かなだけに読める区間でも、こういう並びなら
 // 英字を打ったとみなして打ったままの辺を作る (json・yaml・AzuYahi が網に入らなかった。2026-10-24)。普通のローマ字には出ないので網は重くならない
+bool small_romaji(const uint16_t* k, int n) {   // l・x (日本語では小さい字 ぁ・っ を打つときだけ) を打った
+    for (int i = 0; i < n; i++)
+        if (k[i] == u'l' || k[i] == u'x') return true;
+    return false;
+}
+
 bool unromaji(const uint16_t* k, int n) {
     auto cons = [](uint16_t c) { return c >= u'a' && c <= u'z' && c != u'a' && c != u'i' && c != u'u' && c != u'e' && c != u'o'; };
     for (int i = 0; i < n; i++) {
@@ -1393,8 +1399,42 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
                  const ustr& r, const std::unordered_map<std::string, LatinWord>& user_latin, std::vector<Edge>& out,
                  bool left_latin = false, bool right_latin = false) {
     const int nkeys = int(keys.size());
+    // 空白で区切った塊 (読みに英字が残った所を含む) の打ったキー全体が英字の語 (harmony) なら、その塊の中を英字の語で
+    // 切らない。切ると harmo + NY (読み はrもny) のように、塊の一部が別の英字の語に当たった (ユーザー 2026-11-06)
+    std::vector<int> whole_end(size_t(n), -1);   // 塊の中の字 -> 塊の終わり (塊全体が英字の語のときだけ)
+    for (int a = 0; a < n;) {
+        if (r[size_t(a)] == U' ') { a++; continue; }
+        int b = a;
+        bool left = false;
+        while (b < n && r[size_t(b)] != U' ') {
+            if (r[size_t(b)] < 0x80 && std::isalpha(int(r[size_t(b)]))) left = true;
+            b++;
+        }
+        const int ka = a == 0 ? 0 : span_end[size_t(a - 1)];
+        const int kb = b == n ? nkeys : span_end[size_t(b - 1)];
+        if (left && kb - ka >= 2) {
+            std::string lower;
+            bool ok = true;
+            for (int i = ka; i < kb && ok; i++) {
+                const uint16_t c = keys[size_t(i)];
+                if (c >= u'a' && c <= u'z') lower.push_back(char(c));
+                else if (c >= u'A' && c <= u'Z') lower.push_back(char(c + 32));
+                else ok = false;
+            }
+            if (ok && (L.latin_words.count(lower) || user_latin.count(lower)))
+                for (int i = a; i < b; i++) whole_end[size_t(i)] = b;
+        }
+        a = b;
+    }
+    auto inside_whole = [&](int s, int e) {
+        if (whole_end[size_t(s)] < 0) return false;
+        const int b = whole_end[size_t(s)];
+        const bool start = s == 0 || r[size_t(s - 1)] == U' ';
+        return !(start && e == b);
+    };
     // かなの区間 [s, e) に、キーの区間 [ks, ke) が英字だけの英単語に当たる辺を足す
     auto add = [&](int ks, int ke, int s, int e) {
+        if (inside_whole(s, e)) return;
         if (ke - ks < 2) {   // 1 字の語は英語の文の中の i・a だけ (前後が空白か英語の文脈。学習の網と同じ)
             if (ke - ks != 1) return;
             const uint16_t c = keys[size_t(ks)];
@@ -1442,7 +1482,9 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
         auto it = L.latin_words.find(lower);
         // Shift で大文字を打った区間は、打った書き方のつもり (辞書の書き方で止めず、打ったままの辺に回す。（Luke）
         const bool upper = std::any_of(keys.begin() + ks, keys.begin() + ke, [](uint16_t c) { return c >= u'A' && c <= u'Z'; });
-        if (it != L.latin_words.end() && kana_span && !camel(it->second.surf)) {
+        // l・x を打った区間は英語のつもり (日本語では小さい字にしか使わない。lettuce -> ぇっつせ。ユーザー 2026-11-05)
+        const bool lx = small_romaji(keys.data() + ks, ke - ks);
+        if (it != L.latin_words.end() && kana_span && !camel(it->second.surf) && !lx) {
             if (!upper) return;
             it = L.latin_words.end();
         }
@@ -1469,7 +1511,7 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
         // 大文字にしたい人は Shift で打つ
         // かなだけの区間には作らない (M5 でキーの並びを常に渡すと、あらゆる区間に打ったままの辺ができて網が数倍に重くなった。2026-10-23)。
         // 読みに英字が残った所 (辞書に無い英字を打った: minecraft) にだけ
-        if (std::all_of(r.begin() + s, r.begin() + e, is_kana) && !unromaji(keys.data() + ks, ke - ks)) return;
+        if (std::all_of(r.begin() + s, r.begin() + e, is_kana) && !unromaji(keys.data() + ks, ke - ks)) return;   // l・x だけでは作らない (lett + 失せ のような辺ができた)
         ustr typed;
         for (int i = ks; i < ke; i++) typed.push_back(char32_t(keys[size_t(i)]));
         out.push_back({s, e, typed, L.noun, L.noun, LATIN_RAW_COST + LATIN_BIAS, K_LATIN});
@@ -1481,6 +1523,56 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
             add(ks, ke, s, e);
             // 読みの最後の区間は、読みにならなかったキー (余り、語末の子音) も含めて試す
             if (e == n && nkeys > ke) add(ks, nkeys, s, e);
+        }
+    }
+    // 英字の語がかなの途中で終わる所 (minecraftapuri -> 読み みねcらfたぷり: minecraft は「た」の t で終わり、a は次の語の頭)。
+    // かなの区切りにしか辺を置けないので、英字の語 + 残りの母音で始まる辞書の語 (あぷり -> アプリ) を 1 つの辺にする (ユーザー 2026-11-05)
+    // e: かなの塊 (同じキーで決まった字の並び。va -> ゔぁ・ryo -> りょ) の終わり。c0: 塊の頭の字 (学習の網 kkcnative2 と同じ)
+    for (int e = 1; e < n; e++) {
+        const int kend = span_end[size_t(e - 1)];
+        if (span_end[size_t(e)] == kend) continue;   // 塊の途中
+        int c0 = e - 1;
+        while (c0 > 0 && span_end[size_t(c0 - 1)] == kend) c0--;
+        const int kb = c0 == 0 ? 0 : span_end[size_t(c0 - 1)];
+        if (kend - kb < 2 || !std::all_of(r.begin() + c0, r.begin() + e, is_kana)) continue;
+        static const char16_t* const VOWELS = u"aiueo";
+        static const char16_t* const KANA = u"あいうえお";
+        uint16_t vk = keys[size_t(kend - 1)];
+        if (vk >= u'A' && vk <= u'Z') vk = uint16_t(vk + 32);
+        const char16_t* vp = std::char_traits<char16_t>::find(VOWELS, 5, char16_t(vk));
+        if (!vp) continue;
+        const uint16_t vowel = uint16_t(KANA[vp - VOWELS]);
+        for (int s = 0; s < c0; s++) {
+            const int ks = s == 0 ? 0 : span_end[size_t(s - 1)];
+            if (kend - 1 - ks < 2) continue;
+            // 辞書・ユーザー辞書にある英字の語か、Shift で大文字を打った語 (AC・ROM・CSV: 英語のつもりがはっきりしている) だけ
+            // (小文字の打ったままの並びを途中で切ると minecraftap + 売り のような辺ができた)
+            std::string lower;
+            bool up = false;
+            for (int i = ks; i < kend - 1; i++) {
+                const uint16_t c = keys[size_t(i)];
+                up |= c >= u'A' && c <= u'Z';
+                lower.push_back(c >= u'A' && c <= u'Z' ? char(c + 32) : c < 0x80 ? char(c) : '?');
+            }
+            if (!L.latin_words.count(lower) && !user_latin.count(lower) && !up) continue;
+            const size_t before = out.size();
+            add(ks, kend - 1, s, e);   // 英字の語 (キーは母音の前まで)
+            if (out.size() == before) continue;
+            std::vector<Edge> words(out.begin() + long(before), out.end());
+            out.resize(before);   // かなの途中までの辺だけでは読みが合わない
+            std::vector<uint16_t> key(1, vowel);
+            for (int e2 = e + 1; e2 <= std::min(n, e + L.max_word - 1); e2++) {
+                if (!is_kana(r[size_t(e2 - 1)])) break;
+                key.push_back(uint16_t(r[size_t(e2 - 1)]));
+                uint32_t a, b;
+                if (!L.find(key.data(), int(key.size()), a, b)) continue;
+                for (uint32_t j = a; j < b; j++) {
+                    const Ent en = L.ent(j);
+                    if (en.cost >= ENG_COST) continue;
+                    for (const Edge& w : words)
+                        out.push_back({s, e2, w.surf + from16(L.s_blob + en.soff, en.slen), w.lid, int32_t(en.rid), w.cost + en.cost, K_LATIN});
+                }
+            }
         }
     }
 }
@@ -1712,6 +1804,9 @@ struct Model {
     // 版 6 (M5): 使う人の印 (n_user 行) と書き方の印 (n_style 行) の表。k の全結合の真ん中の区切り (先頭の文字 + 種別) を掛けたもの
     int n_user = 0, n_style = 0;
     const float *Kuser = nullptr, *Kstyle = nullptr;
+    // 版 7: 使う人のベクトル v (d_uvec 次元) を q に足す重み W (d_uvec × dk、(入力, 出力))。辺の点は (q + W·v)·k/√dk
+    int d_uvec = 0;
+    const float* Wu = nullptr;
     int vid(char32_t c) const { auto it = vocab.find(c); return it == vocab.end() ? UNK : it->second; }
 };
 
@@ -1946,10 +2041,76 @@ void layernorm(const float* x, int T, int d, const float* w, const float* b, flo
 
 }  // namespace
 
+// 使う人ごとに育つ小さいモデル (版 7 のモデル)。本体は固めたまま、確定した文から次の 3 つを動かす:
+//   v (d_uvec 次元): 使う人のベクトル。q に W·v を足す (初めは 0 = 本体そのまま)
+//   W (d_uvec × dk): v を q の向きに写す重み。初めはモデルの値
+//   網 (dk → H → 1): 辺ごとの q と k の積から点の上乗せ Δu を出す。Δu = cap·tanh(Σ c·relu(A·(q∘k)/√dk + a) / cap)。c は 0 から。
+//   v・W・網で約 1 万個 (dk 128 なら 8,000 余り、dk 192 なら 1 万 2 千余り)
+// 辺の点は u = (q + W·v)·k/√dk + Δu (門 (ダイヤル) には足さない。学習側と同じ)。
+// 損失は確定した文の CRF の負の対数尤度。∂L/∂u = (全経路の周辺確率) - (確定した文の経路の周辺確率) なので、網の外は逆伝播しない
+struct Romance {
+    bool on = false;
+    int du = 0, dk = 0, H = 32;
+    std::vector<float> v, W, W0, A, A0, a, c;   // A: H × dk。W0・A0 は初めの値 (引き戻す先)
+    float cap = 2.0f;                       // Δu の上限 (点の単位はコスト 1000 = 1)
+    float lr_v = 0.05f, lr_W = 0.002f, lr_net = 0.01f, l2 = 0.001f;   // l2: 初めの値へ引き戻す強さ
+    int updates = 0;
+    std::vector<float> s;                   // W·v (dk)。変換のたびに作る
+    // 直前の変換の網と、辺ごとの q・k (学ぶときに使う)
+    std::vector<Edge> E;
+    int n = 0;
+    std::vector<float> q, k;                // 辺ごと (辺の数 × dk)
+    size_t size() const { return v.size() + W.size() + A.size() + a.size() + c.size(); }
+    void init(int du_, int dk_, const float* Wm) {   // Wm が無いモデル (版 6 まで) は du = 0 で網だけ
+        du = Wm ? du_ : 0; dk = dk_;
+        v.assign(size_t(du), 0.0f);
+        W0.assign(Wm, Wm + size_t(du) * dk);
+        W = W0;
+        A.resize(size_t(H) * dk);
+        uint64_t x = 0x9E3779B97F4A7C15ull;   // 決まった乱数 (どの端末でも同じ初期値)
+        const float sd = 1.0f / std::sqrt(float(dk));
+        for (auto& w : A) {
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            const double u1 = (double(x >> 11) + 0.5) / 9007199254740992.0;
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            const double u2 = double(x >> 11) / 9007199254740992.0;
+            w = float(std::sqrt(-2.0 * std::log(u1)) * std::cos(6.283185307179586 * u2)) * sd;
+        }
+        A0 = A;
+        a.assign(size_t(H), 0.0f);
+        c.assign(size_t(H), 0.0f);
+        updates = 0;
+    }
+    void prepare() {   // s = W·v
+        s.assign(size_t(dk), 0.0f);
+        for (int i = 0; i < du; i++) {
+            if (v[size_t(i)] == 0.0f) continue;
+            const float* w = W.data() + size_t(i) * dk;
+            for (int j = 0; j < dk; j++) s[size_t(j)] += v[size_t(i)] * w[j];
+        }
+    }
+    // 辺の点の上乗せ。hid に網の中間 (H) を残す
+    float extra(const float* q, const float* kk, float sc, float* hid) const {
+        float t = 0, o = 0;
+        for (int j = 0; j < dk; j++) t += s[size_t(j)] * kk[j];
+        for (int h = 0; h < H; h++) {
+            const float* ar = A.data() + size_t(h) * dk;
+            float p = 0;
+            for (int j = 0; j < dk; j++) p += ar[j] * q[j] * kk[j];
+            p = p * sc + a[size_t(h)];
+            hid[h] = p;
+            if (p > 0) o += c[size_t(h)] * p;
+        }
+        return t * sc + cap * std::tanh(o / cap);
+    }
+};
+
 struct kkc_engine {
     Lex lex;
     Model m;
+    Romance ro;
     std::vector<uint8_t> own_lex, own_model;   // kkc_open_files のときだけ中身を持つ
+    uint32_t model_tag = 0;                     // モデルの印 (kkc_model_tag)
     Pool pool;
     std::unordered_map<int, std::vector<float>> prow[3];   // 版 5 の Pa・Pb・Pc の行 (使った文字だけ計算して覚える)
     double times[5] = {0, 0, 0, 0, 0};
@@ -2030,7 +2191,8 @@ bool load_model(Model& M, const void* data, size_t size) {
     // 版 2: 全結合の重みは (入力, 出力)。版 3: + ダイヤル。版 4: 版 3 の文字ごとの表を int8 に。
     // 版 5: 版 4 + 層の大きな全結合も int8 (出力ごとの倍率)、Pa・Pb・Pc の代わりに k の全結合 (配る大きさ 24.8MB -> 約 6MB)
     // 版 6: 版 5 + 最後に 使う人の印・書き方の印の表 (M5)
-    if (ver < 2 || ver > 6) return false;
+    // 版 7: 版 6 + 最後に 使う人のベクトルを q に足す重み W
+    if (ver < 2 || ver > 7) return false;
     M.V = r.val<int32_t>(); M.d = r.val<int32_t>(); M.layers = r.val<int32_t>(); M.heads = r.val<int32_t>();
     M.ff = r.val<int32_t>(); M.dk = r.val<int32_t>(); M.max_len = r.val<int32_t>(); M.n_seg = r.val<int32_t>();
     M.ctx = r.val<int32_t>(); M.draft_max = r.val<int32_t>(); M.draft = r.val<int32_t>();
@@ -2081,6 +2243,10 @@ bool load_model(Model& M, const void* data, size_t size) {
         M.n_user = r.val<int32_t>(); M.n_style = r.val<int32_t>();
         if (M.n_user > 0) M.Kuser = r.arr<float>(size_t(M.n_user) * d);
         if (M.n_style > 0) M.Kstyle = r.arr<float>(size_t(M.n_style) * d);
+    }
+    if (ver >= 7) {
+        M.d_uvec = r.val<int32_t>();
+        if (M.d_uvec > 0) M.Wu = r.arr<float>(size_t(M.d_uvec) * dk);
     }
     return r.ok;
 }
@@ -2256,6 +2422,13 @@ void scores(kkc_engine* E, int rstart, int n, const std::vector<Edge>& ed, std::
     // nbest が足す β·cost との差 β·(g-1)·cost を u の側で引く (学習側の forward_u と同じ)。gate(q) は区間ごとに 1 回
     std::vector<float> GQ;
     std::vector<char> gq_done;
+    Romance& ro = E->ro;   // 使う人ごとの小さいモデル: 点を上乗せし、学ぶときのために辺ごとの q・k を残す
+    std::vector<float> rh(size_t(ro.H));
+    if (ro.on) {
+        ro.prepare();
+        ro.q.resize(ed.size() * size_t(dk));
+        ro.k.resize(ed.size() * size_t(dk));
+    }
     for (size_t i = 0; i < ed.size(); i++) {
         const int a = span_q(ed[i].s, ed[i].e), b = word_k(ed[i]);
         const float *q = Q.data() + size_t(a) * dk, *k = K.data() + size_t(b) * dk;
@@ -2270,6 +2443,11 @@ void scores(kkc_engine* E, int rstart, int n, const std::vector<Edge>& ed, std::
             for (int j = 0; j < dk; j++) t += gq[j] * k[j];
             const float g = 2.0f / (1.0f + std::exp(-t * sc));
             ui -= M.beta * (g - 1.0f) * float(ed[i].cost) / 1000.0f;
+        }
+        if (ro.on) {
+            ui += ro.extra(q, k, sc, rh.data());
+            std::copy(q, q + dk, ro.q.data() + i * size_t(dk));
+            std::copy(k, k + dk, ro.k.data() + i * size_t(dk));
         }
         u[i] = ui;
     }
@@ -2365,6 +2543,15 @@ KKC_API kkc_engine* kkc_open(const void* lex, size_t lex_size, const void* model
     init_numbers();
     auto* e = new kkc_engine();
     if (!load_lex(e->lex, lex, lex_size) || !load_model(e->m, model, model_size)) { delete e; return nullptr; }
+    {   // モデルの印: 大きさ + 頭の 4KB + 全体から間をあけて拾ったバイトの FNV-1a (全部は読まない。開くのを遅くしない)
+        const auto* b = static_cast<const uint8_t*>(model);
+        uint32_t h = 2166136261u;
+        auto mix = [&h](uint8_t c) { h ^= c; h *= 16777619u; };
+        for (int k = 0; k < 8; k++) mix(uint8_t(uint64_t(model_size) >> (8 * k)));
+        for (size_t k = 0; k < model_size && k < 4096; k++) mix(b[k]);
+        for (size_t k = 4096; k < model_size; k += 1021) mix(b[k]);
+        e->model_tag = h;
+    }
     e->lex.typo = e->m.n_kind > K_TYPO;   // モデルが打ち間違いの辺を知っていれば作る
     if (e->lex.typo) e->lex.build_bloom();
     e->lex.latin = e->m.n_kind > K_LATIN;   // モデルが英字の辺を知っていれば作る
@@ -3179,6 +3366,7 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
     e->typo_spans.clear();
     e->last_u.clear();
     e->last_segs.clear();
+    e->ro.E.clear();
     tl_paths.clear();
     bool done = false;
     if (use_model == 2 && n >= CASCADE_MAX_LEN) use_model = 1;
@@ -3248,6 +3436,7 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
             for (size_t i = 0; i < E.size(); i++)
                 if (E[i].kind == K_LATIN) e->last_u[i] -= pen;
         }
+        if (e->ro.on) { e->ro.E = E; e->ro.n = n; }   // 確定したときに学ぶための網
         e->times[3] = ms_since(t0);
         t0 = std::chrono::steady_clock::now();
         bool has_typo = false;
@@ -3508,7 +3697,12 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
                         if (en.cost < bc) { bc = en.cost; best = from16(e->lex.s_blob + en.soff, en.slen); }
                     }
                 const ustr typed = r.substr(size_t(i0), size_t(i1 - i0));
-                const size_t at = top.find(typed);
+                // 1 位の中で打った英字がそのまま残っている所だけ (前後が英字でない所)。英字の語の一部 (Harmony の ny) を
+                // 書き換えると harmony -> HarmoNY になった (ユーザー 2026-11-06)
+                auto alpha = [](char32_t c) { return (c >= U'a' && c <= U'z') || (c >= U'A' && c <= U'Z') || (c >= U'0' && c <= U'9'); };
+                size_t at = top.find(typed);
+                while (at != ustr::npos && ((at > 0 && alpha(top[at - 1])) || (at + typed.size() < top.size() && alpha(top[at + typed.size()]))))
+                    at = top.find(typed, at + 1);
                 if (!best.empty() && at != ustr::npos) top = top.substr(0, at) + best + top.substr(at + typed.size());
             }
             i0 = i1;
@@ -3880,4 +4074,187 @@ KKC_API int kkc_complete(kkc_engine* e, const uint16_t* prefix, int np, int max_
     if (int(buf.size()) > cap) return -1;
     std::copy(buf.begin(), buf.end(), out);
     return n;
+}
+
+// ---------------------------------------------------------------- 使う人ごとに育つ小さいモデル (Romance、版 7 のモデルで v・W も)
+namespace {
+inline double lse2(double a, double b) {
+    if (a == -INFINITY) return b;
+    if (b == -INFINITY) return a;
+    return a > b ? a + std::log1p(std::exp(b - a)) : b + std::log1p(std::exp(a - b));
+}
+}  // namespace
+
+// オン・オフ。オンにすると、まだ作っていなければ初めの値で作る。返り値は動かす数の個数 (オフなら 0)
+KKC_API int kkc_romance_enable(kkc_engine* e, int on) {
+    if (!e) return 0;
+    Romance& ro = e->ro;
+    if (on && ro.dk != e->m.dk) ro.init(e->m.d_uvec, e->m.dk, e->m.Wu);
+    ro.on = on != 0;
+    ro.E.clear();
+    return ro.on ? int(ro.size()) : 0;
+}
+
+KKC_API void kkc_romance_config(kkc_engine* e, float lr_v, float lr_W, float lr_net, float l2, float cap) {
+    if (!e) return;
+    Romance& ro = e->ro;
+    ro.lr_v = lr_v; ro.lr_W = lr_W; ro.lr_net = lr_net; ro.l2 = l2; ro.cap = cap;
+}
+
+// 保存と復元: [v, W, A, a, c] を並べた float。大きさが合わなければ (モデルが替わった) 読まずに 0 を返す
+KKC_API int kkc_romance_size(kkc_engine* e) { return e ? int(e->ro.size()) : 0; }
+KKC_API uint32_t kkc_model_tag(kkc_engine* e) { return e ? e->model_tag : 0; }
+KKC_API int kkc_romance_get(kkc_engine* e, float* out, int cap) {
+    if (!e || cap < int(e->ro.size())) return -1;
+    const Romance& ro = e->ro;
+    float* p = out;
+    for (const auto* x : {&ro.v, &ro.W, &ro.A, &ro.a, &ro.c}) p = std::copy(x->begin(), x->end(), p);
+    return int(p - out);
+}
+KKC_API int kkc_romance_set(kkc_engine* e, const float* in, int n) {
+    if (!e || n != int(e->ro.size()) || n == 0) return 0;
+    Romance& ro = e->ro;
+    const float* p = in;
+    for (auto* x : {&ro.v, &ro.W, &ro.A, &ro.a, &ro.c}) { std::copy(p, p + x->size(), x->begin()); p += x->size(); }
+    return n;
+}
+KKC_API int kkc_romance_updates(kkc_engine* e) { return e ? e->ro.updates : 0; }
+
+// 確定した文から学ぶ。直前の kkc_convert (モデルを使った変換) の網で、確定した表記 text の経路の確率を上げる向きに 1 歩動かす。
+// 返り値: 1 = 学んだ、0 = 確定した表記が網の経路に無い (学ばない)、-1 = 直前の網が無い。loss に負の対数尤度 (動かす前)
+KKC_API int kkc_romance_learn(kkc_engine* e, const uint16_t* text, int nt, float* loss) {
+    if (!e || !e->ro.on) return -1;
+    Romance& ro = e->ro;
+    const std::vector<Edge>& E = ro.E;
+    const int n = ro.n, M = int(E.size()), dk = ro.dk;
+    if (M == 0 || int(e->last_u.size()) != M || ro.q.size() != size_t(M) * dk) return -1;
+    const ustr T = from16(text, size_t(nt));
+    const int nT = int(T.size());
+    const Lex& L = e->lex;
+    const double beta = e->m.beta, gamma = e->m.gamma;
+    auto tr = [&](int rid, int lid) { return -gamma * L.conn(rid, lid) / 1000.0; };
+    std::vector<double> w(static_cast<size_t>(M));
+    std::vector<std::vector<int>> by_start(size_t(n) + 1), by_end(size_t(n) + 1);
+    for (int i = 0; i < M; i++) {
+        w[size_t(i)] = double(e->last_u[size_t(i)]) - beta * E[size_t(i)].cost / 1000.0;
+        by_start[size_t(E[size_t(i)].s)].push_back(i);
+        by_end[size_t(E[size_t(i)].e)].push_back(i);
+    }
+    // 全部の経路
+    std::vector<double> al(size_t(M), -INFINITY), be(size_t(M), -INFINITY);
+    for (int pos = 0; pos < n; pos++)
+        for (int i : by_start[size_t(pos)]) {
+            double a = -INFINITY;
+            if (pos == 0) a = tr(0, E[size_t(i)].lid);
+            else for (int j : by_end[size_t(pos)]) if (al[size_t(j)] > -INFINITY) a = lse2(a, al[size_t(j)] + tr(E[size_t(j)].rid, E[size_t(i)].lid));
+            if (a > -INFINITY) al[size_t(i)] = a + w[size_t(i)];
+        }
+    for (int pos = n; pos >= 1; pos--)
+        for (int i : by_end[size_t(pos)]) {
+            double b = -INFINITY;
+            if (pos == n) b = tr(E[size_t(i)].rid, 0);
+            else for (int j : by_start[size_t(pos)]) if (be[size_t(j)] > -INFINITY) b = lse2(b, tr(E[size_t(i)].rid, E[size_t(j)].lid) + w[size_t(j)] + be[size_t(j)]);
+            be[size_t(i)] = b;
+        }
+    double logZ = -INFINITY;
+    for (int i : by_end[size_t(n)]) logZ = lse2(logZ, al[size_t(i)] + be[size_t(i)]);
+    if (logZ == -INFINITY) return -1;
+    // 確定した表記の経路だけ (状態 = 辺 × 表記の中の位置)
+    std::vector<std::vector<std::pair<int, double>>> ga(static_cast<size_t>(M)), gb(static_cast<size_t>(M));
+    std::vector<int> ts;
+    auto starts = [&](int i) {   // 辺 i の表記が text に現れる位置
+        ts.clear();
+        const ustr& s = E[size_t(i)].surf;
+        if (s.empty()) return;
+        for (size_t t = T.find(s); t != ustr::npos; t = T.find(s, t + 1)) ts.push_back(int(t));
+    };
+    for (int pos = 0; pos < n; pos++)
+        for (int i : by_start[size_t(pos)]) {
+            starts(i);
+            for (int t : ts) {
+                double a = -INFINITY;
+                if (pos == 0) { if (t == 0) a = tr(0, E[size_t(i)].lid); }
+                else for (int j : by_end[size_t(pos)])
+                    for (auto& ja : ga[size_t(j)])
+                        if (ja.first + int(E[size_t(j)].surf.size()) == t) a = lse2(a, ja.second + tr(E[size_t(j)].rid, E[size_t(i)].lid));
+                if (a > -INFINITY) ga[size_t(i)].push_back({t, a + w[size_t(i)]});
+            }
+        }
+    for (int pos = n; pos >= 1; pos--)
+        for (int i : by_end[size_t(pos)])
+            for (auto& ia : ga[size_t(i)]) {
+                const int t = ia.first, te = t + int(E[size_t(i)].surf.size());
+                double b = -INFINITY;
+                if (pos == n) { if (te == nT) b = tr(E[size_t(i)].rid, 0); }
+                else for (int j : by_start[size_t(pos)])
+                    for (auto& jb : gb[size_t(j)])
+                        if (jb.first == te) b = lse2(b, tr(E[size_t(i)].rid, E[size_t(j)].lid) + w[size_t(j)] + jb.second);
+                if (b > -INFINITY) gb[size_t(i)].push_back({t, b});
+            }
+    auto gbv = [&](int i, int t) {
+        for (auto& x : gb[size_t(i)]) if (x.first == t) return x.second;
+        return double(-INFINITY);
+    };
+    double logZg = -INFINITY;
+    for (int i : by_end[size_t(n)])
+        for (auto& ia : ga[size_t(i)]) logZg = lse2(logZg, ia.second + gbv(i, ia.first));
+    if (logZg == -INFINITY) return 0;
+    if (loss) *loss = float(logZ - logZg);
+    // ∂L/∂u = (全経路の周辺確率) - (確定した経路の周辺確率)
+    const float sc = 1.0f / std::sqrt(float(dk));
+    const int H = ro.H;
+    std::vector<float> G(size_t(dk), 0.0f), dA(ro.A.size(), 0.0f), da(size_t(H), 0.0f), dc(size_t(H), 0.0f), hid(static_cast<size_t>(H));
+    for (int i = 0; i < M; i++) {
+        double mg = 0;
+        for (auto& ia : ga[size_t(i)]) { const double b = gbv(i, ia.first); if (b > -INFINITY) mg += std::exp(ia.second + b - logZg); }
+        const double m = al[size_t(i)] > -INFINITY && be[size_t(i)] > -INFINITY ? std::exp(al[size_t(i)] + be[size_t(i)] - logZ) : 0.0;
+        const float g = float(m - mg);
+        if (std::fabs(g) < 1e-6f) continue;
+        const float *q = ro.q.data() + size_t(i) * dk, *k = ro.k.data() + size_t(i) * dk;
+        for (int j = 0; j < dk; j++) G[size_t(j)] += g * k[j] * sc;
+        ro.extra(q, k, sc, hid.data());
+        double o = 0;
+        for (int h = 0; h < H; h++) if (hid[size_t(h)] > 0) o += ro.c[size_t(h)] * hid[size_t(h)];
+        const double th = std::tanh(o / ro.cap);
+        const float dO = g * float(1.0 - th * th);
+        for (int h = 0; h < H; h++) {
+            if (hid[size_t(h)] <= 0) continue;
+            dc[size_t(h)] += dO * hid[size_t(h)];
+            const float dp = dO * ro.c[size_t(h)];
+            if (dp == 0.0f) continue;
+            da[size_t(h)] += dp;
+            float* dr = dA.data() + size_t(h) * dk;
+            for (int j = 0; j < dk; j++) dr[j] += dp * q[j] * k[j] * sc;
+        }
+    }
+    // 1 歩動かす (群ごとに勾配の大きさを 1 までに抑える)。初めの値へ l2 で引き戻す
+    auto clip = [](std::vector<float>& x) {
+        double s = 0;
+        for (float y : x) s += double(y) * y;
+        if (s > 1.0) { const float f = float(1.0 / std::sqrt(s)); for (float& y : x) y *= f; }
+    };
+    std::vector<float> dv(size_t(ro.du), 0.0f), dW(ro.W.size(), 0.0f);
+    for (int i = 0; i < ro.du; i++)
+        for (int j = 0; j < dk; j++) {
+            dv[size_t(i)] += ro.W[size_t(i) * dk + j] * G[size_t(j)];
+            dW[size_t(i) * dk + j] = ro.v[size_t(i)] * G[size_t(j)];
+        }
+    clip(dv); clip(dW); clip(dA); clip(da); clip(dc);
+    for (int i = 0; i < ro.du; i++) ro.v[size_t(i)] -= ro.lr_v * (dv[size_t(i)] + ro.l2 * ro.v[size_t(i)]);
+    for (size_t i = 0; i < ro.W.size(); i++) ro.W[i] -= ro.lr_W * (dW[i] + ro.l2 * (ro.W[i] - ro.W0[i]));
+    for (size_t i = 0; i < ro.A.size(); i++) ro.A[i] -= ro.lr_net * (dA[i] + ro.l2 * (ro.A[i] - ro.A0[i]));
+    for (int h = 0; h < H; h++) {
+        ro.a[size_t(h)] -= ro.lr_net * (da[size_t(h)] + ro.l2 * ro.a[size_t(h)]);
+        ro.c[size_t(h)] -= ro.lr_net * (dc[size_t(h)] + ro.l2 * ro.c[size_t(h)]);
+    }
+    ro.updates++;
+    ro.E.clear();   // 同じ網で 2 度学ばない
+    return 1;
+}
+
+// 初めの値に戻す (学習の全消去のあと)
+KKC_API void kkc_romance_reset(kkc_engine* e) {
+    if (!e || e->ro.dk == 0) return;
+    e->ro.init(e->m.d_uvec, e->m.dk, e->m.Wu);
+    e->ro.E.clear();
 }

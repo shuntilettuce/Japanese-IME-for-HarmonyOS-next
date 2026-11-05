@@ -15,6 +15,9 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
     /** 読み -> 打ったキーの並び (InputHandler が QWERTY・GODAN で打った分を覚えている。無ければ null) */
     var keysFor: (String) -> Pair<String, IntArray>? = { null }
 
+    /** (語の読み, 左の文) -> 学習で置き換える表記 (Learning.top) */
+    var learnedTop: (String, String) -> String? = { _, _ -> null }
+
     // ---- 長い入力: 前の方を固定して、後ろだけを変換する ----
     // 変換 1 回が BUDGET_MS を超えて遅れを感じる長さになったら、1 位の候補の語の区切りのうち、最後の KEEP_WORDS 語より前にあって、
     // 2 回続けて同じ変換になったところ (または「、」「。」の後ろ) までを固定する。それより短いうちは文全体に AI をかけ続ける。
@@ -52,10 +55,12 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
             chunks = ArrayList()
             prevSegs.clear()
         }
+        freezeBeforePunct(target)
         val tail = target.substring(fKana.length)
         if (tail.isEmpty()) return listOf(fSurf)
         val ctx2 = (context + fSurf).takeLast(40)
-        val hit = cache[key(ctx2, tail)]
+        val cached = cache[key(ctx2, tail)]
+        val hit = cached?.let { withLearned(ctx2, tail, it) }
         if (hit != null && hit.cands.isNotEmpty()) {
             val out = withFrozenAlternatives(hit.cands.map { fSurf + it }, hit.cands[0])
             lastTarget = target
@@ -65,7 +70,8 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
             maybeFreeze(tail, hit)
             return out
         }
-        request(ctx2, tail, onDone)
+        // 空の結果も控えてある。頼み直すと、読みが変わるまで変換を繰り返してしまう
+        if (cached == null) request(ctx2, tail, onDone)
         // 結果が届くまでは、前回の候補に新しく打ったかなをつないで出す (かなに戻ったり、候補の帯が縮んだりしない)
         if (lastTarget.isNotEmpty() && target.startsWith(lastTarget) && lastCands.isNotEmpty()) {
             val extra = target.substring(lastTarget.length)
@@ -92,6 +98,7 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
 
     /** オート確定のとき: 固定した読みと表記 (呼ぶ側がこれを入力欄に確定して、残りだけを入力中に残す) */
     fun frozenKana() = fKana
+    fun frozenChunks(): List<Pair<String, String>> = chunks.map { it.kana to it.cands[0] }
     fun frozenSurf() = fSurf
 
     /**
@@ -114,6 +121,11 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
 
     private fun maybeFreeze(tail: String, r: Engine.Result) {
         val top = r.cands[0]
+        // 数字にする・打ち間違いを直すなどで 1 位が差し替わると、語の区切りは 1 位と合わない。切ると字が欠けるので固定しない
+        if (r.lens.sum() != top.length) {
+            prevSegs.clear()
+            return
+        }
         var cum = 0
         var freezeEnd = 0
         var freezeLen = 0
@@ -138,24 +150,170 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
         if (freezeEnd > 0) {
             val kana = tail.substring(0, freezeEnd)
             // 固定する前の方にも、挨拶のかな書きを当てる (候補の並べ替えだけでは、ここで「今日は」が固定されてしまう)
-            val surf = greetingFix(kana, top.substring(0, minOf(freezeLen, top.length)))
-            val chunk = FrozenChunk(kana, listOf(surf))
-            val ctx = (fCtx + fSurf).takeLast(40)
-            chunks.add(chunk)
-            fKana += kana
-            fSurf += surf
-            prevSegs.clear()
-            if (liveCommit) return   // すぐ入力欄に確定されるので、選び直しの候補は要らない
-            // 固定した部分だけを 1 回変換して、選び直せる候補を持たせる (以後この部分は AI にかけない)
-            worker.execute {
-                val alts = runCatching { engine.convert(ctx, kana, 8, true) }.getOrElse { emptyList() }
-                main.post { chunk.cands = listOf(surf) + alts.filter { it != surf }.take(ALT - 1) }
-            }
+            freezeChunk(kana, greetingFix(kana, top.substring(0, minOf(freezeLen, top.length))))
         }
     }
 
+    /** 読み kana・表記 surf の前の方を固定する */
+    private fun freezeChunk(kana: String, surf: String) {
+        val chunk = FrozenChunk(kana, listOf(surf))
+        val ctx = (fCtx + fSurf).takeLast(40)
+        chunks.add(chunk)
+        fKana += kana
+        fSurf += surf
+        prevSegs.clear()
+        if (liveCommit) return   // すぐ入力欄に確定されるので、選び直しの候補は要らない
+        // 固定した部分だけを 1 回変換して、選び直せる候補を持たせる (以後この部分は AI にかけない)
+        worker.execute {
+            val alts = runCatching { engine.convert(ctx, kana, 8, true) }.getOrElse { emptyList() }
+            main.post { chunk.cands = listOf(surf) + alts.filter { it != surf }.take(ALT - 1) }
+        }
+    }
+
+    /**
+     * 句読点 (、。！？) を打った直後: その前は、打つ直前に出していた 1 位のまま固定する。打つと前の方まで変換し直されて、
+     * 良かった変換が変わってしまった (ブログの報告 2026-11-02。PC 版と同じ決まり)。。。。 のように句読点が続くときは分けない
+     */
+    private fun freezeBeforePunct(target: String) {
+        if (lastCands.isEmpty() || lastTarget.length <= fKana.length || !target.startsWith(lastTarget) || !lastTarget.startsWith(fKana)) return
+        val extra = target.substring(lastTarget.length)
+        if (extra.isEmpty() || extra.any { it !in PUNCT } || lastTarget.last() in PUNCT) return
+        val top = lastCands[0]
+        if (!top.startsWith(fSurf) || top.length <= fSurf.length) return
+        val kana = lastTarget.substring(fKana.length)
+        freezeChunk(kana, greetingFix(kana, top.substring(fSurf.length)))
+    }
+
+    /**
+     * 1 位の文の語を学習で置き換える。置き換えた文を新しい 1 位にして、元の 1 位は 2 位に残す (選び直せば反対の票になる)。
+     * 語の区切りは学習したときと違うことがあるので、続く語も 3 語までつなげて引く
+     */
+    private fun withLearned(ctx: String, tail: String, r: Engine.Result): Engine.Result {
+        val top = r.paths.firstOrNull()?.split('\u0001') ?: return r
+        if (r.cands.isEmpty() || top.filterIndexed { i, _ -> i % 2 == 1 }.joinToString("") != r.cands[0]) return r
+        val path = ArrayList<String>()
+        var left = ctx
+        var start = 0
+        var i = 0
+        var changed = false
+        while (i < top.size) {
+            var take = 1
+            var surf = top[i + 1]
+            for (k in minOf(3, (top.size - i) / 2) downTo 1) {
+                val t = learnedTop(tail.substring(start, top[i + 2 * k - 2].toInt()), left) ?: continue
+                take = k
+                val was = (0 until k).joinToString("") { top[i + 2 * it + 1] }
+                changed = changed || t != was
+                surf = t
+                break
+            }
+            start = top[i + 2 * take - 2].toInt()
+            path.add(start.toString())
+            path.add(surf)
+            left += surf
+            i += 2 * take
+        }
+        if (!changed) return r
+        val ends = IntArray(path.size / 2) { path[2 * it].toInt() }
+        val lens = IntArray(path.size / 2) { path[2 * it + 1].length }
+        return Engine.Result((listOf(left.substring(ctx.length)) + r.cands).distinct(), ends, lens, r.sugg, listOf(path.joinToString("\u0001")) + r.paths)
+    }
+
+    /** 語の置き換え: 読み・表記・語の左の文 */
+    class Word(val reading: String, val surface: String, val left: String)
+
+    /** 1 位以外を選んだとき、1 位の経路と違う所を返す。分からなければ null (1 位を選んだ・経路に無い候補) */
+    fun changedWords(target: String, chosen: String): List<Word>? {
+        if (!target.startsWith(fKana)) return null
+        if (!chosen.startsWith(fSurf)) return frozenChange(chosen)
+        val tail = target.substring(fKana.length)
+        val pick = chosen.substring(fSurf.length)
+        val ctx2 = (fCtx + fSurf).takeLast(40)
+        val paths = cache[key(ctx2, tail)]?.let { withLearned(ctx2, tail, it) }?.paths ?: return null
+        if (paths.size < 2) return null
+        val top = paths[0].split('\u0001')
+        for (p in 1 until paths.size) {
+            val words = paths[p].split('\u0001')
+            if (words.filterIndexed { i, _ -> i % 2 == 1 }.joinToString("") == pick) return diffWords(ctx2, tail, top, words)
+        }
+        return null
+    }
+
+    /** 前の方を替えた文 (withFrozenAlternatives) を選んだ: 替えた所を返す */
+    private fun frozenChange(chosen: String): List<Word>? {
+        for (i in chunks.indices) {
+            for (j in 1 until chunks[i].cands.size) {
+                val head = chunks.mapIndexed { idx, c -> if (idx == i) c.cands[j] else c.cands[0] }.joinToString("")
+                if (!chosen.startsWith(head)) continue
+                val left = (fCtx + chunks.take(i).joinToString("") { it.cands[0] }).takeLast(40)
+                return listOf(Word(chunks[i].kana, chunks[i].cands[j], left))
+            }
+        }
+        return null
+    }
+
+    /** a・b は [読みの終わり, 表記, …]。両方の語の区切りがそろう所まで進めて、表記が違えば b の側を返す */
+    private fun diffWords(ctx: String, tail: String, a: List<String>, b: List<String>): List<Word> {
+        val out = ArrayList<Word>()
+        var i = 0
+        var j = 0
+        var start = 0
+        var left = ctx
+        while (i < a.size && j < b.size) {
+            var ea = a[i].toInt()
+            var eb = b[j].toInt()
+            var sa = a[i + 1]
+            var sb = b[j + 1]
+            while (ea != eb) {
+                if (ea < eb) {
+                    i += 2
+                    if (i >= a.size) return out
+                    ea = a[i].toInt()
+                    sa += a[i + 1]
+                } else {
+                    j += 2
+                    if (j >= b.size) return out
+                    eb = b[j].toInt()
+                    sb += b[j + 1]
+                }
+            }
+            if (sa != sb) out.add(Word(tail.substring(start, ea), sb, left))
+            left += sb
+            start = ea
+            i += 2
+            j += 2
+        }
+        return out
+    }
+
     /** 予測 (読みの続く辞書の語) */
+    /**
+     * その場で変換して待つ (文節の区切り・文節ごとの候補。HarmonyOS 版の convertNow)。エンジンは裏の変換と同じ 1 本の
+     * worker で呼ぶ (2 つのスレッドから同時に触らない)。keys = true なら打ったキーの並びを渡す (読み全体のときだけ合う)
+     */
+    fun convertNow(context: String, kana: String, max: Int, keys: Boolean = false): Engine.Result {
+        val k = if (keys) keysFor(kana) else null
+        return runCatching {
+            worker.submit(java.util.concurrent.Callable { engine.convertWithSegments(context, kana, max, true, null, k) })
+                .get(3, java.util.concurrent.TimeUnit.SECONDS)
+        }.getOrElse { Engine.Result(emptyList(), IntArray(0), IntArray(0)) }
+    }
+
     fun complete(prefix: String, max: Int) = engine.complete(prefix, max)
+
+    /** AI学習のオン・オフ (path = 保存先、null ならオフ。変換と同じ作業用のスレッドで) */
+    fun setAiLearn(path: String?) {
+        if (!worker.isShutdown) worker.execute { runCatching { engine.setAiLearn(path) } }
+    }
+
+    /** 確定した文から AI学習で 1 歩学ぶ (オフならエンジンが何もしない)。学んだら変換の結果の控えを捨てる */
+    fun aiLearn(ctx: String, reading: String, text: String) {
+        if (worker.isShutdown || reading.isEmpty() || text.isEmpty() || text == reading) return
+        worker.execute {
+            val loss = runCatching { engine.aiLearn(ctx, reading, text) }.getOrElse { -1f }
+            if (loss >= 0f) main.post { cache.clear() }
+        }
+    }
 
     /** 変換の結果の控えを捨てる (ユーザー辞書が変わって、同じ読みでも結果が変わるとき) */
     fun clearCache() {
@@ -182,6 +340,10 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
     }
 
     private fun run() {
+        if (worker.isShutdown) {   // IME が終わった後に前の結果が届いた
+            inflight = false
+            return
+        }
         inflight = true
         val key = wantKey
         val ctx = wantCtx
@@ -210,6 +372,7 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
         private const val LIVE_KEEP = 8       // オート確定のときに、末尾に残す字数 (以前の決まり)
         private const val CANDIDATES = 30     // 10 では短い読み (き・かん) の単漢字が足りない
         private const val ALT = 4             // 固定した部分に持たせる候補の数
+        private const val PUNCT = "、。！？!?"
 
         /** 読み reading とその表記 surf の組で、挨拶の「今日は」をかな書きに直す (きょうは を打っていないときだけ) */
         fun greetingFix(reading: String, surf: String): String =

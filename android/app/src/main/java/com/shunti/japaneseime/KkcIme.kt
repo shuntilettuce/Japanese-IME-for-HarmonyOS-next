@@ -1,5 +1,7 @@
 package com.shunti.japaneseime
 
+import android.content.ClipData
+import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.res.Configuration
@@ -16,6 +18,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputContentInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
@@ -31,6 +34,8 @@ import java.util.concurrent.Executors
  */
 class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
     companion object {
+        const val AI_LEARN_FILE = "ai_learn.bin"   // AI学習で育てた中身 (filesDir の中。学習のリセットで消す)
+        private const val EXTRA_SENSITIVE = "android.content.extra.IS_SENSITIVE"   // ClipDescription.EXTRA_IS_SENSITIVE (API 33)
         private const val CLIP_PREFIX = "\u0001clip\u0001"   // 候補の帯の中で、貼り付けのチップを見分ける印 (表示はしない)
     }
 
@@ -65,9 +70,11 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
     private var theme: Map<String, Int> = emptyMap()
     private var navInset = 0   // 画面下のナビゲーションバーの高さ (最後に分かった値)
 
-    // クリップボード: 直近 8 件 (このプロセスの中だけ。保存しない)。fresh = まだ貼っていない新しいコピー
-    private val clips = ArrayList<String>()
-    private var freshClip: String? = null
+    // クリップボード: 履歴は ClipStore (文・画像・動画を保存。2026-11-05)。fresh = まだ貼っていない新しいコピー
+    private lateinit var clipStore: ClipStore
+    private val clipWorker = Executors.newSingleThreadExecutor()   // 画像・動画の写しを取る (変換の worker を待たせない)
+    private var freshClip: ClipStore.Clip? = null
+    private val thumbs = android.util.LruCache<Long, android.graphics.Bitmap>(40)
     private var clipboard: ClipboardManager? = null
     private val clipListener = ClipboardManager.OnPrimaryClipChangedListener { readClip() }
 
@@ -83,6 +90,7 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
         haptics = Haptics(this)
         recent = RecentSymbols(getSharedPreferences("shunti", MODE_PRIVATE), tables.DEFAULT_RECENT_SYMBOLS)
         input = InputHandler(this, tables, learning, settings, UserDict.get(this))
+        clipStore = ClipStore.get(this)
         clipboard = (getSystemService(CLIPBOARD_SERVICE) as? ClipboardManager)?.also { it.addPrimaryClipChangedListener(clipListener) }
         openEngine()
     }
@@ -97,12 +105,18 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
         worker.execute {
             val e = Engine.open(assets, tables.SLURS, model = file)
             main.post {
+                if (worker.isShutdown) {   // 開いている間に IME が終わった
+                    e?.close()
+                    return@post
+                }
                 val old = engine
                 engine = e
                 e?.setSuggest(settings.separateSuggest)
                 e?.allowSlurs = settings.allowSlurs
-                ai = if (e != null) AiConverter(e, worker, main).also { a -> a.keysFor = { k -> input.keysFor(k) } } else null
+                ai = if (e != null) AiConverter(e, worker, main).also { a -> a.keysFor = { k -> input.keysFor(k) }; a.learnedTop = { r, l -> learning.top(r, l) } } else null
+                ai?.setAiLearn(aiLearnPath())
                 userSynced = -1   // 新しいエンジンにユーザー辞書を入れ直す
+                sentForms = null
                 syncUserWords()
                 if (input.composingText.isNotEmpty()) input.updateCandidates()
                 // 前のエンジンは、作業用のスレッドに残っている変換が済んでから閉じる (スレッドは 1 本なので順番どおり)
@@ -115,8 +129,10 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
         clipboard?.removePrimaryClipChangedListener(clipListener)
         learning.save()
         recent.save()
+        ai = null   // この後に届く変換の結果で、閉じたエンジンを使わないように
         worker.execute { engine?.close() }
         worker.shutdown()
+        clipWorker.shutdown()
         super.onDestroy()
     }
 
@@ -173,6 +189,7 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
                 tick()
                 input.commitTopCandidate()
                 input.subMode = if (input.subMode == InputHandler.SubMode.MENU) InputHandler.SubMode.KANA else InputHandler.SubMode.MENU
+                if (input.subMode == InputHandler.SubMode.MENU) menu?.reset()
                 render()
             }
             // 長押しでフローティングの切り替え
@@ -403,19 +420,31 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
         openEngine()   // 設定で変換モデルを替えた (同じなら何もしない)
         engine?.setSuggest(settings.separateSuggest)
         engine?.allowSlurs = settings.allowSlurs
+        ai?.setAiLearn(aiLearnPath())   // 設定で変えた・学習のリセットで消された
         syncUserWords()
     }
 
+    /** AI学習の保存先 (オフなら null) */
+    private fun aiLearnPath(): String? = if (settings.aiLearn) java.io.File(filesDir, AI_LEARN_FILE).path else null
+
     private var userSynced = -1
 
-    /** ユーザー辞書が変わっていたら、変換の網に入れ直す (変換と同じ裏のスレッドで) */
+    private var learnSynced = -1
+    private var sentForms: String? = null   // 最後に網に入れた語 (新しいエンジンでは null に戻す)
+
+    /** ユーザー辞書か、学習で 2 回以上選んだ語が変わっていたら、変換の網に入れ直す (変換と同じ裏のスレッドで) */
     private fun syncUserWords() {
         val e = engine ?: return
         val dict = UserDict.get(this)
         val v = dict.version
-        if (v == userSynced) return
+        if (v == userSynced && learning.version == learnSynced) return
         userSynced = v
-        val forms = dict.engineForms()
+        learnSynced = learning.version
+        val forms = dict.engineForms() + learning.strongForms()
+        // 学習のたびに版は変わるが、網に入れる語はたいてい同じ。同じなら入れ直さない (変換の控えも捨てずに済む)
+        val key = forms.joinToString("\u0001") { "${it.reading}\u0002${it.surface}\u0002${it.tmplReading}\u0002${it.tmplSurface}" }
+        if (key == sentForms) return
+        sentForms = key
         worker.execute {
             e.setUserWords(forms)
             main.post { ai?.clearCache() }
@@ -437,6 +466,7 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
     override fun onUpdateSelection(oldSelStart: Int, oldSelEnd: Int, newSelStart: Int, newSelEnd: Int, candidatesStart: Int, candidatesEnd: Int) {
         super.onUpdateSelection(oldSelStart, oldSelEnd, newSelStart, newSelEnd, candidatesStart, candidatesEnd)
         input.onFieldComposing(candidatesStart, candidatesEnd)
+        input.onHostSelection(newSelStart, newSelEnd)
     }
 
     override fun onFinishInput() {
@@ -468,23 +498,102 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
      */
     private fun readClip() {
         val clip = runCatching { clipboard?.primaryClip }.getOrNull() ?: return
-        val t = runCatching { clip.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString() }.getOrNull()
-        val stamp = clip.description?.timestamp ?: 0L
+        if (clip.itemCount == 0) return
+        val desc = clip.description
+        val stamp = desc?.timestamp ?: 0L
+        val item = clip.getItemAt(0)
+        val uri = item.uri
+        // 自分が貼り付けのために入れ直した写し: 履歴には足さない
+        if (uri != null && uri.authority == "$packageName.clips") {
+            lastClipStamp = stamp
+            return
+        }
+        // パスワードなど、コピーした側が機密の印を付けたもの (Android 13 から): 履歴に入れず、中身も帯に出さない
+        if (desc?.extras?.getBoolean(EXTRA_SENSITIVE) == true) {
+            if (stamp != lastClipStamp) { lastClipStamp = stamp; freshClip = null; render() }
+            return
+        }
+        // 画像・動画・ファイル: 写しを取ってから履歴と帯に出す (読む権限はクリップボードを読んだ今だけなので、すぐに)
+        val mime = desc?.takeIf { it.mimeTypeCount > 0 }?.getMimeType(0)
+        if (uri != null && uri.scheme == "content" && mime != null && !mime.startsWith("text/")) {
+            if (stamp == lastClipStamp && stamp != 0L) return
+            lastClipStamp = stamp
+            clipWorker.execute {
+                val c = runCatching { clipStore.addMedia(contentResolver, uri, mime) }.getOrNull()
+                main.post {
+                    if (c != null) freshClip = c
+                    render()
+                }
+            }
+            return
+        }
+        val t = runCatching { item.coerceToText(this)?.toString() }.getOrNull()
         if (t.isNullOrEmpty() || (t == lastClip && stamp == lastClipStamp)) return
         lastClip = t
         lastClipStamp = stamp
-        clips.remove(t)
-        clips.add(0, t)
-        while (clips.size > 8) clips.removeAt(clips.size - 1)
-        freshClip = t
+        freshClip = clipStore.addText(t)
         render()
+    }
+
+    /** 履歴の見本 (小さい絵)。画像・動画だけ */
+    override fun clipThumb(c: ClipStore.Clip): android.graphics.Bitmap? {
+        if (c.kind == 0) return null
+        thumbs.get(c.id)?.let { return it }
+        val f = clipStore.thumbOf(c) ?: return null
+        return android.graphics.BitmapFactory.decodeFile(f.absolutePath)?.also { thumbs.put(c.id, it) }
+    }
+
+    /** 長押しで出す大きな見本 (画像は大きめに読み直す。動画は 1 コマ) */
+    override fun clipPreview(c: ClipStore.Clip): android.graphics.Bitmap? =
+        if (c.kind == 1) clipStore.fileOf(c)?.let { ClipStore.decodeSampled(it, 1080) } ?: clipThumb(c) else clipThumb(c)
+
+    override fun pasteClip(c: ClipStore.Clip) {
+        if (c.kind == 0) paste(c.text) else pasteMedia(c)
+    }
+
+    override fun toggleClipPin(c: ClipStore.Clip) {
+        clipStore.togglePin(c.id)
+        menu?.invalidate()
+    }
+
+    override fun removeClip(c: ClipStore.Clip) {
+        clipStore.remove(c.id)
+        if (freshClip?.id == c.id) freshClip = null
+        menu?.invalidate()
+    }
+
+    override fun clearClips() {
+        clipStore.clear(all = false)
+        if (freshClip?.pinned != true) freshClip = null
+        menu?.invalidate()
+    }
+
+    /**
+     * 画像・動画を貼る: 入力欄が受け取れる種類なら、写しをそのまま渡す (commitContent。チャットの画像など)。
+     * 受け取れない欄では、写しをクリップボードに入れ直して、アプリに貼り付けを頼む (アプリが受け取れれば入る)
+     */
+    private fun pasteMedia(c: ClipStore.Clip) {
+        val f = clipStore.fileOf(c) ?: return
+        input.commitShown()
+        val uri = android.net.Uri.parse("content://$packageName.clips/${f.name}")
+        val label = c.name.ifEmpty { if (c.kind == 1) "画像" else if (c.kind == 2) "動画" else "ファイル" }
+        val desc = ClipDescription(label, arrayOf(c.mime))
+        val accepts = currentInputEditorInfo?.contentMimeTypes.orEmpty().any { ClipDescription.compareMimeTypes(c.mime, it) }
+        val ok = accepts && currentInputConnection?.commitContent(InputContentInfo(uri, desc), InputConnection.INPUT_CONTENT_GRANT_READ_URI_PERMISSION, null) == true
+        if (!ok) {
+            runCatching { clipboard?.setPrimaryClip(ClipData(desc, ClipData.Item(uri))) }
+            val pasted = currentInputConnection?.performContextMenuAction(android.R.id.paste) == true
+            if (!pasted) android.widget.Toast.makeText(this, "クリップボードに入れました。入力欄の長押しから貼り付けてください", android.widget.Toast.LENGTH_SHORT).show()
+        }
+        freshClip = null
+        closeMenu()
     }
 
     // ---------------------------------------------------------------- MenuView.Host
     override val oneHanded get() = if (settings.floating) "off" else settings.oneHanded
     override val floating get() = settings.floating
     override val themeLabel get() = listOf("端末", "ライト", "ダーク")[settings.theme.coerceIn(0, 2)]
-    override val clipHistory: List<String> get() = clips
+    override val clipHistory: List<ClipStore.Clip> get() = clipStore.list()
 
     private fun rebuild() {
         input.subMode = InputHandler.SubMode.KANA
@@ -519,8 +628,9 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
         (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager).showInputMethodPicker()
     }
 
-    override fun paste(text: String) {
-        input.insertText(text)
+    private fun paste(text: String) {
+        input.commitShown()   // 入力中の残りがあれば、見えている形で先に確定する (貼り付けが読みを置き換えないように)
+        input.insertText(text, raw = true)
         freshClip = null
         closeMenu()
     }
@@ -531,11 +641,14 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
      * (端末の設定や機種によって止められることがある) でも貼り付けられる。頼めない入力欄では、読めればキーボードから入れる
      */
     private fun pasteFromClipboard() {
+        input.commitShown()   // 入力中の残りは先に確定する (paste と同じ)
+        // アプリが貼り付けた字は、取消キーで戻せるように後から記録する (記録していなくて戻せなかった。ユーザー 2026-11-03)
+        input.expectAppPaste()
         val ok = currentInputConnection?.performContextMenuAction(android.R.id.paste) == true
         if (!ok) {
             val t = runCatching { clipboard?.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString() }
                 .getOrNull()
-            if (!t.isNullOrEmpty()) input.insertText(t)
+            if (!t.isNullOrEmpty()) input.insertText(t, raw = true)
         }
         freshClip = null
         render()
@@ -568,6 +681,8 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
     override fun postDelayed(ms: Long, r: () -> Unit) {
         main.postDelayed(r, ms)
     }
+
+    override fun learningChanged() = syncUserWords()
 
     /**
      * 提案が無いときの提案の行。提案を分けて出す設定では場所を空けたまま (INVISIBLE) にする:
@@ -646,7 +761,9 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
 
         // 候補の帯: 入力中は変換の候補。そうでなければ貼り付け (新しいコピー) と、確定の後の絵文字
         val dp = resources.displayMetrics.density
-        val sel = if (input.inputState == InputHandler.InputState.SELECTING) input.selectedCandidateIndex else -1
+        val inBunsetsu = input.inputState == InputHandler.InputState.BUNSETSU
+        val sel = if (input.inputState == InputHandler.InputState.SELECTING || inBunsetsu) input.selectedCandidateIndex else -1
+
         val chips = ArrayList<Pair<String, () -> Unit>>()
         val suggAt = HashSet<Int>()   // 提案のチップ (強調色に ✦)
         if (input.inputState != InputHandler.InputState.IDLE) {
@@ -666,8 +783,13 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
             }
         } else {
             freshClip?.let { c ->
-                val preview = c.replace('\n', ' ').let { if (it.length > 14) it.take(14) + "…" else it }
-                chips.add(CLIP_PREFIX + preview to { paste(c) })
+                val preview = when (c.kind) {
+                    0 -> c.text.replace('\n', ' ').let { if (it.length > 14) it.take(14) + "…" else it }
+                    1 -> "画像"
+                    2 -> "動画"
+                    else -> c.name.ifEmpty { "ファイル" }.let { if (it.length > 14) it.take(14) + "…" else it }
+                }
+                chips.add(CLIP_PREFIX + preview to { pasteClip(c) })
             }
             for ((i, s) in input.predictions.withIndex()) chips.add(s to { input.commitPrediction(i) })
             // 新しいコピーのチップが無いときも、帯の端にいつも「貼り付け」を置く (中身を読めない端末でも、ここから貼り付けられる)

@@ -34,9 +34,11 @@ class InputHandler(
         fun render()          // 候補の帯とキーの表示を出し直す
         fun post(r: () -> Unit)   // いまの処理が終わってから r を呼ぶ
         fun postDelayed(ms: Long, r: () -> Unit)   // ms ミリ秒の後に r を呼ぶ
+        fun learningChanged()   // 学習が変わった: 2 回以上選んだ語を変換の網に入れ直す
     }
 
-    enum class InputState { IDLE, COMPOSING, SELECTING }
+    /** BUNSETSU = 文節ごとに選ぶ (HarmonyOS 版と同じ。読み全体を AI 変換した 1 位の語の区切りで分ける) */
+    enum class InputState { IDLE, COMPOSING, SELECTING, BUNSETSU }
     enum class InputMode { HIRAGANA, ALPHANUMERIC }
     enum class SubMode { KANA, NUMERIC, SYMBOL, EMOJI, MENU }
 
@@ -59,17 +61,17 @@ class InputHandler(
     var suggestions: List<Pair<Int, String>> = emptyList()
         private set
     private val glyphPaint = android.graphics.Paint()
-    private val glyphOk = HashMap<String, Boolean>()
+    private val glyphOk = HashMap<Int, Boolean>()   // 字ごとの控え (候補の文全体で控えると、打つたびに増え続ける)
     /** この端末のフォントで出せる字か (豆腐にならないか)。変体仮名は Android 15 から出る端末がある */
-    private fun renderable(s: String): Boolean = glyphOk.getOrPut(s) {
+    private fun renderable(s: String): Boolean {
         var i = 0
-        var ok = true
-        while (i < s.length && ok) {
+        while (i < s.length) {
             val cp = s.codePointAt(i)
-            if (cp in 0x1B000..0x1B16F || cp in 0x13000..0x1345F || cp in 0x1F000..0x1F0FF) ok = glyphPaint.hasGlyph(String(Character.toChars(cp)))
+            if ((cp in 0x1B000..0x1B16F || cp in 0x13000..0x1345F || cp in 0x1F000..0x1F0FF) &&
+                !glyphOk.getOrPut(cp) { glyphPaint.hasGlyph(String(Character.toChars(cp))) }) return false
             i += Character.charCount(cp)
         }
-        ok
+        return true
     }
 
     private var conversionEnd = 0                  // 0 = 読みの全体を変換。それ以外は先頭からこの字数だけ
@@ -118,25 +120,40 @@ class InputHandler(
     val pendingRomaji get() = romaji.pending()
 
     // kind: 0 入れた・1 消した・2 カーソルを動かした (at = 動かす前の位置)。t は続けて消した分をまとめるための時刻
-    private class HostOp(val kind: Int, var text: String, var at: Int, var t: Long = System.currentTimeMillis())
+    private class HostOp(val kind: Int, var text: String, var at: Int, var t: Long = System.currentTimeMillis()) {
+        var learn: Learning.Undo? = null   // この確定で学習に足す前の値 (取消で戻す)
+    }
     private val hostUndoStack = ArrayList<HostOp>()
 
     // ---------------------------------------------------------------- 入力欄の出入り
     /** 数字の入力欄 (電話番号・数値) か。数字はそのまま入れる (変換の候補を出さない) */
     private var numericField = false
+    private var passwordField = false   // 伏せ字の欄。打った字のとおりに入れる (括弧を組にしない)
+    private var privateField = false    // パスワードの欄と、アプリが学習しないよう指定した欄。打った文を端末に残さない
+    private var fieldKind = 0           // 入力の種類 (class + variation)
 
     fun onInputStart(ei: EditorInfo?, restarting: Boolean) {
-        if (restarting) {
+        val cls = (ei?.inputType ?: 0) and EditorInfo.TYPE_MASK_CLASS
+        val variation = (ei?.inputType ?: 0) and EditorInfo.TYPE_MASK_VARIATION
+        passwordField = (cls == EditorInfo.TYPE_CLASS_TEXT && variation in PASSWORD_VARIATIONS) ||
+            (cls == EditorInfo.TYPE_CLASS_NUMBER && variation == EditorInfo.TYPE_NUMBER_VARIATION_PASSWORD)
+        privateField = passwordField || ((ei?.imeOptions ?: 0) and EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING) != 0
+        val sameKind = (cls or variation) == fieldKind
+        fieldKind = cls or variation
+        // ブラウザはページの中の欄の移動も restartInput で来る。種類が同じなら同じ欄として続ける (回転など)
+        if (restarting && sameKind) {
+            // やり直しの後に未確定の範囲が残っているかは分からない (範囲だけ消えて字が残る入力欄がある)
+            fieldComposing = false
+            if (inputState != InputState.IDLE) fieldHadComposing = true
             host.post { checkAfterRestart(retry = true) }
             return
         }
         SentenceFlow.reset()   // 別の欄に移った: 途中の節はつながらない
-        resetComposition()
+        if (restarting) host.ic?.finishComposingText()   // 種類だけ変わった欄でも、未確定の字は見えているまま残す
+        resetComposition(touchField = !restarting)
         numericField = false
         predictions = emptyList()
         hostUndoStack.clear()
-        val cls = (ei?.inputType ?: 0) and EditorInfo.TYPE_MASK_CLASS
-        val variation = (ei?.inputType ?: 0) and EditorInfo.TYPE_MASK_VARIATION
         when {
             cls == EditorInfo.TYPE_CLASS_NUMBER || cls == EditorInfo.TYPE_CLASS_PHONE || cls == EditorInfo.TYPE_CLASS_DATETIME -> {
                 inputMode = InputMode.ALPHANUMERIC
@@ -156,8 +173,9 @@ class InputHandler(
     }
 
     fun onInputStop() {
-        resetComposition()
+        resetComposition(touchField = false)   // 字は標準の処理が確定した。ここで消すと、範囲を付け直して消してしまう
         learning.save()
+        SentenceFlow.save()
     }
 
     /**
@@ -165,9 +183,14 @@ class InputHandler(
      * その前に見えているとおりに自分で確定して、入力中の状態を空にする。
      * (空にしないと読みが残ったまま、次に打った字を足して入力中に出し直し「かに」+「かにあ」と二重になる)
      */
-    fun onViewHidden() {
-        if (inputState == InputState.SELECTING) commitTopCandidate()   // 選んでいる候補 (+ 範囲の外の残りのかな) が見えている
-        if (inputState == InputState.COMPOSING) commitRaw()
+    fun onViewHidden() = commitShown()
+
+    /** 入力中・選択中の残りを、いま見えている形で確定する (キーボードを閉じたとき・貼り付けの前) */
+    fun commitShown() {
+        if (inputState == InputState.SELECTING || inputState == InputState.BUNSETSU) commitTopCandidate()   // 選んでいる候補 (+ 範囲の外の残りのかな) が見えている
+        if (inputState == InputState.COMPOSING) {
+            if (liveTop() != null && romaji.pending().isEmpty()) commitTopCandidate() else commitRaw()   // Enter と同じく見えている変換で
+        }
     }
 
     // ---------------------------------------------------------------- 入力欄の変化
@@ -180,7 +203,8 @@ class InputHandler(
     /**
      * 入力欄の未確定の範囲が変わった (onUpdateSelection)。入力中なのに範囲が無くなったら、アプリが未確定の字を
      * 引き取った (送信ボタンで送って欄を空にしたなど) ので、入力中の状態と候補を捨てる。
-     * 自分の編集の前の通知が遅れて届くことがあるので、少し待って、範囲が無いままのときだけ捨てる
+     * 欄の読み取りは、それより前に送った書き込みの処理の後に動くので、自分の編集の遅れた通知でも誤らない。待たずに読む
+     * (待つ間に変換の結果が届くと、アプリが空にした欄へ書き戻してしまう)
      */
     fun onFieldComposing(start: Int, end: Int) {
         fieldComposing = start >= 0 && end > start
@@ -189,8 +213,15 @@ class InputHandler(
         } else if (fieldComposing) {
             fieldHadComposing = true
         } else if (fieldHadComposing) {
-            scheduleFieldCheck(FIELD_CHECK_MS)
+            if (composingGone()) dropComposing() else scheduleFieldCheck(FIELD_CHECK_MS)
         }
+    }
+
+    /** 最後に書いた未確定の字がカーソルの前に無い。読めないときは false (今のまま) */
+    private fun composingGone(): Boolean {
+        if (composingShown.isEmpty()) return false
+        val before = host.ic?.getTextBeforeCursor(composingShown.length, 0)?.toString() ?: return false
+        return before != composingShown
     }
 
     private fun scheduleFieldCheck(ms: Long) {
@@ -202,11 +233,34 @@ class InputHandler(
                 val wait = lastComposingEdit + FIELD_CHECK_MS - SystemClock.uptimeMillis()
                 if (wait > 0) {
                     scheduleFieldCheck(wait)   // 自分が書いた直後: その通知を待つ
-                } else {
-                    dropComposing()
+                } else if (composingGone()) {
+                    dropComposing()            // 字が残っていれば入力を続ける (範囲は reclaimComposing が付け直す)
                 }
             }
         }
+    }
+
+    /**
+     * 未確定の範囲だけが消えて字が欄に残ると、次の書き込みはカーソルの位置に足され「かに」+「かにあ」と二重になる。
+     * 字がカーソルの前にそのままあれば、書き込む前に範囲を付け直す (範囲が残っていても同じ所を指すだけ)。
+     * 範囲が無く字も無ければ、アプリが引き取った: false を返す (呼ぶ側は書き込まない)。読めないときは今のまま
+     */
+    private fun reclaimComposing(): Boolean {
+        if (!fieldHadComposing || fieldComposing || composingShown.isEmpty()) return true
+        val ic = host.ic ?: return true
+        val before = ic.getTextBeforeCursor(composingShown.length, 0)?.toString() ?: return true
+        if (before != composingShown) return false
+        val at = cursor()
+        if (at == null || !ic.setComposingRegion(at - composingShown.length, at)) ic.deleteSurroundingText(composingShown.length, 0)
+        fieldComposing = true   // 次の通知が来るまで付け直さない (消して書き直す経路で、字が無いと誤らないように)
+        return true
+    }
+
+    /** キーと確定の入口: アプリが字を引き取っていたら入力中の状態を捨てて true (古い読みを足したり、送った文を書き戻したりしない) */
+    private fun dropIfTaken(): Boolean {
+        if (inputState == InputState.IDLE || reclaimComposing()) return false
+        dropComposing()
+        return true
     }
 
     /**
@@ -231,6 +285,7 @@ class InputHandler(
     // ---------------------------------------------------------------- キー
     /** かな・数字のキー (フリックのかなキー、数字パッド) */
     fun handleDirectKana(kana: String) {
+        dropIfTaken()
         // 英字 (と数字の入力欄の数字) は、入力中の文字があれば足して一緒に変換する (ぱちんこ + CR -> パチンコCR)。
         // 無ければそのまま入れる。数字パッドの数字は入力中の文字として組み立てる (2000 -> 2,000・二千)
         val direct = (inputMode == InputMode.ALPHANUMERIC && subMode != SubMode.NUMERIC) || numericField
@@ -239,7 +294,7 @@ class InputHandler(
             insertText(kana)
             return
         }
-        if (inputState == InputState.SELECTING) commitTopCandidate()
+        if (inputState == InputState.SELECTING || inputState == InputState.BUNSETSU) commitTopCandidate()
         beginIfIdle()
         composingText += romaji.flushPending() + kana
         rawKeys.append(kana)
@@ -265,6 +320,7 @@ class InputHandler(
      * (HarmonyOS 版 handleKeyPress と同じ: かなに決まった分を読みに足し、決まらない分は pendingRomaji に残す)
      */
     fun handleKeyPress(key: String) {
+        dropIfTaken()
         if (inputMode == InputMode.ALPHANUMERIC) {
             // 入力中の文字があれば英字も足して一緒に変換する (ぱちんこ + CR -> パチンコCR)。無ければそのまま入れる (英文)
             if (composingText.isEmpty()) {
@@ -272,14 +328,14 @@ class InputHandler(
                 insertText(key)
                 return
             }
-            if (inputState == InputState.SELECTING) commitTopCandidate()
-            composingText += key
+            if (inputState == InputState.SELECTING || inputState == InputState.BUNSETSU) commitTopCandidate()
+            composingText += romaji.flushPending() + key   // 打ちかけのローマ字は英字の前に
             inputState = InputState.COMPOSING
             conversionEnd = 0
             updateCandidates()
             return
         }
-        if (inputState == InputState.SELECTING) commitTopCandidate()
+        if (inputState == InputState.SELECTING || inputState == InputState.BUNSETSU) commitTopCandidate()
         beginIfIdle()
         // 大文字: そこから英字のまま (PC 版の caps_alpha と同じ。小文字の続きも英字、空白・記号・かなで終わる。2026-10-24)
         if (key.length == 1 && (key[0] in 'A'..'Z' || (alphaRun && (key[0] in 'a'..'z' || key[0] in '0'..'9')))) {
@@ -300,7 +356,7 @@ class InputHandler(
         updateCandidates()
     }
 
-    /** 打ちかけのローマ字を読みに足す (n → ん にはならず、そのまま) */
+    /** 打ちかけのローマ字を読みに足す (語末の n は ん) */
     private fun flushRomaji(): Boolean {
         val p = romaji.flushPending()
         if (p.isEmpty()) return false
@@ -310,6 +366,7 @@ class InputHandler(
 
     /** 小゛゜ キー: 最後の 1 文字を順に切り替える */
     fun handleVariantCycle() {
+        if (dropIfTaken()) return
         keysValid = false
         if (inputState != InputState.COMPOSING || composingText.isEmpty()) return
         val next = tables.VARIANT_CYCLE[composingText.takeLast(1)] ?: return
@@ -318,10 +375,23 @@ class InputHandler(
     }
 
     fun handleSpaceKey() {
+        if (dropIfTaken()) return
+        if (inputState == InputState.BUNSETSU) {   // 今の文節の候補を順に
+            if (candidates.isEmpty()) return
+            selectedCandidateIndex = (selectedCandidateIndex + 1) % candidates.size
+            bChosen[bCur] = candidates[selectedCandidateIndex]
+            showComposing()
+            host.render()
+            return
+        }
         alphaRun = false
         if (inputState == InputState.COMPOSING && flushRomaji()) updateCandidates()
         if (inputState == InputState.IDLE || composingText.isEmpty()) {
             insertText(if (inputMode == InputMode.ALPHANUMERIC) " " else "　")
+            return
+        }
+        if (inputState == InputState.COMPOSING && bunsetsuAvailable) {   // 空白キーの「変換」は「文節」に (ユーザー 2026-11-05)
+            toggleBunsetsu()
             return
         }
         if (inputState == InputState.COMPOSING) {
@@ -336,8 +406,10 @@ class InputHandler(
     }
 
     fun handleBackspace() {
+        if (dropIfTaken()) return
         when (inputState) {
             InputState.IDLE -> deleteBeforeCursor()
+            InputState.BUNSETSU -> leaveBunsetsu()
             InputState.SELECTING -> {
                 inputState = InputState.COMPOSING
                 showComposing()
@@ -355,6 +427,8 @@ class InputHandler(
                 if (conversionEnd > composingText.length) conversionEnd = 0
                 if (composingText.isEmpty() && romaji.pending().isEmpty()) {
                     inputState = InputState.IDLE
+                    reclaimComposing()
+                    composingShown = ""
                     host.ic?.setComposingText("", 1)
                     host.ic?.finishComposingText()
                     candidates = emptyList()
@@ -367,9 +441,10 @@ class InputHandler(
     }
 
     fun handleEnterKey() {
+        if (dropIfTaken()) return   // 「確定」のキーが、そのまま送信にならないように
         when (inputState) {
-            InputState.SELECTING -> commitTopCandidate()
-            InputState.COMPOSING -> if (liveTop() != null && romaji.pending().isEmpty()) commitTopCandidate() else commitRaw()   // ライブ変換は見えている変換で確定
+            InputState.SELECTING, InputState.BUNSETSU -> commitTopCandidate()
+            InputState.COMPOSING -> if (liveTop() != null && romaji.pending().isEmpty()) commitTopCandidate() else commitRaw(confirm = true)   // ライブ変換は見えている変換で確定
             InputState.IDLE -> {
                 val ic = host.ic ?: return
                 val action = enterAction()
@@ -416,18 +491,44 @@ class InputHandler(
         }
     }
 
-    /** かなのまま確定 */
-    fun commitRaw() {
+    /** かなのまま確定。confirm = Enter で確定した: その読みに学習があれば、かなも 1 回分数える (PC の confirm と同じ) */
+    fun commitRaw(confirm: Boolean = false) {
+        if (dropIfTaken()) return
         flushRomaji()
-        if (composingText.isNotEmpty()) insertText(composingText)
+        if (composingText.isNotEmpty()) {
+            insertLearned(if (confirm && !privateField) learning.confirmKana(composingText, ctx) else null, composingText)
+        }
         resetComposition()
+    }
+
+    /** text を確定する。undo = 学習の前の値: 取消キーで学習も戻せるように、入れた字の記録に付ける */
+    private fun insertLearned(undo: Learning.Undo?, text: String) {
+        val last = hostUndoStack.lastOrNull()
+        insertText(text)
+        if (undo == null) return
+        hostUndoStack.lastOrNull()?.takeIf { it !== last }?.learn = undo
+        saveLearningSoon()
+    }
+
+    private var learningSavePending = false
+
+    /** 確定が続く間もプロセスが落ちると学習が消えるので、少し待ってまとめて書く */
+    private fun saveLearningSoon() {
+        host.learningChanged()
+        if (learningSavePending) return
+        learningSavePending = true
+        host.postDelayed(LEARNING_SAVE_MS) {
+            learningSavePending = false
+            learning.save()
+        }
     }
 
     /** 候補の帯をタップ */
     /** 提案を選んだ: その文で確定する (打ったとおりの変換ではないので学習しない) */
     fun commitSuggestion(index: Int) {
+        if (dropIfTaken()) return
         val sg = suggestions.getOrNull(index) ?: return
-        settings.recordSuggestUse(sg.second)
+        if (!privateField) settings.recordSuggestUse(sg.second)
         // 気分の絵文字・顔文字 (6) は絵文字だけが来る: いま見えている 1 位の後ろに足す
         val text = if (sg.first == 6) (candidates.firstOrNull() ?: "") + sg.second else sg.second
         val (_, tail) = splitAtConversionEnd(composingText)
@@ -442,6 +543,11 @@ class InputHandler(
     }
 
     fun commitCandidate(index: Int) {
+        if (dropIfTaken()) return
+        if (inputState == InputState.BUNSETSU) {
+            pickBunsetsu(index)
+            return
+        }
         val text = candidates.getOrNull(index)
         if (text.isNullOrEmpty()) {
             resetComposition()
@@ -452,6 +558,11 @@ class InputHandler(
 
     /** いま選んでいる候補で確定 (候補が無ければかなのまま) */
     fun commitTopCandidate() {
+        if (dropIfTaken()) return
+        if (inputState == InputState.BUNSETSU) {
+            commitBunsetsu()
+            return
+        }
         val text = candidates.getOrNull(selectedCandidateIndex)
         if (text.isNullOrEmpty()) {
             commitPending()
@@ -460,10 +571,19 @@ class InputHandler(
         commitChosen(text)
     }
 
+    /** 1 位以外を選んだ: 選び直した語だけを語として数える (読み全体だけだと次の文に効かない) */
+    private fun learnCommit(reading: String, text: String): Learning.Undo? {
+        val words = host.ai?.changedWords(reading, text)?.filter { it.reading != reading }.orEmpty()
+        if (words.isEmpty()) return if (reading.length <= MAX_WHOLE_LEARN_LEN) learning.recordChoice(reading, text, ctx) else null
+        val done = words.mapNotNull { learning.recordChoice(it.reading, it.surface, it.left) }
+        val whole = if (reading.length <= MAX_WHOLE_LEARN_LEN) learning.recordChoice(reading, text, ctx) else null
+        return learning.undoOf(done + listOfNotNull(whole))
+    }
+
     private fun commitChosen(text: String) {
         val (reading, tail) = splitAtConversionEnd(composingText)
-        if (!isNonLearningCandidate(reading, text)) learning.recordChoice(reading, text)
-        insertText(text)
+        insertLearned(if (privateField || isNonLearningCandidate(reading, text)) null else learnCommit(reading, text), text)
+        if (!privateField) host.ai?.aiLearn(ctx, reading, text)   // AI学習 (設定でオンのときだけ学ぶ)
         ctx += text
         if (tail.isNotEmpty()) {
             continueWithTail(tail)
@@ -482,7 +602,7 @@ class InputHandler(
     /** 確定の後の帯の候補をタップ */
     fun commitPrediction(index: Int) {
         val text = predictions.getOrNull(index) ?: return
-        insertText(text)
+        insertText(text, raw = true)
         predictions = afterInsertStrip(emptyList())
         host.render()
     }
@@ -502,7 +622,13 @@ class InputHandler(
         // 速く打つと、ここに来るまでに入力がもう進んでいる。固定した読みが頭に残っていれば確定してよい
         if (fk.isEmpty() || !composingText.startsWith(fk) || !target.startsWith(fk) || isRangeShrunk()) return
         if (inputState != InputState.COMPOSING) return
-        insertText(fs)
+        // 確定した文節も数える (PC の固定した文節と同じ。学習のある読みだけ)
+        var left = ctx
+        val done = if (privateField) emptyList() else host.ai?.frozenChunks().orEmpty().mapNotNull { (k, s) ->
+            learning.confirm(k, s, left).also { left += s }
+        }
+        insertLearned(learning.undoOf(done), fs)
+        if (!privateField) host.ai?.aiLearn(ctx, fk, fs)
         ctx += fs
         host.ai?.clearFrozen(fk, fs)
         continueWithTail(composingText.substring(fk.length))
@@ -515,20 +641,29 @@ class InputHandler(
         keysValid = true
         suggestions = emptyList()
         if (touchField && (composingText.isNotEmpty() || inputState != InputState.IDLE)) {
+            reclaimComposing()
             host.ic?.setComposingText("", 1)
             host.ic?.finishComposingText()
         }
+        composingShown = ""
         fieldHadComposing = false
         composingUndoStack.clear()
         composingText = ""
         conversionEnd = 0
         candidates = emptyList()
         selectedCandidateIndex = 0
+        bSegs.clear()
+        bChosen.clear()
+        bCur = 0
         inputState = InputState.IDLE
         host.render()
     }
 
     fun handleCursorLeft() {
+        if (inputState == InputState.BUNSETSU) {
+            selectBunsetsu(bCur - 1)
+            return
+        }
         if (inputState != InputState.IDLE && composingText.isNotEmpty()) {
             if (conversionEnd == 0) conversionEnd = composingText.length
             if (conversionEnd > 1) {
@@ -541,6 +676,10 @@ class InputHandler(
     }
 
     fun handleCursorRight() {
+        if (inputState == InputState.BUNSETSU) {
+            selectBunsetsu(bCur + 1)
+            return
+        }
         if (inputState != InputState.IDLE && composingText.isNotEmpty()) {
             if (conversionEnd > 0 && conversionEnd < composingText.length) {
                 conversionEnd++
@@ -553,6 +692,140 @@ class InputHandler(
     }
 
     /** あA キー: 日本語 → 英字 (→ 数字パッド。設定でオンのとき) → 日本語 (HarmonyOS 版 cycleInputMode と同じ) */
+    // ---------------------------------------------------------------- 文節 (HarmonyOS 版 handleBunsetsu と同じ動き)
+    private val bSegs = ArrayList<String>()     // 文節ごとの読み
+    private val bChosen = ArrayList<String>()   // 文節ごとの今の表記
+    private var bCur = 0
+
+    /** 空白キーで文節に分けられるか (2 字以上の入力中で、AI 変換が使えるとき) */
+    val bunsetsuAvailable: Boolean
+        get() = host.ai != null && composingText.length >= 2 && inputState == InputState.COMPOSING
+
+    /** 空白キーの表示: 何も打っていなければ idle、入力中は「文節」(分けられないときと、文節の中は「変換」) */
+    fun spaceLabel(idle: String): String = when {
+        inputState == InputState.IDLE -> idle
+        bunsetsuAvailable -> "文節"
+        else -> "変換"
+    }
+
+    /** 入力中なら文節に分ける。文節の中なら読みに戻す */
+    private fun toggleBunsetsu() {
+        if (dropIfTaken()) return
+        if (inputState == InputState.BUNSETSU) {
+            leaveBunsetsu()
+            return
+        }
+        if (inputState != InputState.COMPOSING && inputState != InputState.SELECTING) return
+        flushRomaji()
+        val ai = host.ai ?: return
+        if (composingText.isEmpty()) return
+        splitBunsetsu(ai, composingText)
+        conversionEnd = 0
+        suggestions = emptyList()
+        typoTop = ""
+        bCur = 0
+        inputState = InputState.BUNSETSU
+        showBunsetsu()
+    }
+
+    /**
+     * 文節に分ける: 読み全体を AI 変換して、1 位の候補の語の区切りで分ける。かなだけの語 (助詞・助動詞・送り) は
+     * 前の語につなげる (しゃしん|を|とっ|た -> 写真を|撮った)。区切りが取れなければ全体を 1 文節に
+     */
+    private fun splitBunsetsu(ai: AiConverter, reading: String) {
+        val r = ai.convertNow(ctx, reading, 1, keys = keysValid)
+        val top = r.cands.firstOrNull() ?: reading
+        bSegs.clear()
+        bChosen.clear()
+        // 数字にする・打ち間違いを直すなどで 1 位が差し替わると、語の区切りが 1 位と合わない。切ると字が欠けるので 1 文節に
+        if (r.ends.isEmpty() || r.lens.sum() != top.length) {
+            bSegs.add(reading)
+            bChosen.add(top)
+            return
+        }
+        var rs = 0
+        var ss = 0
+        for (i in r.ends.indices) {
+            val end = r.ends[i].coerceIn(rs, reading.length)
+            val seg = reading.substring(rs, end)
+            val surf = top.substring(ss, ss + r.lens[i])
+            rs = end
+            ss += r.lens[i]
+            if (bSegs.isNotEmpty() && surf.isNotEmpty() && surf.all { it in 'ぁ'..'ゖ' || it == 'ー' } && seg !in BUNSETSU_PUNCT) {
+                bSegs[bSegs.size - 1] += seg
+                bChosen[bChosen.size - 1] += surf
+            } else {
+                bSegs.add(seg)
+                bChosen.add(surf)
+            }
+        }
+        if (rs < reading.length) {   // 区切りが読みの終わりまで届いていなければ、残りを最後の文節に
+            bSegs[bSegs.size - 1] += reading.substring(rs)
+            bChosen[bChosen.size - 1] += reading.substring(rs)
+        }
+    }
+
+    /** i 番目の文節の候補: 今の表記を先頭に、前の文節 (今の表記) を文脈にして AI 変換した候補 */
+    private fun bunsetsuCandidates(i: Int): List<String> {
+        val seg = bSegs[i]
+        val left = ctx + bChosen.take(i).joinToString("")
+        val out = LinkedHashSet<String>()
+        out.add(bChosen[i])
+        host.ai?.convertNow(left, seg, 30)?.cands?.forEach { if (renderable(it)) out.add(it) }
+        out.add(seg)
+        out.add(toKatakana(seg))
+        return out.toList()
+    }
+
+    private fun showBunsetsu() {
+        candidates = bunsetsuCandidates(bCur)
+        selectedCandidateIndex = 0
+        showComposing()
+        host.render()
+    }
+
+    private fun selectBunsetsu(i: Int) {
+        if (i < 0 || i >= bSegs.size) return
+        bCur = i
+        showBunsetsu()
+    }
+
+    /** 今の文節に候補を選んで、次の文節へ (最後の文節なら全部を確定) */
+    private fun pickBunsetsu(index: Int) {
+        candidates.getOrNull(index)?.let { bChosen[bCur] = it }
+        if (bCur + 1 < bSegs.size) selectBunsetsu(bCur + 1) else commitBunsetsu()
+    }
+
+    /** 文節をやめて、読みの入力に戻す */
+    private fun leaveBunsetsu() {
+        bSegs.clear()
+        bChosen.clear()
+        bCur = 0
+        inputState = InputState.COMPOSING
+        selectedCandidateIndex = 0
+        updateCandidates()
+    }
+
+    /** 文節を全部つないで確定する。文節ごとに学習する (かなのままの文節は、その読みの学習があるときだけ数える) */
+    private fun commitBunsetsu() {
+        val text = bChosen.joinToString("")
+        val reading = bSegs.joinToString("")
+        val done = ArrayList<Learning.Undo>()
+        if (!privateField) {
+            var left = ctx
+            for (i in bSegs.indices) {
+                val u = if (bSegs[i] == bChosen[i]) learning.confirm(bSegs[i], bChosen[i], left) else learning.recordChoice(bSegs[i], bChosen[i], left)
+                if (u != null) done.add(u)
+                left += bChosen[i]
+            }
+        }
+        insertLearned(if (privateField) null else learning.undoOf(done), text)
+        if (!privateField) host.ai?.aiLearn(ctx, reading, text)
+        ctx += text
+        resetComposition()
+        pushPredictions(text)
+    }
+
     fun cycleInputMode() {
         // 入力中の文字は確定しない (英字・数字も続けて足して一緒に変換する: ぱちんこ + CR、2000 + えん)
         when {
@@ -584,8 +857,11 @@ class InputHandler(
      * 起きた位置まで戻って取り消す (本当の元に戻すと同じ順序で遡る)
      */
     fun undoLastDeletion() {
+        if (dropIfTaken()) return
         if (inputState != InputState.IDLE) {
             val ch = composingUndoStack.removeLastOrNull() ?: return
+            if (inputState == InputState.BUNSETSU) leaveBunsetsu()
+            if (inputState == InputState.SELECTING) inputState = InputState.COMPOSING   // 候補を確定せず、読みへ戻す
             handleDirectKana(ch)
             return
         }
@@ -597,7 +873,12 @@ class InputHandler(
         } else if (op.kind == 0) {
             // 入れた字の直後へ動いて、その字が本当にそこにあるときだけ消す
             ic.setSelection(op.at + op.text.length, op.at + op.text.length)
-            if (ic.getTextBeforeCursor(op.text.length, 0)?.toString() == op.text) ic.deleteSurroundingText(op.text.length, 0)
+            if (ic.getTextBeforeCursor(op.text.length, 0)?.toString() == op.text) {
+                ic.deleteSurroundingText(op.text.length, 0)
+                // その確定で覚えたことも戻す (PC と同じ)。節が閉じて数えた文の流れは戻らない
+                op.learn?.let { learning.restore(it); saveLearningSoon() }
+                repeat(op.text.length) { SentenceFlow.backspace() }
+            }
         } else {
             ic.setSelection(op.at, op.at)
             ic.commitText(op.text, 1)
@@ -606,11 +887,15 @@ class InputHandler(
     }
 
     // ---------------------------------------------------------------- 入力欄への出力
-    /** 入力欄に文字を確定する (出口はここ 1 箇所。取消のための記録もここ) */
-    fun insertText(text: String) {
+    /** 入力欄に文字を確定する (出口はここ 1 箇所。取消のための記録もここ)。raw = 貼り付けなど: 括弧を組にしない */
+    fun insertText(text: String, raw: Boolean = false) {
         val ic = host.ic ?: return
+        pasteFrom = null        // 自分で入れた (アプリに頼んだ貼り付けが失敗して自分で入れたときも、ここで記録する)
+        reclaimComposing()      // 確定は未確定の範囲を置き換える。範囲が無いと見えている字の後ろに足されてしまう
+        composingShown = ""     // ここから先の字は確定済み (同じ字でも付け直さない)
         // 開き括弧 (記号の欄の 1 字・かっこ の変換の組) は閉じと組で入れて、カーソルを中へ (HarmonyOS 版 組で。2026-10-14)
-        val close = Brackets.PAIRS[text] ?: if (text.length == 2 && Brackets.PAIRS[text.substring(0, 1)] == text.substring(1)) "" else null
+        val close = if (raw || passwordField) null   // 伏せ字の欄では、勝手に足した閉じ括弧に気づけない
+            else Brackets.PAIRS[text] ?: if (text.length == 2 && Brackets.PAIRS[text.substring(0, 1)] == text.substring(1)) "" else null
         if (close != null) {
             val pair = if (close.isEmpty()) text else text + close
             ic.beginBatchEdit()
@@ -618,14 +903,14 @@ class InputHandler(
             val at = cursor()
             at?.let { ic.setSelection(it - 1, it - 1); pushHostOp(true, pair, it - pair.length) }
             ic.endBatchEdit()
-            SentenceFlow.feed(pair.substring(0, 1))
+            if (!privateField) SentenceFlow.feed(pair.substring(0, 1))
             return
         }
         ic.commitText(text, 1)
         cursor()?.let { pushHostOp(true, text, it - text.length) }
         // 文の流れ (SentenceFlow) に入れる。@ を入れた (あっと の変換・記号) ときはメールのドメインの続き、ほかは文の流れの続きを
         // 確定の後の帯に出す (ユーザー 2026-10-13)。変換の確定のときは、この後の pushPredictions がまとめて出し直す
-        SentenceFlow.feed(text)
+        if (!privateField) SentenceFlow.feed(text)
         val st = afterInsertStrip(emptyList())
         if (st.isNotEmpty()) { predictions = st; host.render() }
     }
@@ -686,6 +971,29 @@ class InputHandler(
         host.render()
     }
 
+    // アプリに貼り付けを頼んだときの、頼む前のカーソルの位置 (アプリが入れた字を、取消キーで戻せるように後から記録する)
+    private var pasteFrom: Int? = null
+    private var pasteUntil = 0L
+
+    /** アプリに貼り付けを頼む直前に呼ぶ。入った字は、カーソルが前へ動いたとき (onHostSelection) に記録する */
+    fun expectAppPaste() {
+        pasteFrom = cursor()
+        pasteUntil = SystemClock.uptimeMillis() + PASTE_WAIT_MS
+    }
+
+    /**
+     * 入力欄のカーソルが動いた (onUpdateSelection)。アプリに頼んだ貼り付けなら、入った字を取消の記録に積む。
+     * 直前の確定の遅れた通知 (位置が動いていない) は飛ばして待つ。待つのは PASTE_WAIT_MS まで (後で指で動かした分を数えない)
+     */
+    fun onHostSelection(start: Int, end: Int) {
+        val from = pasteFrom ?: return
+        if (SystemClock.uptimeMillis() > pasteUntil) { pasteFrom = null; return }
+        if (start != end || start <= from) return
+        pasteFrom = null
+        val text = host.ic?.getTextBeforeCursor(start - from, 0)?.toString() ?: return
+        if (text.length == start - from) pushHostOp(true, text, from)
+    }
+
     private fun pushHostOp(insert: Boolean, text: String, at: Int) {
         if (text.isEmpty() || at < 0) return
         val now = System.currentTimeMillis()
@@ -725,6 +1033,19 @@ class InputHandler(
     private fun showComposing() {
         val ic = host.ic ?: return
         lastComposingEdit = SystemClock.uptimeMillis()
+        if (!reclaimComposing()) {   // 遅れて届いた変換の結果: アプリが空にした欄へ書き戻さない
+            dropComposing()
+            return
+        }
+        if (inputState == InputState.BUNSETSU) {   // 文節をつないで、今の文節に色を付ける
+            composingShown = bChosen.joinToString("")
+            val s = SpannableString(composingShown)
+            val at = bChosen.take(bCur).sumOf { it.length }
+            val len = bChosen.getOrNull(bCur)?.length ?: 0
+            if (len > 0) s.setSpan(BackgroundColorSpan(RANGE_BG), at, at + len, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            ic.setComposingText(s, 1)
+            return
+        }
         if (inputState == InputState.SELECTING) {
             val (_, tail) = splitAtConversionEnd(composingText)
             composingShown = (candidates.getOrNull(selectedCandidateIndex) ?: "") + tail
@@ -765,6 +1086,7 @@ class InputHandler(
             tables.KAOMOJI_MAP[reading]?.contains(text) == true
 
     fun updateCandidates() {
+        if (inputState == InputState.BUNSETSU) return   // 文節の候補は文節ごとに出す (裏の変換の結果が届いても上書きしない)
         if (composingText.isEmpty()) {
             candidates = emptyList()
             suggestions = emptyList()
@@ -873,6 +1195,12 @@ class InputHandler(
         val half = toHalfKatakana(toKatakana(target))
         if (half != toKatakana(target) && half !in cands) cands.add(half)
         cands = ArrayList(cands.filter { renderable(it) })
+        // 読みのままの形は 5 番目までに必ず出す (あいうえおんがく のような題名。スマホには無変換キーが無い。ユーザー 2026-10-31)
+        val kanaAt = cands.indexOf(target)
+        if (kanaAt > 4) {
+            cands.removeAt(kanaAt)
+            cands.add(4, target)
+        }
         candidates = cands
         if (inputState != InputState.SELECTING) selectedCandidateIndex = 0
         else selectedCandidateIndex = selectedCandidateIndex.coerceAtMost(cands.size - 1)
@@ -928,24 +1256,31 @@ class InputHandler(
 
     companion object {
         private const val UNDO_MERGE_MS = 1500L
+        private const val PASTE_WAIT_MS = 1500L   // アプリに頼んだ貼り付けの字が入るのを待つ長さ
         private const val FIELD_CHECK_MS = 150L   // 未確定の範囲が消えた通知を信じるまでの時間
         private const val RESTART_RETRY_MS = 80L  // 入力のやり直しの後、欄を読み直すまでの時間
+        private const val LEARNING_SAVE_MS = 500L // 確定から学習をファイルに書くまでの時間 (HarmonyOS 版と同じ)
         private const val UNIT_MARKS = "℃°%％‰℉Ω㎏㎞㎝㎜㎡㎥¥￥$＄€£"
         private val PAST_FORMS = listOf("てしまいました", "ちゃいました", "てしまった", "ちゃった", "ちゃう", "ました", "ています", "ている", "てる", "ます")
         private val TAIL_PARTICLES = listOf("ですね", "ですよ", "でした", "です", "だね", "だよ", "だな", "すぎる", "すぎ", "ね", "よ", "な", "わ", "だ")
         private val EMAIL_TAIL = Regex("""[A-Za-z0-9._%+-]*[@＠]([A-Za-z0-9.-]*)$""")
         private const val MAX_HOST_UNDO = 50
         private val RANGE_BG = Color.argb(0x60, 0x4C, 0x8D, 0xFF)
-        private val ALPHA_VARIATIONS = setOf(
+        private const val BUNSETSU_PUNCT = "、。！？!?"
+        private val PASSWORD_VARIATIONS = setOf(
             EditorInfo.TYPE_TEXT_VARIATION_PASSWORD, EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD,
-            EditorInfo.TYPE_TEXT_VARIATION_WEB_PASSWORD, EditorInfo.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
+            EditorInfo.TYPE_TEXT_VARIATION_WEB_PASSWORD,
+        )
+        private val ALPHA_VARIATIONS = PASSWORD_VARIATIONS + setOf(
+            EditorInfo.TYPE_TEXT_VARIATION_EMAIL_ADDRESS,
             EditorInfo.TYPE_TEXT_VARIATION_WEB_EMAIL_ADDRESS, EditorInfo.TYPE_TEXT_VARIATION_URI,
         )
 
         fun toKatakana(s: String) = buildString { for (c in s) append(if (c in 'ぁ'..'ゖ') c + 0x60 else c) }
 
         private const val HALF_BASE = "ｧｱｨｲｩｳｪｴｫｵｶｶｷｷｸｸｹｹｺｺｻｻｼｼｽｽｾｾｿｿﾀﾀﾁﾁｯﾂﾂﾃﾃﾄﾄﾅﾆﾇﾈﾉﾊﾊﾊﾋﾋﾋﾌﾌﾌﾍﾍﾍﾎﾎﾎﾏﾐﾑﾒﾓｬﾔｭﾕｮﾖﾗﾘﾙﾚﾛﾜﾜｲｴｦﾝｳｶｹ"
-        private const val HALF_MARK = "00000000000101010101010101010101010010101000000120120120120120000000000000000000000100"
+        private const val MAX_WHOLE_LEARN_LEN = 12   // 語に分けられたとき、読み全体も覚えるのはこの字数まで (長い文は二度と来ない)
+        private const val HALF_MARK ="00000000000101010101010101010101010010101000000120120120120120000000000000000000000100"
 
         /** 全角カタカナ -> 半角カタカナ (HarmonyOS 版 toHalfKatakana と同じ表) */
         fun toHalfKatakana(s: String) = buildString {

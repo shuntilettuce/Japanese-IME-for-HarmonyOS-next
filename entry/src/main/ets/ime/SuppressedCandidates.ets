@@ -58,7 +58,7 @@ export class SuppressedCandidates {
     if (reading.length === 0 || surface.length === 0) { return false; }
     if (surface === reading) { return false; }
     let list = SuppressedCandidates.map[reading];
-    if (list === undefined) {
+    if (!Array.isArray(list)) {   // constructor などの読みは Object の関数が返る
       const all = Object.keys(SuppressedCandidates.map);
       if (all.length >= MAX_READINGS) {
         // 上限では、いちばん前に消した読みを追い出す (前は黙って断った。2026-10-25)
@@ -81,7 +81,7 @@ export class SuppressedCandidates {
   // never reappear just because it happened to be the last one standing.
   static filter(reading: string, cands: string[]): string[] {
     const list = SuppressedCandidates.map[reading];
-    if (list === undefined || list.length === 0) { return cands; }
+    if (!Array.isArray(list) || list.length === 0) { return cands; }
     const kept = cands.filter((c: string) => list.indexOf(c) < 0);
     if (kept.length > 0) { return kept; }
     return [reading];

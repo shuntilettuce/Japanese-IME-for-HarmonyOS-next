@@ -10,6 +10,8 @@ namespace fs = std::filesystem;
 
 namespace shunti {
 
+float typo_bias_of(int level) { return level <= 0 ? 1.f : level >= 2 ? -1.f : 0.f; }
+
 bool load_settings(const fs::path& p, Settings& s) {
     s = Settings();
     std::string text;
@@ -34,6 +36,8 @@ bool load_settings(const fs::path& p, Settings& s) {
     boolean("cand_tree", s.cand_tree);
     boolean("space_literal", s.space_literal);
     boolean("punct_commit", s.punct_commit);
+    boolean("clip_history", s.clip_history);
+    boolean("ai_learn", s.ai_learn);
     boolean("latin_auto", s.latin_auto);
     boolean("typo_fix", s.typo_fix);
     boolean("learn_log", s.learn_log);
@@ -44,6 +48,9 @@ bool load_settings(const fs::path& p, Settings& s) {
     str("model", s.model);
     if (const json::Value* x = v.get("punct"); x && x->type == json::Value::Number) s.punct = int(x->num) & 3;
     str("half_symbols", s.half_symbols);
+    if (const json::Value* x = v.get("typo_level"); x && x->type == json::Value::Number) s.typo_level = std::clamp(int(x->num), 0, 2);
+    if (const json::Value* x = v.get("ctx_left"); x && x->type == json::Value::Number) s.ctx_left = std::clamp(int(x->num), 0, CTX_LIMIT);
+    if (const json::Value* x = v.get("ctx_right"); x && x->type == json::Value::Number) s.ctx_right = std::clamp(int(x->num), 0, CTX_LIMIT);
     if (const json::Value* x = v.get("numpad"); x && x->type == json::Value::Number) s.numpad = std::clamp(int(x->num), 0, 2);
     if (const json::Value* x = v.get("page_size"); x && x->type == json::Value::Number) s.page_size = std::clamp(int(x->num), 5, 9);
     boolean("muhenkan_off", s.muhenkan_off);
@@ -105,6 +112,8 @@ bool save_settings(const fs::path& p, const Settings& s) {
     o += std::string("  \"cand_tree\": ") + b(s.cand_tree) + ",\n";
     o += std::string("  \"space_literal\": ") + b(s.space_literal) + ",\n";
     o += std::string("  \"punct_commit\": ") + b(s.punct_commit) + ",\n";
+    o += std::string("  \"clip_history\": ") + b(s.clip_history) + ",\n";
+    o += std::string("  \"ai_learn\": ") + b(s.ai_learn) + ",\n";
     o += std::string("  \"latin_auto\": ") + b(s.latin_auto) + ",\n";
     o += std::string("  \"typo_fix\": ") + b(s.typo_fix) + ",\n";
     o += std::string("  \"learn_log\": ") + b(s.learn_log) + ",\n";
@@ -114,6 +123,9 @@ bool save_settings(const fs::path& p, const Settings& s) {
     o += "  \"model\": " + json::quote(s.model) + ",\n";
     o += "  \"half_symbols\": " + json::quote(s.half_symbols) + ",\n";
     o += "  \"numpad\": " + std::to_string(s.numpad) + ",\n";
+    o += "  \"typo_level\": " + std::to_string(s.typo_level) + ",\n";
+    o += "  \"ctx_left\": " + std::to_string(s.ctx_left) + ",\n";
+    o += "  \"ctx_right\": " + std::to_string(s.ctx_right) + ",\n";
     o += "  \"page_size\": " + std::to_string(s.page_size) + ",\n";
     o += std::string("  \"private_mode\": ") + b(s.private_mode) + ",\n";
     o += std::string("  \"app_default_open\": ") + b(s.app_default_open) + ",\n";

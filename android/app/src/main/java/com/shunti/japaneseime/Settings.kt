@@ -97,6 +97,11 @@ class Settings(context: Context) {
         get() = p.getBoolean("liveDisplay", false)
         set(v) = p.edit().putBoolean("liveDisplay", v).apply()
 
+    /** AI学習 (既定オフ): 確定した文から、変換の点に上乗せする小さいモデルを端末の中で育てる (PC 版と同じ) */
+    var aiLearn: Boolean
+        get() = p.getBoolean("aiLearn", false)
+        set(v) = p.edit().putBoolean("aiLearn", v).apply()
+
     var liveCommit: Boolean
         get() = false   // 設定は廃止 (2026-10-14)
         set(v) = p.edit().putBoolean("liveCommit", v).apply()

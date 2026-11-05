@@ -73,48 +73,6 @@ for (const [file, names] of Object.entries(TABLES)) {
 const dst = join(root, 'android/app/src/main/assets/hmos_tables.json');
 writeFileSync(dst, JSON.stringify(out));
 
-// ライセンス表記 (設定画面の「ライセンス」)。全文はリポジトリの LICENSE と THIRD_PARTY_NOTICES.md から、
-// Android 版に入っているもの (AI 変換の辞書 shuntorge が含む mozc・IPAdic・沖縄辞書・SudachiDict) の節だけを取り出す
-{
-  const notices = readFileSync(join(root, 'THIRD_PARTY_NOTICES.md'), 'utf8').replace(/\r\n/g, '\n').split('\n');
-  const want = ['## mozc', '## IPAdic', '## SudachiDict', '## Okinawa'];
-  const sections = [];
-  for (let i = 0; i < notices.length; i++) {
-    const head = notices[i].startsWith('## ') && (i === 0 || !notices[i - 1].startsWith('## '));
-    if (!head || !want.some((w) => notices[i].startsWith(w))) continue;
-    let j = i + 1;
-    while (j < notices.length && !(notices[j].startsWith('## ') && !notices[j - 1].startsWith('## ')) && notices[j] !== '---') j++;
-    sections.push(notices.slice(i, j).map((l) => l.replace(/^## /, '')).join('\n').trim());
-  }
-  if (sections.length !== want.length) throw new Error(`THIRD_PARTY_NOTICES.md の節が ${sections.length} 個しか見つからない`);
-  const license = readFileSync(join(root, 'LICENSE'), 'utf8').replace(/\r\n/g, '\n').trim();
-  const text = [
-    'shunti IME (Android 版)',
-    '',
-    '■ アプリのコードと変換エンジン',
-    'MIT License (全文は下に)。Copyright (c) 2026 shuntilettuce',
-    '',
-    '■ shuntelligence (AI 変換のモデル)',
-    'shuntelligence (shuntilettuce)、CC BY 4.0',
-    'https://creativecommons.org/licenses/by/4.0/',
-    '',
-    '■ shuntorge (AI 変換の辞書)',
-    '独自の部分は MIT。以下を含みます。',
-    '・mozc (Google、BSD-3-Clause。IPAdic 由来の辞書データと沖縄辞書を含む)',
-    '・SudachiDict (Works Applications、Apache License 2.0。読みの一部)',
-    '・日本郵便 郵便番号データ (地名の照合)',
-    '',
-    '■ キー配置・記号・絵文字・顔文字の表',
-    'HarmonyOS 版 shunti IME と同じもの (MIT)。',
-    '',
-    '学習のコードと教材は公開していません。',
-    '',
-    '────────────────────────',
-    license,
-    ...sections.flatMap((s) => ['', '────────────────────────', s]),
-    '',
-  ].join('\n');
-  writeFileSync(join(root, 'android/app/src/main/assets/licenses.txt'), text);
-  console.log('licenses.txt', text.length, '字');
-}
+// ライセンス表記 (android/app/src/main/assets/licenses.txt) は手で書いている (フォント・SCOWL・CC BY-SA などの節が増えたため)。
+// ここで作り直すと、それらが消える。直すときは desktop/windows/LICENSE.txt と同じ内容にそろえる
 for (const [k, v] of Object.entries(out)) console.log(k, typeof v === 'string' ? `${v.length} 字` : Array.isArray(v) ? v.length : Object.keys(v).length);

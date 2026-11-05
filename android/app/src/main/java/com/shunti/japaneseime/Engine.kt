@@ -11,7 +11,9 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
     /** 変換の結果: 候補と、1 位の候補の語の区切り (ends[i] = i 語目の読みの終わり、lens[i] = 表記の長さ) */
     class Result(val cands: List<String>, val ends: IntArray, val lens: IntArray,
                  /** 提案 (種類, 表記)。種類は engine.h の KKC_SUGGEST_* (1 打ち間違いの直し 2 日付 3 住所 4 英単語 6 気分 7 記号) */
-                 val sugg: List<Pair<Int, String>> = emptyList())
+                 val sugg: List<Pair<Int, String>> = emptyList(),
+                 /** 上位の経路 (表示しない。確定した語を学習するのに使う)。1 本ごとに "読みの終わり\u0001表記\u0001…" */
+                 val paths: List<String> = emptyList())
 
     /** 上位の候補。ctx = 確定済みの左の文脈、kana = 読み。times に段階ごとのミリ秒が入る (5 個) */
     fun convert(ctx: String, kana: String, max: Int = 10, model: Boolean = true, times: DoubleArray? = null): List<String> =
@@ -24,7 +26,8 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
         if (keys != null && keys.second.size == kana.length) nativeSetKeys(handle, keys.first, keys.second)
         val raw = nativeConvert(handle, ctx, kana, max * 2, model, times)
         val seg = nativeSegments(handle)
-        val sugg = nativeLastSuggest(handle).mapNotNull { s ->
+        val paths = nativePaths(handle).toList()
+        val sugg =nativeLastSuggest(handle).mapNotNull { s ->
             val i = s.indexOf('\u0001')
             if (i <= 0) null else (s.substring(0, i).toIntOrNull() ?: 0) to s.substring(i + 1)
         }.filter { allowSlurs || slurs == null || !slurs.containsMatchIn(it.second) }
@@ -32,7 +35,7 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
         // 差別語で 1 位が落ちたときは区切りを使わない (区切りは元の 1 位のもの)
         val ok = raw.isNotEmpty() && cands.isNotEmpty() && cands[0] == raw[0]
         val n = if (ok) seg.size / 2 else 0
-        return Result(cands, IntArray(n) { seg[2 * it] }, IntArray(n) { seg[2 * it + 1] }, sugg)
+        return Result(cands, IntArray(n) { seg[2 * it] }, IntArray(n) { seg[2 * it + 1] }, sugg, paths)
     }
 
     /**
@@ -43,7 +46,12 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
         if (handle == 0L) return 0
         nativeUserClear(handle)
         var n = 0
-        for (f in forms) n += nativeUserAddLike(handle, f.reading, f.surface, f.tmplReading, f.tmplSurface, bonus)
+        for (f in forms) {
+            var ok = nativeUserAddLike(handle, f.reading, f.surface, f.tmplReading, f.tmplSurface, bonus)
+            // 代表語がその語そのもの (学習で選んだ語) で辞書に無いときは、名詞の代表語で入れる (PC 版と同じ)
+            if (ok == 0 && f.tmplReading == f.reading && f.tmplSurface == f.surface) ok = nativeUserAddLike(handle, f.reading, f.surface, "ねこ", "猫", bonus)
+            n += ok
+        }
         return n
     }
 
@@ -58,6 +66,15 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
     fun setSuggest(on: Boolean) {
         if (handle != 0L) nativeSetSuggest(handle, on, 0)
     }
+
+    /** AI学習 (設定、既定オフ) のオン・オフ。path = 育てた中身の保存先 (null ならオフ)。同じ保存先なら、リセットで消されたかだけを見る。convert と同じスレッドで呼ぶ */
+    fun setAiLearn(path: String?) {
+        if (handle != 0L) nativeAiSet(handle, path ?: "")
+    }
+
+    /** 確定した文 (左の文脈・読み・表記) から 1 歩学んで保存する。返り値 = 学ぶ前の損失 (学ばなかったら負)。convert と同じスレッドで呼ぶ */
+    fun aiLearn(ctx: String, reading: String, text: String): Float =
+        if (handle == 0L) -1f else nativeAiLearn(handle, ctx, reading, text)
 
     fun setThreads(n: Int) {
         if (handle != 0L) nativeSetThreads(handle, n)
@@ -89,8 +106,11 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
         @JvmStatic private external fun nativeSetSuggest(h: Long, on: Boolean, charFilter: Int)
         @JvmStatic private external fun nativeLastSuggest(h: Long): Array<String>
         @JvmStatic private external fun nativeSegments(h: Long): IntArray
+        @JvmStatic private external fun nativePaths(h: Long): Array<String>
         @JvmStatic private external fun nativeUserClear(h: Long)
         @JvmStatic private external fun nativeComplete(h: Long, prefix: String, maxExtra: Int, maxOut: Int): Array<String>
+        @JvmStatic private external fun nativeAiSet(h: Long, path: String)
+        @JvmStatic private external fun nativeAiLearn(h: Long, ctx: String, reading: String, text: String): Float
         @JvmStatic private external fun nativeUserAddLike(h: Long, r: String, s: String, tr: String, ts: String, bonus: Int): Int
     }
 }

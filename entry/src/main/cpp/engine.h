@@ -98,3 +98,19 @@ KKC_API int kkc_user_add_like(kkc_engine* e, const uint16_t* r, int nr, const ui
 // 最大 maxout 個、0 区切りの UTF-16 で out に書く (こん → こんにちは・こんばんは・今度…)。返り値は数 (out が足りなければ -1)。
 // 辞書を読むだけなので、変換中の別のスレッドから呼んでもよい
 KKC_API int kkc_complete(kkc_engine* e, const uint16_t* prefix, int np, int max_extra, int maxout, uint16_t* out, int cap);
+
+// 使う人ごとに育つ小さいモデル。本体は固めたまま、確定した文から少しずつ動く (約 1 万個の数)。
+// オンにすると変換の点に上乗せが入る (初めは 0 = 本体そのまま)。版 7 のモデルは使う人のベクトルも、それより前の版は網だけ
+KKC_API int kkc_romance_enable(kkc_engine* e, int on);   // 返り値は動かす数の個数
+KKC_API void kkc_romance_config(kkc_engine* e, float lr_v, float lr_W, float lr_net, float l2, float cap);
+// 確定した文 text から学ぶ (直前の kkc_convert の網で)。1 = 学んだ、0 = 網に経路が無い、-1 = 直前の網が無い
+KKC_API int kkc_romance_learn(kkc_engine* e, const uint16_t* text, int nt, float* loss);
+// 保存と復元 (float の並び。大きさが違えば復元しない)
+KKC_API int kkc_romance_size(kkc_engine* e);
+KKC_API int kkc_romance_get(kkc_engine* e, float* out, int cap);
+KKC_API int kkc_romance_set(kkc_engine* e, const float* in, int n);
+KKC_API int kkc_romance_updates(kkc_engine* e);
+KKC_API void kkc_romance_reset(kkc_engine* e);   // 初めの値に戻す
+// 読み込んだモデルの印 (モデルのファイルの中身から作る 32bit)。AI学習の中身はモデルの内側の数に掛ける重みなので、
+// モデルごとに別のファイルに保存する (ai_learn_<印>.bin。軽量・標準の切り替えや更新で消えない。2026-11-06)
+KKC_API uint32_t kkc_model_tag(kkc_engine* e);

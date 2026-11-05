@@ -542,9 +542,9 @@ export struct FlickKeyboardView {
       })
     } else if (rowIdx === 2) {
       Row() {
-        Text(this.inputState === 'COMPOSING' ? '文節' : '空白')
+        Text(this.inputState === 'COMPOSING' ? '文節' : this.inputState === 'BUNSETSU' ? '変換' : '空白')
           .fontFamily(JP_FONT_FAMILY)
-          .fontSize(this.inputState === 'COMPOSING' ? 14 : 12)
+          .fontSize(this.inputState === 'IDLE' ? 12 : 14)
           .textAlign(TextAlign.Center)
           .width('100%').height('100%')
           .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)

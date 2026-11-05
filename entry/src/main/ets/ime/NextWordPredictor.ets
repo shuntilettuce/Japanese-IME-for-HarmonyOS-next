@@ -164,7 +164,7 @@ export class NextWordPredictor {
 
   private static bump(store: Record<string, Record<string, number>>, key: string, next: string): void {
     let entry = store[key];
-    if (entry === undefined) {
+    if (typeof entry !== 'object') {   // constructor などの語は Object の関数が返る
       const all = Object.keys(store);
       if (all.length >= MAX_LEARNED_KEYS) {
         // 上限では、いちばん使われていない語を追い出す (前は黙って学習を止めた。2026-10-25)
@@ -324,7 +324,7 @@ export class NextWordPredictor {
     NextWordPredictor.rankedInto(NextWordPredictor.learned[prev1], push);
     // 3. curated seed
     const seed = SEED_NEXT[prev1];
-    if (seed !== undefined) { for (const w of seed) { push(w); } }
+    if (Array.isArray(seed)) { for (const w of seed) { push(w); } }
     // 4. universal particle fallback after a content word
     if (NextWordPredictor.isContentTail(prev1)) {
       for (const p of GENERIC_PARTICLES) { push(p); }

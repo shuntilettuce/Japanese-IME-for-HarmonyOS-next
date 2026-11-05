@@ -34,7 +34,7 @@ export struct ExpandedCandidateView {
     }
     .padding({ left: 14, right: 14, top: 10, bottom: 10 })
     .onClick(() => {
-      const removed = InputHandler.getInstance().suppressCandidate(this.menuIndex);
+      const removed = InputHandler.getInstance().suppressCandidate(this.menuIndex, this.menuCandidate);
       this.closeMenu();
       if (removed.length > 0) {
         promptAction.showToast({ message: `「${removed}」を候補から削除しました（アプリの「削除した候補」から元に戻せます）` });

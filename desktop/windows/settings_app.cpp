@@ -30,11 +30,11 @@ namespace fs = std::filesystem;
 
 namespace {
 
-constexpr wchar_t VERSION[] = L"0.7.8";
+constexpr wchar_t VERSION[] = L"0.7.9";
 
 enum Id {
     ID_PUNCT = 100, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
-    ID_LIST, ID_READING, ID_WORD, ID_POS, ID_ADD, ID_REMOVE, ID_IMPORT, ID_ADVANCED, ID_UPDATE, ID_RESET, ID_RECENT_SPAN, ID_RECENT_FORGET, ID_RECENT_SPAN_AI, ID_RECENT_FORGET_AI, ID_LEARN_LOG, ID_LEARN_CLEAR, ID_LICENSE, ID_GITHUB, ID_MODEL, ID_CANDTREE, ID_SPACELIT, ID_LATIN, ID_CAPS, ID_TYPO, ID_PUNCTCOMMIT,
+    ID_LIST, ID_READING, ID_WORD, ID_POS, ID_ADD, ID_REMOVE, ID_IMPORT, ID_ADVANCED, ID_UPDATE, ID_RESET, ID_RECENT_SPAN, ID_RECENT_FORGET, ID_RECENT_SPAN_AI, ID_RECENT_FORGET_AI, ID_LEARN_LOG, ID_LEARN_CLEAR, ID_LICENSE, ID_GITHUB, ID_MODEL, ID_CANDTREE, ID_SPACELIT, ID_LATIN, ID_CAPS, ID_TYPO, ID_PUNCTCOMMIT, ID_AILEARN, ID_CLIPHIST, ID_LOG_CUT,
 };
 
 // 変換モデル (settings.json の model の値と、画面の表示)。名前は配布の呼び名 (開発名は出さない)
@@ -108,6 +108,8 @@ void save() {
     g_s.caps_alpha = checked(ID_CAPS);
     g_s.typo_fix = checked(ID_TYPO);
     g_s.punct_commit = checked(ID_PUNCTCOMMIT);
+    g_s.clip_history = checked(ID_CLIPHIST);
+    g_s.ai_learn = checked(ID_AILEARN);
     g_s.live_commit = checked(ID_LIVECOMMIT);
     g_s.model = g_models[size_t(std::clamp(selected(ID_MODEL), 0, int(g_models.size()) - 1))];
     if (!save_settings(g_dir / L"settings.json", g_s))
@@ -202,7 +204,7 @@ void import_words() {
 // ---------------- 詳細設定 (別の窓) ----------------
 // 記号ごとの全角/半角・テンキー・候補の数・無変換キー・再変換・プライベート・ローマ字の表・辞書の書き出し
 const wchar_t SYMS[] = L"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
-enum { ADV_SYM0 = 500, ADV_NUMPAD = 600, ADV_PAGE, ADV_APPOPEN, ADV_PRIVATE, ADV_ROMAJI, ADV_EXPORT, ADV_CLOSE,
+enum { ADV_SYM0 = 500, ADV_NUMPAD = 600, ADV_PAGE, ADV_APPOPEN, ADV_PRIVATE, ADV_ROMAJI, ADV_EXPORT, ADV_CLOSE, ADV_TYPOLV, ADV_CTXL, ADV_CTXR,
        ADV_KEYMAP = 710, ADV_LAYOUT = 711, ADV_LAYOUT_NOTE = 712, ADV_LTHUMBS = 713, ADV_LCONT, ADV_LTAP, ADV_LREP, ADV_RLIST = 720, ADV_RKEY, ADV_RKANA, ADV_RADD, ADV_RDEL, ADV_ALIST = 730, ADV_ATOGGLE, ADV_ADEL, ADV_THEME = 740, ADV_ICON, ADV_STRIP,
        ADV_SLIST = 800, ADV_SKEY, ADV_SFUNC, ADV_SADD, ADV_SCHG, ADV_SDEL, ADV_SUP, ADV_SDOWN, ADV_SRESET };
 // キー割り当ての型 (Google 日本語入力 = Mozc の keymap と同じ字)
@@ -319,17 +321,16 @@ void adv_layout_relayout() {
     place(g_lother, 24, y + 2, 440, 20, true);
     y += 26;
     place(g_lgroup, 10, g_lgroup_y, 460, y - g_lgroup_y, true);
-    // ソフトごとの日本語入力 (キー配列の欄の下)
-    y += 8;
-    // 一覧は右の列の下端まで伸ばす (最低でも 6 行ほど。64 では 2 行しか見えなかった、ユーザー 2026-10-20)
-    const int list_h = std::max(130, ADV_RIGHT_BOTTOM - y - 64);
-    place(g_agroup, 10, y, 460, list_h + 56, true);
-    place(g_alist, 26, y + 20, 428, list_h, true);
-    place(GetDlgItem(g_adv, ADV_ATOGGLE), 26, y + 24 + list_h, 160, 25, true);
-    place(GetDlgItem(g_adv, ADV_ADEL), 194, y + 24 + list_h, 120, 25, true);
-    y += list_h + 56;
-    // 閉じるボタンと窓の高さ (右の列の下端より下)
-    const int bottom = std::max(y, ADV_RIGHT_BOTTOM) + 10;
+    // ソフトごとの日本語入力: 右の列のローマ字の表の下 (左の列が変換の欄で長くなり、右下が空いた。ユーザー 2026-11-06)。
+    // 一覧は左の列の下端まで伸ばす (最低でも 6 行ほど。64 では 2 行しか見えなかった、ユーザー 2026-10-20)
+    const int ay = ADV_RIGHT_BOTTOM + 10;
+    const int list_h = std::max(130, y - ay - 56);
+    place(g_agroup, 490, ay, 460, list_h + 56, true);
+    place(g_alist, 506, ay + 20, 428, list_h, true);
+    place(GetDlgItem(g_adv, ADV_ATOGGLE), 506, ay + 24 + list_h, 160, 25, true);
+    place(GetDlgItem(g_adv, ADV_ADEL), 674, ay + 24 + list_h, 120, 25, true);
+    // 閉じるボタンと窓の高さ (両方の列の下端より下)
+    const int bottom = std::max(y, ay + list_h + 56) + 10;
     place(GetDlgItem(g_adv, ADV_CLOSE), 870, bottom, 80, 25, true);
     RECT r = {0, 0, S(960), S(bottom + 35)};
     AdjustWindowRectExForDpi(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, FALSE, 0, g_dpi);
@@ -356,6 +357,9 @@ void adv_save() {
     const char* themes[] = {"auto", "light", "dark"};
     g_s.theme = themes[std::max(0, selected(ADV_THEME))];
     g_s.typed_strip = checked(ADV_STRIP);
+    g_s.typo_level = std::clamp(selected(ADV_TYPOLV), 0, 2);
+    g_s.ctx_left = std::clamp(int(GetDlgItemInt(g_adv, ADV_CTXL, nullptr, FALSE)), 0, CTX_LIMIT);
+    g_s.ctx_right = std::clamp(int(GetDlgItemInt(g_adv, ADV_CTXR, nullptr, FALSE)), 0, CTX_LIMIT);
     g_s.half_symbols = g_half;
     g_s.numpad = std::max(0, selected(ADV_NUMPAD));
     g_s.page_size = 5 + std::max(0, selected(ADV_PAGE));
@@ -679,7 +683,8 @@ LRESULT CALLBACK adv_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_COMMAND) {
         int id = LOWORD(w), code = HIWORD(w);
         if (id == ADV_CLOSE || id == IDCANCEL) DestroyWindow(h);
-        else if ((id == ADV_NUMPAD || id == ADV_PAGE || id == ADV_APPOPEN || id == ADV_THEME) && code == CBN_SELCHANGE) adv_save();
+        else if ((id == ADV_NUMPAD || id == ADV_PAGE || id == ADV_APPOPEN || id == ADV_THEME || id == ADV_TYPOLV) && code == CBN_SELCHANGE) adv_save();
+        else if ((id == ADV_CTXL || id == ADV_CTXR) && code == EN_CHANGE) adv_save();
         else if (id == ADV_ICON) reregister_icon();
         else if (id == ADV_STRIP && code == BN_CLICKED) adv_save();
         else if (id >= ADV_SYM0 && id < ADV_SYM0 + 64 && code == BN_CLICKED) {   // 押すたびに全角 ⇔ 半角
@@ -791,6 +796,18 @@ void open_advanced() {
     make(L"STATIC", T(56), 0, 24, y + 87, 120, 20, 0);
     combo(150, y + 83, 300, ADV_APPOPEN, {T(57), T(58)});
     y += 122;
+    // 変換: 打ち間違いの直しの強さ・文脈を読む字数 (ユーザー 2026-11-06。打ち間違いは typo_bias_of、字数は数字で)
+    group(T(222), y, 106);
+    make(L"STATIC", T(223), 0, 24, y + 27, 120, 20, 0);
+    combo(150, y + 23, 300, ADV_TYPOLV, {T(224), T(225), T(226)});
+    // 文脈を読む字数は数字で (0〜80。ユーザー 2026-11-06「自分で入力できるように」)
+    make(L"STATIC", T(227), 0, 24, y + 57, 120, 20, 0);
+    make(L"STATIC", T(228), 0, 150, y + 57, 24, 20, 0);
+    make(L"EDIT", L"", ES_NUMBER | ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 176, y + 54, 50, 23, ADV_CTXL);
+    make(L"STATIC", T(229), 0, 240, y + 57, 36, 20, 0);
+    make(L"EDIT", L"", ES_NUMBER | ES_AUTOHSCROLL | WS_BORDER | WS_TABSTOP, 278, y + 54, 50, 23, ADV_CTXR);
+    make(L"STATIC", T(230), 0, 24, y + 82, 440, 20, 0);
+    y += 114;
     group(T(95), y, 112);
     make(L"STATIC", T(96), 0, 24, y + 27, 170, 20, 0);
     combo(200, y + 23, 250, ADV_THEME, {T(97), T(98), T(99)});
@@ -867,7 +884,7 @@ void open_advanced() {
     make(L"BUTTON", T(79), BS_PUSHBUTTON | WS_TABSTOP, 874, rb + 7, 60, 25, ADV_RDEL);
     romaji_refresh();
     // ソフトごとの日本語入力のオン・オフ (ソフトを閉じたときの状態を覚えて、次に起動したとき戻す。ユーザー 2026-10-20)
-    // 左の列のキー配列の欄の下 (位置は adv_layout_relayout が決める。右の列に置くと窓が画面より縦に長くなった)
+    // 右の列のローマ字の表の下 (位置は adv_layout_relayout が決める。一覧の高さは左の列の下端に合わせ、窓を縦に長くしない)
     g_agroup = make(L"BUTTON", T(87), BS_GROUPBOX, 10, 0, 460, 120, 0);
     g_alist = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 26, 20, 428, 64, ADV_ALIST);
     ListView_SetExtendedListViewStyle(g_alist, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
@@ -891,6 +908,9 @@ void open_advanced() {
     select(ADV_THEME, g_s.theme == "light" ? 1 : g_s.theme == "dark" ? 2 : 0);
     check(ADV_STRIP, g_s.typed_strip);
     select(ADV_NUMPAD, g_s.numpad);
+    select(ADV_TYPOLV, std::clamp(g_s.typo_level, 0, 2));
+    SetDlgItemInt(g_adv, ADV_CTXL, UINT(std::clamp(g_s.ctx_left, 0, CTX_LIMIT)), FALSE);
+    SetDlgItemInt(g_adv, ADV_CTXR, UINT(std::clamp(g_s.ctx_right, 0, CTX_LIMIT)), FALSE);
     select(ADV_PAGE, std::clamp(g_s.page_size, 5, 9) - 5);
     check(ADV_PRIVATE, g_s.private_mode);
     select(ADV_APPOPEN, g_s.app_default_open ? 0 : 1);
@@ -918,44 +938,72 @@ void remove_word() {
     refresh_list();
 }
 
-void reset_learning() {
-    if (MessageBoxW(g_wnd, T(92), T(93),
-                    MB_OKCANCEL | MB_ICONQUESTION) != IDOK)
-        return;
-    forget_all(g_dir);
-    MessageBoxW(g_wnd, T(94), L"shunti IME", MB_ICONINFORMATION);
-}
+// 「学習をリセット」は無くした (2026-11-06 ユーザー)。全部消すのは、期間の「全期間」で「左の期間の学習を消去」
 
-// 確定した文を手元に残すのは、同意した人だけ。やめるときは残した分を消すかを聞く
-void toggle_learn_log() {
-    if (!g_s.learn_log) {
-        if (MessageBoxW(g_wnd, T(180), T(178), MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) return;
+// AI学習のチェック 1 つ (2026-11-06 ユーザー: 同意と「使う」を 1 つに)。AI学習は確定した文の記録から育てるので、
+// 入れるときに記録の同意を聞き、記録 (learn_log) と AI学習 (ai_learn) を一緒に入れる。
+// 切るときは、保存した文と AI学習で育てた中身を消すかを聞く
+void toggle_ai_learn() {
+    const bool on = checked(ID_AILEARN);
+    if (on) {
+        if (!g_s.learn_log && MessageBoxW(g_wnd, T(180), T(178), MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES) {
+            check(ID_AILEARN, false);
+            return;
+        }
         g_s.learn_log = true;
     } else {
         const int r = MessageBoxW(g_wnd, T(181), T(179), MB_YESNOCANCEL | MB_ICONQUESTION | MB_DEFBUTTON3);
-        if (r == IDCANCEL) return;
-        if (r == IDYES) recent_drop(g_dir, "C");
+        if (r == IDCANCEL) {
+            check(ID_AILEARN, true);
+            return;
+        }
+        if (r == IDYES) {
+            recent_drop(g_dir, "C");
+            forget_ai_learn(g_dir);   // どのモデルの分も
+        }
         g_s.learn_log = false;
     }
-    save();
-    SetDlgItemTextW(g_wnd, ID_LEARN_LOG, T(g_s.learn_log ? 179 : 178));
+    // 確認の窓を閉じると設定の窓がもう一度前に出て、そのとき設定を読み直してチェックを描き直す (WM_ACTIVATE)。
+    // 押したチェックが元に戻り、もう一度押さないと切り替わらなかった (ユーザー 2026-11-06) ので、選んだ値に入れ直してから保存する
+    check(ID_AILEARN, on);
+    save();   // ai_learn はチェックから読む
 }
 
-void clear_learn_log() {
-    if (MessageBoxW(g_wnd, T(183), T(182), MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
-    recent_drop(g_dir, "C");
-    MessageBoxW(g_wnd, T(184), L"shunti IME", MB_ICONINFORMATION);
-}
-
-// 指定した時間のあいだの分だけを消す。ai = 保存した確定した文、それ以外 = 変換の学習
-void forget_recent_learning(bool ai) {
+// 選んだ期間の始まり (秒)。全期間なら 0。選べなければ -1
+long long span_since() {
     static const long long SPANS[] = {600, 3600, 6 * 3600, 24 * 3600, 7 * 24 * 3600, 30 * 24 * 3600};
-    const int i = selected(ai ? ID_RECENT_SPAN_AI : ID_RECENT_SPAN);
-    if (i < 0 || i >= int(sizeof(SPANS) / sizeof(SPANS[0]))) return;
-    if (MessageBoxW(g_wnd, T(ai ? 186 : 175), T(ai ? 185 : 174), MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
+    const int i = selected(ID_RECENT_SPAN);
+    const int n = int(sizeof(SPANS) / sizeof(SPANS[0]));
+    if (i == n) return 0;   // 全期間
+    if (i < 0 || i > n) return -1;
     const long long now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    const int n = forget_recent(g_dir, now - SPANS[i], ai ? "C" : "LHSF");
+    return now - SPANS[i];
+}
+
+// 選んだ期間の学習を消す (覚えた変換を元に戻し、保存した文も消す)。全期間なら学習を全部消す。
+// どちらも AI学習で育てた重みは残す (消すのは AI学習を外すときだけ。ユーザー 2026-11-06)
+void forget_recent_learning() {
+    const long long since = span_since();
+    if (since < 0) return;
+    if (since == 0) {
+        if (MessageBoxW(g_wnd, T(92), T(174), MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK) return;
+        forget_all(g_dir);
+        MessageBoxW(g_wnd, T(94), L"shunti IME", MB_ICONINFORMATION);
+        return;
+    }
+    if (MessageBoxW(g_wnd, T(175), T(174), MB_OKCANCEL | MB_ICONQUESTION) != IDOK) return;
+    const int n = forget_recent(g_dir, since, "LHSFC");
     const std::wstring msg = n > 0 ? std::to_wstring(n) + T(176) : std::wstring(T(177));
+    MessageBoxW(g_wnd, msg.c_str(), L"shunti IME", MB_ICONINFORMATION);
+}
+
+// 選んだ期間の AI用データ (AI学習のために保存した確定した文) だけを消す。覚えた変換と AI学習の重みはそのまま
+void cut_recent_log() {
+    const long long since = span_since();
+    if (since < 0) return;
+    if (MessageBoxW(g_wnd, T(219), T(218), MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK) return;
+    const int n = recent_cut(g_dir, since);
+    const std::wstring msg = n > 0 ? std::to_wstring(n) + T(220) : std::wstring(T(221));
     MessageBoxW(g_wnd, msg.c_str(), L"shunti IME", MB_ICONINFORMATION);
 }
 
@@ -968,7 +1016,7 @@ void build() {
     combo(200, y + 23, 250, ID_MODEL, {T(102), T(103), T(189)});
     y += 68;
 
-    group(T(50), y, 335);
+    group(T(50), y, 360);
     make(L"STATIC", T(104), 0, 24, y + 27, 170, 20, 0);
     combo(200, y + 23, 120, ID_PUNCT, {T(105), T(106), T(107), T(108)});
     make(L"STATIC", T(112), 0, 24, y + 56, 170, 20, 0);
@@ -983,7 +1031,8 @@ void build() {
     make(L"BUTTON", T(163), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 254, 430, 22, ID_CAPS);
     make(L"BUTTON", T(165), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 279, 430, 22, ID_TYPO);
     make(L"BUTTON", T(194), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 304, 430, 22, ID_PUNCTCOMMIT);
-    y += 343;
+    make(L"BUTTON", T(216), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 329, 430, 22, ID_CLIPHIST);
+    y += 368;
 
     group(T(13), y, 216);
     g_list = make(WC_LISTVIEWW, L"", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER | WS_TABSTOP, 24, y + 22, 432, 90, ID_LIST);
@@ -1011,20 +1060,14 @@ void build() {
          0, 222, y + 180, 240, 34, 0);
     y += 224;
 
-    group(T(123), y, 90);
-    make(L"BUTTON", T(178), BS_PUSHBUTTON | WS_TABSTOP, 24, y + 22, 140, 25, ID_LEARN_LOG);
-    make(L"BUTTON", T(182), BS_PUSHBUTTON | WS_TABSTOP, 180, y + 22, 180, 25, ID_LEARN_CLEAR);
-    combo(24, y + 55, 90, ID_RECENT_SPAN_AI, {T(168), T(169), T(170), T(171), T(172), T(173)});
-    select(ID_RECENT_SPAN_AI, 1);
-    make(L"BUTTON", T(185), BS_PUSHBUTTON | WS_TABSTOP, 120, y + 54, 240, 25, ID_RECENT_FORGET_AI);
-    y += 98;
-
-    group(T(187), y, 60);
-    combo(24, y + 25, 90, ID_RECENT_SPAN, {T(168), T(169), T(170), T(171), T(172), T(173)});
+    // 学習: AI学習のチェック 1 つと、消去 (期間を選んで消す・全部消す) をひとまとめに (2026-11-06 ユーザー)
+    group(T(187), y, 88);
+    make(L"BUTTON", T(195), BS_AUTOCHECKBOX | WS_TABSTOP, 24, y + 22, 430, 22, ID_AILEARN);
+    combo(24, y + 53, 90, ID_RECENT_SPAN, {T(168), T(169), T(170), T(171), T(172), T(173), T(217)});
     select(ID_RECENT_SPAN, 1);
-    make(L"BUTTON", T(174), BS_PUSHBUTTON | WS_TABSTOP, 120, y + 24, 180, 25, ID_RECENT_FORGET);
-    make(L"BUTTON", T(93), BS_PUSHBUTTON | WS_TABSTOP, 306, y + 24, 150, 25, ID_RESET);
-    y += 68;
+    make(L"BUTTON", T(174), BS_PUSHBUTTON | WS_TABSTOP, 120, y + 52, 165, 25, ID_RECENT_FORGET);
+    make(L"BUTTON", T(218), BS_PUSHBUTTON | WS_TABSTOP, 291, y + 52, 165, 25, ID_LOG_CUT);
+    y += 96;
     make(L"BUTTON", T(124), BS_PUSHBUTTON | WS_TABSTOP, 10, y, 120, 25, ID_ADVANCED);
     make(L"BUTTON", T(125), BS_PUSHBUTTON | WS_TABSTOP, 138, y, 120, 25, ID_UPDATE);
     y += 35;
@@ -1046,7 +1089,6 @@ void build() {
 // g_s を画面のチェックと選択に出す
 void show_settings() {
     g_loading = true;
-    SetDlgItemTextW(g_wnd, ID_LEARN_LOG, T(g_s.learn_log ? 179 : 178));
     select(ID_PUNCT, g_s.punct);
     {
         const auto it = std::find(g_models.begin(), g_models.end(), g_s.model);
@@ -1062,6 +1104,8 @@ void show_settings() {
     check(ID_CAPS, g_s.caps_alpha);
     check(ID_TYPO, g_s.typo_fix);
     check(ID_PUNCTCOMMIT, g_s.punct_commit);
+    check(ID_CLIPHIST, g_s.clip_history);
+    check(ID_AILEARN, g_s.ai_learn && g_s.learn_log);
     check(ID_LIVECOMMIT, g_s.live_commit);
     g_loading = false;
 }
@@ -1080,18 +1124,16 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
             int id = LOWORD(w), code = HIWORD(w);
             if ((id == ID_PUNCT || id == ID_MODEL || id == ID_LIVEDISPLAY) && code == CBN_SELCHANGE) save();
             else if (id == IDCANCEL) DestroyWindow(h);   // 「閉じる」と Esc
-            else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_CANDTREE || id == ID_SPACELIT || id == ID_LATIN || id == ID_CAPS || id == ID_TYPO || id == ID_PUNCTCOMMIT) && code == BN_CLICKED) save();
+            else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_CANDTREE || id == ID_SPACELIT || id == ID_LATIN || id == ID_CAPS || id == ID_TYPO || id == ID_PUNCTCOMMIT || id == ID_CLIPHIST) && code == BN_CLICKED) save();
+            else if (id == ID_AILEARN && code == BN_CLICKED) toggle_ai_learn();
             else if (id == ID_ADD) add_word();
             else if (id == ID_POS && code == CBN_SELCHANGE) update_reading_box();
             else if (id == ID_IMPORT) import_words();
             else if (id == ID_ADVANCED) open_advanced();
             else if (id == ID_UPDATE) check_update(true);
             else if (id == ID_REMOVE) remove_word();
-            else if (id == ID_RESET) reset_learning();
-            else if (id == ID_RECENT_FORGET) forget_recent_learning(false);
-            else if (id == ID_RECENT_FORGET_AI) forget_recent_learning(true);
-            else if (id == ID_LEARN_LOG) toggle_learn_log();
-            else if (id == ID_LEARN_CLEAR) clear_learn_log();
+            else if (id == ID_RECENT_FORGET) forget_recent_learning();
+            else if (id == ID_LOG_CUT) cut_recent_log();
             else if (id == ID_LICENSE) {
                 wchar_t exe[MAX_PATH];
                 GetModuleFileNameW(nullptr, exe, MAX_PATH);
@@ -1126,6 +1168,7 @@ void ask_consent() {
     g_s.consent_asked = true;
     if (!g_s.learn_log)
         g_s.learn_log = MessageBoxW(nullptr, T(180), T(178), MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND) == IDYES;
+    if (g_s.learn_log) g_s.ai_learn = true;   // 同意 = AI学習を使う (チェック 1 つ)
     save_settings(g_dir / L"settings.json", g_s);
 }
 

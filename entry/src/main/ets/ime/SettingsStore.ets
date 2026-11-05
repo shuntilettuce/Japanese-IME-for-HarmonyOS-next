@@ -21,6 +21,8 @@ export interface KeyboardSettings {
   // and KeyboardView.ets/FlickKeyboardView.ets's ModeKey/LeftKey. Off by
   // default: most users reach digits fine from QWERTY/the number row.
   numericPadEnabled: boolean;
+  // AI学習 (既定オフ): 確定した文から、変換の点に上乗せする小さいモデルを端末の中で育てる
+  aiLearn: boolean;
   // キーを押したときに短く振動させるか。
   hapticEnabled: boolean;
   // 長い入力の扱い。false = 保留 (既定。前の方は候補を持たせて入力中のまま)、true = オート確定 (Mac の IME のように前から確定)
@@ -96,6 +98,7 @@ const DEFAULTS: KeyboardSettings = {
   oneHandedSide: 'right',
   conversionEngine: 'ai',
   numericPadEnabled: false,
+  aiLearn: false,
   hapticEnabled: false,
   separateSuggest: true,
   alphaCompose: true,
@@ -140,6 +143,7 @@ export class SettingsStore {
       const oneHanded = await prefs.get('oneHandedMode', DEFAULTS.oneHandedMode);
       const side = await prefs.get('oneHandedSide', DEFAULTS.oneHandedSide);
       const numericPad = await prefs.get('numericPadEnabled', DEFAULTS.numericPadEnabled);
+      const aiLearn = await prefs.get('aiLearn', DEFAULTS.aiLearn);
       const haptic = await prefs.get('hapticEnabled', DEFAULTS.hapticEnabled);
       const separateSuggest = await prefs.get('separateSuggest', DEFAULTS.separateSuggest);
       const alphaCompose = await prefs.get('alphaCompose', DEFAULTS.alphaCompose);
@@ -174,6 +178,7 @@ export class SettingsStore {
         // 保存していた人も AI にする
         conversionEngine: DEFAULTS.conversionEngine,
         numericPadEnabled: numericPad === true,
+        aiLearn: aiLearn === true,
         hapticEnabled: haptic === true,
         separateSuggest: separateSuggest !== false,
         alphaCompose: alphaCompose !== false,
@@ -204,6 +209,7 @@ export class SettingsStore {
         oneHandedSide: DEFAULTS.oneHandedSide,
         conversionEngine: DEFAULTS.conversionEngine,
         numericPadEnabled: DEFAULTS.numericPadEnabled,
+        aiLearn: DEFAULTS.aiLearn,
         hapticEnabled: DEFAULTS.hapticEnabled,
         separateSuggest: DEFAULTS.separateSuggest,
         alphaCompose: DEFAULTS.alphaCompose,
@@ -267,6 +273,15 @@ export class SettingsStore {
     try {
       const prefs = await dataPreferences.getPreferences(context, SettingsStore.STORE);
       await prefs.put('numericPadEnabled', enabled);
+      await prefs.flush();
+    } catch (_e) {}
+  }
+
+  static async saveAiLearn(context: common.Context, enabled: boolean): Promise<void> {
+    InputLog.recordSetting('aiLearn', String(enabled));
+    try {
+      const prefs = await dataPreferences.getPreferences(context, SettingsStore.STORE);
+      await prefs.put('aiLearn', enabled);
       await prefs.flush();
     } catch (_e) {}
   }

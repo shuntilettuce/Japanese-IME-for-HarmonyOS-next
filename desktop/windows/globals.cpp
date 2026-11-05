@@ -1,5 +1,6 @@
 #include "globals.h"
 
+#include <shellapi.h>
 #include <shlobj.h>
 
 #include <mutex>
@@ -104,6 +105,41 @@ static bool reg_dark(const wchar_t* value) {
     return v == 0;
 }
 bool apps_dark() { return reg_dark(L"AppsUseLightTheme"); }
+
+void open_clip_history() {
+    HWND target = GetFocus();   // このスレッド (入力欄のアプリ) で今フォーカスのある窓
+    if (!target) target = GetForegroundWindow();
+    if (target) target = GetAncestor(target, GA_ROOT);
+    AllowSetForegroundWindow(ASFW_ANY);   // 常駐している履歴の窓が前に出られるように
+    const std::wstring exe = (module_dir() / L"shunti_clip.exe").wstring();
+    const std::wstring args = L"--show " + std::to_wstring(reinterpret_cast<UINT_PTR>(target));
+    ShellExecuteW(nullptr, L"open", exe.c_str(), args.c_str(), nullptr, SW_SHOWNORMAL);
+}
+
+void start_clip_listener() {
+    static LONG tried = 0;   // プロセスに 1 回だけ
+    if (InterlockedExchange(&tried, 1)) return;
+    if (HANDLE m = OpenMutexW(SYNCHRONIZE, FALSE, L"Local\\shunti_clip")) { CloseHandle(m); return; }   // もう常駐している
+    // 管理者として動くアプリ・サンドボックス (AppContainer) の中からは起動しない (記録するのは普通の権限の 1 つだけ)
+    HANDLE tok = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) {
+        TOKEN_ELEVATION el{};
+        DWORD ac = 0, n = 0;
+        const bool elevated = GetTokenInformation(tok, TokenElevation, &el, sizeof el, &n) && el.TokenIsElevated;
+        const bool container = GetTokenInformation(tok, TokenIsAppContainer, &ac, sizeof ac, &n) && ac;
+        CloseHandle(tok);
+        if (elevated || container) return;
+    }
+    std::wstring cmd = L"\"" + (module_dir() / L"shunti_clip.exe").wstring() + L"\" --listen";
+    STARTUPINFOW si{sizeof si};
+    PROCESS_INFORMATION pi{};
+    // 起動したアプリが閉じても残るように、アプリのジョブから外して起動する (外せなければそのまま)
+    if (!CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, CREATE_BREAKAWAY_FROM_JOB | DETACHED_PROCESS, nullptr, nullptr, &si, &pi) &&
+        !CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, DETACHED_PROCESS, nullptr, nullptr, &si, &pi))
+        return;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+}
 bool system_dark() { return reg_dark(L"SystemUsesLightTheme"); }
 
 }  // namespace win

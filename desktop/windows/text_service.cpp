@@ -37,7 +37,7 @@ namespace shunti {
 namespace win {
 
 namespace {
-constexpr LONG CTX_CHARS = 40;   // 変換の文脈に読むカーソルの左の字数 (モデルの文脈の長さ)
+constexpr LONG CTX_CHARS = CTX_LIMIT;   // 変換の文脈に読むカーソルの左の字数 (詳細設定の字数の上限。使う字数は Composer が切る)
 
 const wchar_t* W(const u16& s) { return reinterpret_cast<const wchar_t*>(s.c_str()); }
 
@@ -194,6 +194,7 @@ STDMETHODIMP TextService::ActivateEx(ITfThreadMgr* tm, TfClientId cid, DWORD) {
     Settings st;   // Core はまだ作らない (起動を軽く) ので、設定は直接読む
     load_settings(user_dir() / L"settings.json", st);
     set_open(app_open_state(st.app_default_open));
+    if (st.clip_history) start_clip_listener();   // クリップボードの履歴の記録 (常駐していなければ 1 回だけ起動)
     return S_OK;
 }
 
@@ -487,7 +488,8 @@ void TextService::apply_settings() {
     c.use_model(s.model);   // 変換モデルを替えた (同じなら何もしない)
     c.conv.set_suggest(true);   // 提案は候補に混ぜて種類を添える (Composer)。分けて出す設定は廃止 (ユーザー 2026-10-23「統合の方がわかりやすい」)
     c.conv.set_latin(s.latin_auto);
-    c.conv.set_typo(s.typo_fix);
+    c.conv.set_typo(s.typo_fix, typo_bias_of(s.typo_level));
+    c.conv.set_ai_learn(s.ai_learn ? user_dir() / L"ai_learn.bin" : std::filesystem::path());   // AI学習 (変わらなければ何もしない)
     if (composer_) {
         composer_->options.live = s.live;
         composer_->options.live_commit = s.live_commit;
@@ -504,6 +506,8 @@ void TextService::apply_settings() {
         composer_->options.half_symbols = from_utf8(s.half_symbols);
         composer_->options.numpad = s.numpad;
         composer_->options.private_mode = s.private_mode;
+        composer_->options.ctx_max = size_t(std::clamp(s.ctx_left, 0, CTX_LIMIT));
+        composer_->options.rctx_max = size_t(std::clamp(s.ctx_right, 0, CTX_LIMIT));
         Composer::PAGE = s.page_size;
         // ローマ字の表に足す綴り (shunti IME の設定のフォルダの romaji.tsv: 綴り<TAB>かな、# で始まる行は説明)
         std::string rt;
@@ -672,6 +676,8 @@ bool TextService::undo_matches(ITfContext* ctx) {
 TextService::Action TextService::classify(WPARAM vk, LPARAM lp, KeyEvent& ev, ITfContext* ctx) {
     if (no_shortcuts_ && !composer_ && !is_open()) return Action::None;   // 常にオフのソフト: 辞書を読まない
     if (!ensure_composer()) return Action::None;
+    // 手書き入力の窓 (shunti_hand.exe) などが SendInput で送ってくる字 (VK_PACKET) はアプリへ素通し。入力中なら OnKeyDown で先に確定する
+    if (vk == VK_PACKET) return Action::None;
     bool composing = composer_->composing();
     if (!composing) apply_settings();   // 設定画面で変えた分 (ファイルの更新を見るだけなので軽い)
     const bool ctrl = GetKeyState(VK_CONTROL) < 0, shift = GetKeyState(VK_SHIFT) < 0, alt = GetKeyState(VK_MENU) < 0;
@@ -718,6 +724,7 @@ TextService::Action TextService::classify(WPARAM vk, LPARAM lp, KeyEvent& ev, IT
         }
         if (sc.second == "open_dict") return Action::OpenDict;
         if (sc.second == "model_toggle") return Action::ModelToggle;
+        if (sc.second == "clip_history") return Action::ClipHistory;
     }
     if (!composing && (!ctx || keyboard_disabled(ctx))) return Action::None;
     if (open && layout_.loaded() && !ctrl && !alt && !read_only_context(ctx)) {
@@ -738,6 +745,7 @@ STDMETHODIMP TextService::OnTestKeyDown(ITfContext* ctx, WPARAM wp, LPARAM lp, B
 
 STDMETHODIMP TextService::OnKeyDown(ITfContext* ctx, WPARAM wp, LPARAM lp, BOOL* eaten) {
     KeyEvent ev;
+    if (wp == VK_PACKET && composer_ && composer_->composing()) finish_composition(TF_ES_SYNC);   // 送られた字を、入力中の文の後ろに置く
     Action a = classify(wp, lp, ev, ctx);
     // 確定したあとの Backspace (直したしるし。消した中身は記録しない)
     if (INPUT_LOG_ENABLED && a == Action::None && wp == VK_BACK && composer_ && !composer_->composing() && !secure_ && is_open())
@@ -869,6 +877,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* ctx, WPARAM wp, LPARAM lp, BOOL*
             });
             break;
         }
+        case Action::ClipHistory:
+            // ショートカットキー「クリップボードの履歴」: 履歴の窓を出す (選ぶと今の入力欄に貼る)
+            open_clip_history();
+            break;
         case Action::OpenDict: {
             // ショートカットキー「ユーザー辞書を開く」: 設定を --dict で起動し、辞書の欄を開く
             const std::wstring exe = (module_dir() / L"shunti_settings.exe").wstring();

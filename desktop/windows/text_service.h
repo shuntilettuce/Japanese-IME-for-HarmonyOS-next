@@ -82,7 +82,7 @@ public:
 
 private:
     enum class Action { None, Compose, Open, Close, Toggle, Private, Reconvert, RomajiReconvert, Undo, Layout, OpenSettings, ClearAll,
-                        SpaceFull, SpaceHalf, OpenDict, ModelToggle };
+                        SpaceFull, SpaceHalf, OpenDict, ModelToggle, ClipHistory };
     // キー配列 (大西・Dvorak・JIS かな・NICOLA・薙刀式。core/layout.h)
     shunti::Layout layout_;
     std::string layout_name_;              // 読み込んだ配列 (設定の値)

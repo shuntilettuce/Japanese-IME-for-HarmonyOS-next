@@ -9,6 +9,8 @@ export interface KkcResult {
   cands: string[];
   ends: number[];
   lens: number[];
+  /** 上位の経路 (表示しない。確定した語を学習するのに使う)。1 本ごとに "読みの終わり\u0001表記\u0001…"。convertAsync のときだけ */
+  paths?: string[];
   /** 待ち時間の内訳 (ms): 裏のスレッドの順番待ち / 変換 / 変換が終わってから JS に届くまで */
   waitMs: number;
   runMs: number;
@@ -30,4 +32,10 @@ export const setUserWords: (forms: string[], bonus: number) => number;
 export const times: () => number[];
 /** 提案を分けて出すか (オフなら日付・住所・打ち間違いの直しを候補に混ぜる) */
 export const setSuggest: (on: boolean) => boolean;
+/** AI学習 (設定、既定オフ) のオン・オフ。path = 育てた中身の保存先 (空ならオフ)。同じ保存先なら、学習のリセットで消されたかだけを見る */
+export const setAiLearn: (path: string) => boolean;
+/** 確定した文 (左の文脈・読み・表記) から 1 歩学んで保存する (裏のスレッドで)。学ぶ前の損失 (学ばなかったら負) */
+export const aiLearnAsync: (ctx: string, reading: string, text: string) => Promise<number>;
+/** AI学習で育てた中身を消す (学習のリセット。オフでも消す)。使っていれば初めの値に戻す */
+export const aiForget: (path: string) => boolean;
 export const close: () => boolean;

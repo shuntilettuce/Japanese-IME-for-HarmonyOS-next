@@ -4,8 +4,10 @@
 #include <android/asset_manager_jni.h>
 #include <jni.h>
 
+#include <string>
 #include <vector>
 
+#include "ai_learn.h"
 #include "engine.h"
 
 namespace {
@@ -13,6 +15,7 @@ struct Handle {
     AAsset* lex = nullptr;
     AAsset* model = nullptr;
     kkc_engine* e = nullptr;
+    kkc_ai::State ai;   // AI学習 (設定、既定オフ)
 };
 }  // namespace
 
@@ -145,6 +148,32 @@ extern "C" JNIEXPORT jintArray JNICALL Java_com_shunti_japaneseime_Engine_native
     return a;
 }
 
+// 直前の変換の上位の経路。1 本ごとに "読みの終わり\1表記\1読みの終わり\1表記…" (nativeConvert と同じスレッドで、その直後に呼ぶ)
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_shunti_japaneseime_Engine_nativePaths(JNIEnv* env, jclass, jlong p) {
+    auto* h = reinterpret_cast<Handle*>(p);
+    constexpr int PM = 30, WC = 1024, TC = 4096;
+    std::vector<double> costs(PM);
+    std::vector<int32_t> cnt(PM), pe(WC), pl(WC);
+    std::vector<uint16_t> tx(TC);
+    const int np = h ? kkc_last_paths(h->e, PM, costs.data(), cnt.data(), pe.data(), pl.data(), WC, tx.data(), TC) : 0;
+    jobjectArray out = env->NewObjectArray(np, env->FindClass("java/lang/String"), nullptr);
+    size_t wi = 0, ti = 0;
+    for (int i = 0; i < np; i++) {
+        std::u16string s;
+        for (int k = 0; k < cnt[size_t(i)]; k++, wi++) {
+            if (k) s += u'\1';
+            for (char c : std::to_string(pe[wi])) s += char16_t(c);
+            s += u'\1';
+            s.append(reinterpret_cast<const char16_t*>(tx.data() + ti), size_t(pl[wi]));
+            ti += size_t(pl[wi]);
+        }
+        jstring js = env->NewString(reinterpret_cast<const jchar*>(s.data()), jsize(s.size()));
+        env->SetObjectArrayElement(out, i, js);
+        env->DeleteLocalRef(js);
+    }
+    return out;
+}
+
 // ユーザー辞書 (kkc_user_clear / kkc_user_add_like)。nativeConvert と同じスレッドで呼ぶ
 extern "C" JNIEXPORT void JNICALL Java_com_shunti_japaneseime_Engine_nativeUserClear(JNIEnv*, jclass, jlong p) {
     auto* h = reinterpret_cast<Handle*>(p);
@@ -190,4 +219,31 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_com_shunti_japaneseime_Engine_nat
         st = e + 1;
     }
     return arr;
+}
+
+namespace {
+std::u16string jstr16(JNIEnv* env, jstring s) {
+    const jchar* c = env->GetStringChars(s, nullptr);
+    std::u16string out(reinterpret_cast<const char16_t*>(c), size_t(env->GetStringLength(s)));
+    env->ReleaseStringChars(s, c);
+    return out;
+}
+}  // namespace
+
+// AI学習のオン・オフ。path = 育てた中身の保存先 (空ならオフ)。同じ保存先なら、消された (学習のリセット) かだけを見る
+extern "C" JNIEXPORT void JNICALL Java_com_shunti_japaneseime_Engine_nativeAiSet(JNIEnv* env, jclass, jlong p, jstring path) {
+    auto* h = reinterpret_cast<Handle*>(p);
+    if (!h) return;
+    const char* c = env->GetStringUTFChars(path, nullptr);
+    const std::string s(c);
+    env->ReleaseStringUTFChars(path, c);
+    kkc_ai::set(h->ai, h->e, s);
+}
+
+// 確定した文から 1 歩学ぶ。返り値 = 学ぶ前の損失 (学ばなかったら負)
+extern "C" JNIEXPORT jfloat JNICALL Java_com_shunti_japaneseime_Engine_nativeAiLearn(JNIEnv* env, jclass, jlong p, jstring ctx, jstring reading,
+                                                                                jstring text) {
+    auto* h = reinterpret_cast<Handle*>(p);
+    if (!h) return -1;
+    return kkc_ai::learn(h->ai, h->e, jstr16(env, ctx), jstr16(env, reading), jstr16(env, text));
 }

@@ -36,6 +36,8 @@ export struct KeyboardView {
   @StorageLink('keyWidthVp') keyWidthVp: number = 36;
   @StorageLink('specialKeyWidthVp') specialKeyWidthVp: number = 44;
   @StorageLink('spaceKeyWidthVp') spaceKeyWidthVp: number = 160;
+  @StorageProp('inputState') qwertyState: string = InputState.IDLE;     // 空白キーの表示 (入力中は「文節」・文節の中は「変換」)
+  @StorageProp('composingText') qwertyComposing: string = '';
   @StorageLink('isDark') isDark: boolean = false;
   @StorageLink('keyChromeEnabled') keyChromeEnabled: boolean = true;
   // 数字パッドが有効だと「あA」キーは 日本語→アルファベット→数字 の3段階に
@@ -156,10 +158,6 @@ export struct KeyboardView {
           this.SpaceKey()
           this.CaretKey('left')
           this.CaretKey('right')
-          // 英字入力には変換が無いので 文節 キーは出さない (その分スペースを広く)
-          if (this.inputMode !== InputMode.ALPHANUMERIC) {
-            this.BunsetsuKey()
-          }
           this.FuncKey(this.inputMode === InputMode.ALPHANUMERIC ? '.' : '。', () => {
             const ch = this.inputMode === InputMode.ALPHANUMERIC ? '.' : '。';
             const state = AppStorage.get<string>('inputState') ?? InputState.IDLE;
@@ -307,31 +305,16 @@ export struct KeyboardView {
     })
   }
 
-  @Builder BunsetsuKey() {
-    Text('文節')
-      .fontFamily(JP_FONT_FAMILY)
-      .fontSize(14)
-      .textAlign(TextAlign.Center)
-      .width(this.specialKeyWidthVp)
-      .height('100%')
-      .backgroundColor(kbTheme(this.isDark).specialBg)
-      .fontColor(kbTheme(this.isDark).textPrimary)
-      .borderRadius(KEY_RADIUS)
-      .shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-      .onClick(() => {
-        this.getHandler().hapticTick();
-        this.getHandler().handleBunsetsu();
-      })
-  }
-
+  // 文節キーは空白キーにまとめた (ユーザー 2026-11-05): 入力中は「文節」、文節の中は「変換」(今の文節の候補を回す)。幅は文節キーの分も
   @Builder SpaceKey() {
-    Text(this.inputMode === InputMode.HIRAGANA ? 'かな' : 'space')
+    Text(this.qwertyState === InputState.BUNSETSU ? '変換'
+      : (this.qwertyState === InputState.COMPOSING && this.qwertyComposing.length >= 2) ? '文節'
+      : (this.inputMode === InputMode.HIRAGANA ? 'かな' : 'space'))
       .fontFamily(JP_FONT_FAMILY)
       .fontSize(16)
       .fontColor(kbTheme(this.isDark).textPrimary)
       .textAlign(TextAlign.Center)
-      .width(this.inputMode === InputMode.ALPHANUMERIC
-        ? this.spaceKeyWidthVp + this.specialKeyWidthVp + 4 : this.spaceKeyWidthVp)
+      .width(this.spaceKeyWidthVp + this.specialKeyWidthVp + 4)
       .height('100%')
       .backgroundColor(kbTheme(this.isDark).keyBg)
       .borderRadius(KEY_RADIUS)

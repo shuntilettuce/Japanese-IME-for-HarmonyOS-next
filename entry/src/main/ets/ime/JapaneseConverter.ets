@@ -140,7 +140,7 @@ export class JapaneseConverter {
   }
 
   flushPending(): string {
-    const pending = this.buffer;
+    const pending = this.buffer === 'n' ? 'ん' : this.buffer;   // PC と同じ。語末の n は ん
     this.buffer = '';
     return pending;
   }

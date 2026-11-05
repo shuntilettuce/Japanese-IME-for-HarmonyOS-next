@@ -106,6 +106,8 @@ struct ComposerOptions {
     bool private_mode = false;     // 学習・文の流れ・提案の学習を残さない
     bool learn_log = false;        // 確定した文を手元に残す (設定で同意した人だけ)
     bool secure_field = false;     // パスワードの欄 (確定した文を残さない)
+    size_t ctx_max = 40;           // 左の文脈 (確定した文) をモデルに見せる字数 (詳細設定「文脈を読む字数」の左)
+    size_t rctx_max = 80;          // 後ろの文脈 (固定した前の方を直すときの、後で打った文) の字数
 };
 
 class Composer {

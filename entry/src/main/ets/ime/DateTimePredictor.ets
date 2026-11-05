@@ -396,16 +396,17 @@ export class DateTimePredictor {
         return DateTimePredictor.dateForms(d8);
       }
     }
+    // 表を引く所は値の型を見る (constructor などの読みは Object の関数が返る)
     const dayOff = DAY_OFFSETS[reading];
-    if (dayOff !== undefined) {
+    if (typeof dayOff === 'number') {
       const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayOff);
       return DateTimePredictor.dateForms(d);
     }
     const yearOff = YEAR_OFFSETS[reading];
-    if (yearOff !== undefined) {
+    if (typeof yearOff === 'number') {
       return DateTimePredictor.yearOffsetForms(now.getFullYear() + yearOff);
     }
-    if (TIME_READINGS[reading]) {
+    if (TIME_READINGS[reading] === true) {
       return DateTimePredictor.timeForms(now);
     }
     if (reading === 'ようび' || reading === 'なんようび') {
@@ -413,12 +414,12 @@ export class DateTimePredictor {
       return [DOW_FULL[w], DOW[w], `(${DOW[w]})`];
     }
     const weekOff = WEEK_RANGES[reading];
-    if (weekOff !== undefined) {
+    if (typeof weekOff === 'number') {
       const mon = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (now.getDay() + 6) % 7 + weekOff * 7);
       return DateTimePredictor.weekRangeForms(mon);
     }
     const monthOff = MONTH_OFFSETS[reading];
-    if (monthOff !== undefined) {
+    if (typeof monthOff === 'number') {
       const t = new Date(now.getFullYear(), now.getMonth() + monthOff, 1);
       return DateTimePredictor.monthForms(t.getFullYear(), t.getMonth() + 1);
     }

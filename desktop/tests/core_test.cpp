@@ -95,6 +95,20 @@ int main(int argc, char** argv) {
     fs::remove(work / "learned.json");
     fs::remove(work / "userdict.json");
 
+    // ---- 打ち間違いの直しの強さ・文脈を読む字数 (詳細設定) が保存して読み直せる 2026-11-06
+    {
+        Settings a;
+        a.typo_level = 2;
+        a.ctx_left = 10;
+        a.ctx_right = 999;
+        save_settings(work / "knob_settings.json", a);
+        Settings b;
+        load_settings(work / "knob_settings.json", b);
+        if (b.typo_level == 2 && b.ctx_left == 10 && b.ctx_right == CTX_LIMIT && typo_bias_of(2) < 0 && typo_bias_of(0) > 0 && typo_bias_of(1) == 0)
+            printf("ok   typo/ctx level saved\n");
+        else { printf("FAIL typo/ctx level: %d %d %d\n", b.typo_level, b.ctx_left, b.ctx_right); failures++; }
+    }
+
     // ---- 配列 (同時押し・親指・空白シフト・3 キー、同梱の表が読めること) 2026-10-16
     {
         auto texts = [](const std::vector<Layout::Out>& v) {
@@ -342,6 +356,86 @@ int main(int argc, char** argv) {
     if (!conv.open(lex.data(), lex.size(), model.data(), model.size(), th ? atoi(th) : 1)) { printf("engine open failed\n"); return 2; }
     printf("     engine open %.1f ms (threads %d)\n",
            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_open).count(), th ? atoi(th) : 1);
+    {   // AI学習 (2026-11-05): 確定した文で育て、保存し、別の Converter が読み直す。消したら初めの値に戻る
+        const std::filesystem::path d = work / "ai";
+        std::error_code ec;
+        std::filesystem::remove_all(d, ec);
+        std::filesystem::create_directories(d, ec);
+        Converter ai;
+        if (!ai.open(lex.data(), lex.size(), model.data(), model.size(), 1)) { printf("FAIL ai open\n"); failures++; }
+        auto top = [](Converter& c, const u16& r) { auto v = c.convert(u"", r, 5).cands; return v.empty() ? u16() : v[0]; };
+        const u16 base = top(ai, u"きしゃ");
+        ai.ai_learn(u"", u"きしゃ", u"汽車");   // オフの間は何もしない
+        if (std::filesystem::exists(d / "ai_learn.bin")) { printf("FAIL ai off writes\n"); failures++; }
+        ai.set_ai_learn(d / "ai_learn.bin");
+        // 1 位を覆すのは従来の学習の役目。AI学習は少しずつ寄せる (損失 = 確定した表記の経路の -log 確率) ので、下がるかを見る
+        float l0 = -1, l1 = -1;
+        for (int i = 0; i < 30; i++) { l1 = ai.ai_learn(u"", u"きしゃ", u"汽車"); if (i == 0) l0 = l1; }
+        const auto sz = std::filesystem::file_size(ai.ai_file(), ec);
+        // 保存先はモデルごと (ai_learn_<モデルの印>.bin。2026-11-06)
+        if (ai.ai_file().filename().string().rfind("ai_learn_", 0) == 0 && !std::filesystem::exists(d / "ai_learn.bin")) printf("ok   ai per-model file: %s\n", ai.ai_file().filename().string().c_str());
+        else { printf("FAIL ai per-model file: %s\n", ai.ai_file().string().c_str()); failures++; }
+        if (ec || sz < 8) { printf("FAIL ai save\n"); failures++; }
+        if (l0 > 0 && l1 >= 0 && l1 < l0 - 0.3f) printf("ok   ai learn: loss %.3f -> %.3f (%d bytes, top %s)\n", l0, l1, int(sz), to_utf8(top(ai, u"きしゃ")).c_str());
+        else { printf("FAIL ai learn: loss %.3f -> %.3f\n", l0, l1); failures++; }
+        Converter other;   // 別の窓 (別のプロセス) の代わり: 保存した続きから
+        other.open(lex.data(), lex.size(), model.data(), model.size(), 1);
+        other.set_ai_learn(d / "ai_learn.bin");
+        const float lr = other.ai_learn(u"", u"きしゃ", u"汽車");
+        if (lr >= 0 && lr < l0 - 0.3f) printf("ok   ai reload: loss %.3f\n", lr);
+        else { printf("FAIL ai reload: loss %.3f\n", lr); failures++; }
+        forget_all(d);   // 学習を全部消しても AI学習の重みは残る (消すのは AI学習を外すときだけ)
+        if (other.ai_learn(u"", u"きしゃ", u"汽車") < 0 || !std::filesystem::exists(other.ai_file())) { printf("FAIL ai kept by forget_all\n"); failures++; }
+        forget_ai_learn(d);   // 外すとき: 消したら初めの値に戻る
+        const float lf = other.ai_learn(u"", u"きしゃ", u"汽車");
+        if (std::fabs(lf - l0) < 1e-3f) printf("ok   ai forget: loss %.3f\n", lf);
+        else { printf("FAIL ai forget: loss %.3f (first %.3f)\n", lf, l0); failures++; }
+        expect("ai forget top", top(ai, u"きしゃ"), base);
+        other.set_ai_learn({});
+        ai.set_ai_learn({});
+        // 確定した文の記録があるところでオンにしたら、裏でまとめて学ぶ (2026-11-05)。2 回目は記録が変わっていないので学ばない
+        forget_all(d);
+        forget_ai_learn(d);
+        {
+            std::ofstream log(d / RECENT_FILE, std::ios::binary);
+            const long long t0 = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count() - 1000;
+            for (int i = 0; i < 30; i++) log << (t0 + i) << "\tC\t" << to_utf8(u"きしゃ") << "\t" << to_utf8(u"汽車") << "\t\n";
+            log << (t0 + 40) << "\tL\t" << to_utf8(u"かわ") << "\t" << to_utf8(u"川") << "\t0\t0\n";   // 確定の記録でない行は飛ばす
+        }
+        Converter bulk;
+        bulk.open(lex.data(), lex.size(), model.data(), model.size(), 1);
+        bulk.set_ai_learn(d / "ai_learn.bin");
+        const bool was_busy = bulk.ai_busy();
+        bulk.ai_wait();
+        if (was_busy && bulk.ai_bulk_learned() == 30 && std::filesystem::exists(bulk.ai_file()) && !std::filesystem::exists(d / "ai_learn.lock"))
+            printf("ok   ai bulk: 30\n");
+        else { printf("FAIL ai bulk: busy %d learned %d\n", int(was_busy), bulk.ai_bulk_learned()); failures++; }
+        const float lb = bulk.ai_learn(u"", u"きしゃ", u"汽車");
+        if (lb >= 0 && lb < l0 - 0.3f) printf("ok   ai bulk loss: %.3f\n", lb);
+        else { printf("FAIL ai bulk loss: %.3f\n", lb); failures++; }
+        Converter again;
+        again.open(lex.data(), lex.size(), model.data(), model.size(), 1);
+        again.set_ai_learn(d / "ai_learn.bin");
+        if (again.ai_busy()) { again.ai_wait(); printf("FAIL ai bulk again\n"); failures++; }
+        else printf("ok   ai bulk again: skipped\n");
+        again.set_ai_learn({});
+        // 前の 1 つだけの保存 (ai_learn.bin) は、今のモデルの名前に移して引き継ぐ。リセットはどのモデルの分も消す
+        const std::filesystem::path per = bulk.ai_file();
+        bulk.set_ai_learn({});
+        std::filesystem::rename(per, d / "ai_learn.bin", ec);
+        std::ofstream(d / "ai_learn_00000000.bin", std::ios::binary) << "x";   // ほかのモデルの分のつもり
+        Converter old;
+        old.open(lex.data(), lex.size(), model.data(), model.size(), 1);
+        old.set_ai_learn(d / "ai_learn.bin");
+        old.ai_wait();
+        const float lo = old.ai_learn(u"", u"きしゃ", u"汽車");
+        if (std::filesystem::exists(per) && !std::filesystem::exists(d / "ai_learn.bin") && lo >= 0 && lo < l0 - 0.3f) printf("ok   ai adopt old file: loss %.3f\n", lo);
+        else { printf("FAIL ai adopt old file: loss %.3f\n", lo); failures++; }
+        old.set_ai_learn({});
+        forget_ai_learn(d);
+        if (!std::filesystem::exists(per) && !std::filesystem::exists(d / "ai_learn_00000000.bin")) printf("ok   ai forget all models\n");
+        else { printf("FAIL ai forget all models\n"); failures++; }
+    }
     {   // 数字だけの読みの書き換え (2026-10-30)
         auto at = [](const std::vector<u16>& v, size_t i) { return i < v.size() ? v[i] : u16(); };
         auto has = [](const std::vector<u16>& v, const u16& s) { return std::find(v.begin(), v.end(), s) != v.end(); };
@@ -398,6 +492,11 @@ int main(int argc, char** argv) {
             forget_recent(d, 2000, "C");
             read_file(d / RECENT_FILE, rec);
             if (rec.find("\tC\t") != std::string::npos) { printf("FAIL forget_recent commit\n"); failures++; }
+            // 記録だけ消す: 学習は残り、控えの行だけ無くなる
+            l.note_commit(u"かわ", u"川", u"");
+            const int cut = recent_cut(d, 0);
+            read_file(d / RECENT_FILE, rec);
+            if (cut < 1 || rec.find("\tC\t") != std::string::npos || l.counts(u"かわ").empty()) { printf("FAIL recent_cut %d\n", cut); failures++; }
             forget_all(d);
             if (!l.counts(u"かわ").empty() || std::filesystem::exists(d / RECENT_FILE)) { printf("FAIL forget_all\n"); failures++; }
             else printf("ok   forget recent learning\n");
@@ -894,6 +993,22 @@ int main(int argc, char** argv) {
         expect("context: saved", lc2.top(u"とった", u"写真を"), u"撮った");
         lc2.forget(u"とった", u"撮った");
         expect("context: forget", lc2.top(u"とった", u"写真を"), u16());
+        {   // 用途の違う表記を両方選ぶ短い読み (か/化): 初めての文脈では取り合わずモデルに任せ、選んだ文脈ではそれぞれ (2026-11-06)
+            Learning lk(work / "learned_ka.json");
+            lk.clear();
+            for (const char16_t* left : {u"行く", u"本当", u"そう"}) lk.record(u"か", u"か", 2, left);
+            for (const char16_t* left : {u"自動", u"電子", u"映画"}) lk.record(u"か", u"化", 2, left);
+            lk.record(u"か", u"化", 2, u"高齢");
+            expect("shared reading: new context", lk.top(u"か", u"できる"), u16());
+            expect("shared reading: its context (か)", lk.top(u"か", u"本当"), u"か");
+            expect("shared reading: its context (化)", lk.top(u"か", u"電子"), u"化");
+            lk.record(u"かわ", u"革", 2, u"牛");
+            lk.record(u"かわ", u"革", 2, u"本");
+            bool ka = false, kawa = false;
+            for (auto& st : lk.strong(4)) { ka |= st.reading == u"か"; kawa |= st.reading == u"かわ" && st.surface == u"革"; }
+            if (!ka && kawa) printf("ok   shared reading: not strong\n");
+            else { printf("FAIL shared reading strong: ka %d kawa %d\n", int(ka), int(kawa)); failures++; }
+        }
         {   // 時間を指定して消すと文脈の票も戻る
             auto d = work / "ctx_recent";
             std::filesystem::remove_all(d);
@@ -1186,6 +1301,19 @@ int main(int argc, char** argv) {
         else { printf("FAIL latin user word not 2nd (%d cands)\n", int(cs.size())); failures++; }
         keys(s, "{esc}");
         dict.remove(u"shuntilettuce", u"ShuntiLettuce");
+        {   // 網の英字 (2026-11-05): かなの途中で終わる英字の語 (minecraft|apuri)・l で打った語 (lettuce -> ぇっつせ)
+            auto has = [](const std::vector<u16>& v, const u16& w) { return std::find(v.begin(), v.end(), w) != v.end(); };
+            keys(s, "minecraftapuri");
+            const auto c3 = s.view().cands;
+            if (has(c3, u"minecraftアプリ")) printf("ok   latin mid-kana: %s (rank %d)\n", u8(c3[0]).c_str(), int(std::find(c3.begin(), c3.end(), u16(u"minecraftアプリ")) - c3.begin()) + 1);
+            else { printf("FAIL latin mid-kana: %s\n", c3.empty() ? "" : u8(c3[0]).c_str()); failures++; }
+            keys(s, "{esc}");
+            keys(s, "lettuce");
+            const auto c4 = s.view().cands;
+            if (has(c4, u"lettuce")) printf("ok   latin l: %s (rank %d)\n", u8(c4[0]).c_str(), int(std::find(c4.begin(), c4.end(), u16(u"lettuce")) - c4.begin()) + 1);
+            else { printf("FAIL latin l: %s\n", c4.empty() ? "" : u8(c4[0]).c_str()); failures++; }
+            keys(s, "{esc}");
+        }
         keys(s, "openai");   // 辞書の大文字の混ざる英字の語も 2 番目に
         const auto& c2 = s.view().cands;
         if (c2.size() >= 2 && (c2[0] == u"OpenAI" || c2[1] == u"OpenAI")) printf("ok   dict latin word top 2: %s / %s\n", u8(c2[0]).c_str(), u8(c2[1]).c_str());
@@ -1208,7 +1336,11 @@ int main(int argc, char** argv) {
         s.options.private_mode = true;
         s.options.live_display = true;
         keys(s, "minecraftt{bs}{enter}");
-        expect("latin after backspace", s.take_commit(), u"minecraft");
+        {   // 英字が出ればよい (辞書の書き方 Minecraft でも、打ったまま minecraft でも)
+            const u16 got = s.take_commit();
+            if (got == u"Minecraft" || got == u"minecraft") printf("ok   latin after backspace: %s\n", u8(got).c_str());
+            else { printf("FAIL latin after backspace: got [%s]\n", u8(got).c_str()); failures++; }
+        }
         keys(s, "yorosikuonegaisimasu{enter}");
         u16 base = s.take_commit();
         keys(s, "yorisikuonegaisimasu{enter}");

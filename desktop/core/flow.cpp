@@ -165,6 +165,17 @@ void SentenceFlow::unbump(const u16& key, const u16& v) {
     dirty_ = true;
 }
 
+// AI学習で育てた中身を、どのモデルの分も消す (ai_learn.bin と ai_learn_<モデルの印>.bin。2026-11-06)
+void forget_ai_learn(const std::filesystem::path& dir) {
+    std::error_code ec;
+    std::filesystem::remove(dir / "ai_learn.bin", ec);
+    for (auto it = std::filesystem::directory_iterator(dir, ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
+        const std::string n = it->path().filename().string();
+        std::error_code rc;
+        if (n.rfind("ai_learn_", 0) == 0 && n.size() > 4 && n.compare(n.size() - 4, 4, ".bin") == 0) std::filesystem::remove(it->path(), rc);
+    }
+}
+
 void forget_all(const std::filesystem::path& dir) {
     Learning(dir / L"learned.json").clear();
     StyleLog(dir / L"style.json").clear();
@@ -173,6 +184,7 @@ void forget_all(const std::filesystem::path& dir) {
     f.clear();
     std::error_code ec;
     std::filesystem::remove(dir / RECENT_FILE, ec);
+    // AI学習で育てた中身 (ai_learn_*.bin) は残す。消すのは AI学習を外すとき (同意の撤回) だけ (ユーザー 2026-11-06)
     // 壊れたときに残した控えも学習の中身
     for (auto it = std::filesystem::directory_iterator(dir, ec); !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) {
         const std::wstring n = it->path().filename().wstring();

@@ -27,6 +27,26 @@ object Brackets {
         reading == "かっことじ" -> CLOSES
         reading in OPENS -> listOf(reading) + OPENS.filter { it != reading }
         reading in CLOSES -> listOf(reading) + CLOSES.filter { it != reading }
-        else -> emptyList()
+        else -> marks(reading)
+    }
+
+    /**
+     * 記号 1 字: 全角・半角の両方と仲間の記号 (打った字が先頭)。MS-IME と同じく・で ／ /、￥ で ＼ \ (ブログの報告 2026-11-02。
+     * Windows 版 composer.cpp の MARKS・HarmonyOS 版 Brackets.ets と同じ)。英数字は空
+     */
+    private val MARKS = listOf(
+        listOf("・", "／", "/"), listOf("、", "，", ","), listOf("。", "．", "."), listOf("ー", "－", "-", "―", "‐"), listOf("～", "〜", "~"),
+        listOf("￥", "＼", "\\"), listOf("＊", "*", "※", "×"), listOf("＂", "\"", "“", "”"), listOf("＇", "'", "‘", "’"),
+    )
+
+    private fun marks(reading: String): List<String> {
+        if (reading.length != 1) return emptyList()
+        val group = MARKS.firstOrNull { reading in it } ?: run {
+            val ch = reading[0]
+            val half = if (ch in '！'..'～') ch - 0xFEE0 else ch
+            if (half <= ' ' || half > '~' || half.isLetterOrDigit()) return emptyList()
+            listOf((half + 0xFEE0).toString(), half.toString())
+        }
+        return listOf(reading) + group.filter { it != reading }
     }
 }

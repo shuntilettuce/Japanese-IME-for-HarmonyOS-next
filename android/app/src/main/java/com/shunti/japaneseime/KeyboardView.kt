@@ -43,6 +43,7 @@ class KeyboardView(
     // 押しているキー (行, 列)。列は 0..4 (0 と 4 が左右の機能キー)
     private var activeRow = -1
     private var activeCol = -1
+    private var activeId = -1   // 押しているキーの指
     private var startX = 0f
     private var startY = 0f
     private var flickDir = 0   // 0 タップ, 1 左, 2 上, 3 右, 4 下
@@ -90,7 +91,7 @@ class KeyboardView(
     } else when (row) {
         0 -> "⌫"
         1 -> "▶"
-        2 -> if (h.inputState == InputHandler.InputState.IDLE) "空白" else "変換"
+        2 -> h.spaceLabel("空白")
         else -> h.enterLabel()
     }
 
@@ -160,30 +161,33 @@ class KeyboardView(
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                activeRow = ((e.y - 4 * dp) / rowH).toInt().coerceIn(0, 3)
-                activeCol = (e.x / colW()).toInt().coerceIn(0, 4)
-                startX = e.x
-                startY = e.y
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                // 2 本目の指が触れたら、前の指のキーをその時点で確定して、新しい指に移る (速く打つと指が重なる)
+                if (e.actionMasked == MotionEvent.ACTION_POINTER_DOWN) release(e)
+                val i = e.actionIndex
+                activeId = e.getPointerId(i)
+                activeRow = ((e.getY(i) - 4 * dp) / rowH).toInt().coerceIn(0, 3)
+                activeCol = (e.getX(i) / colW()).toInt().coerceIn(0, 4)
+                startX = e.getX(i)
+                startY = e.getY(i)
                 flickDir = 0
                 haptic()
                 onDown(activeRow, activeCol)
                 invalidate()
             }
             MotionEvent.ACTION_MOVE -> {
-                val d = dir(e.x - startX, e.y - startY)
-                if (d != 0) cancelLong()   // 指をずらしたら長押しではない
-                if (d != flickDir) {
-                    flickDir = d
-                    invalidate()
+                val i = e.findPointerIndex(activeId)
+                if (i >= 0) {
+                    val d = dir(e.getX(i) - startX, e.getY(i) - startY)
+                    if (d != 0) cancelLong()   // 指をずらしたら長押しではない
+                    if (d != flickDir) {
+                        flickDir = d
+                        invalidate()
+                    }
                 }
             }
-            MotionEvent.ACTION_UP -> {
-                stopRepeat()
-                cancelLong()
-                if (activeRow >= 0 && !longFired) onUp(activeRow, activeCol, dir(e.x - startX, e.y - startY))
-                activeRow = -1
-                activeCol = -1
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
+                if (e.getPointerId(e.actionIndex) == activeId) release(e)   // 前の指が後から離れたときは確定済み
                 invalidate()
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -191,10 +195,22 @@ class KeyboardView(
                 cancelLong()
                 activeRow = -1
                 activeCol = -1
+                activeId = -1
                 invalidate()
             }
         }
         return true
+    }
+
+    /** 押している指のキーを確定する (フリックの向きは、その指のいまの位置で決める) */
+    private fun release(e: MotionEvent) {
+        stopRepeat()
+        cancelLong()
+        val i = e.findPointerIndex(activeId)
+        if (activeRow >= 0 && !longFired && i >= 0) onUp(activeRow, activeCol, dir(e.getX(i) - startX, e.getY(i) - startY))
+        activeRow = -1
+        activeCol = -1
+        activeId = -1
     }
 
     // 長押し: 記号 → 片手 (左)、空白 → 片手 (右)。もう一度で元に戻る (HarmonyOS 版と同じキー)
@@ -259,7 +275,7 @@ class KeyboardView(
                 // 直前に打った小文字を大文字に打ち直す
                 if (lastAlpha.isNotEmpty()) {
                     h.handleBackspace()
-                    h.insertText(lastAlpha.uppercase())
+                    h.handleKeyPress(lastAlpha.uppercase())   // 入力中なら読みに足す (確定すると入力中の字を置き換えてしまう)
                     lastAlpha = ""
                 }
             }

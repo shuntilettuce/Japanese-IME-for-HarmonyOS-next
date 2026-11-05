@@ -26,8 +26,8 @@ android {
         applicationId = "com.shunti.japaneseime.android"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "1.3.3"
+        versionCode = 9
+        versionName = "1.3.4"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
     // リリースの署名: android/keystore.properties (git には入れない) があれば使う
@@ -71,7 +71,7 @@ android {
 val buildKkc by tasks.registering(Exec::class) {
     val out = layout.buildDirectory.file("kkc/jniLibs/arm64-v8a/libkkc.so")
     val sources = listOf(File(engineDir, "engine.cpp"), file("src/main/cpp/jni.cpp"))
-    inputs.files(sources, File(engineDir, "engine.h"))
+    inputs.files(sources, File(engineDir, "engine.h"), File(engineDir, "ai_learn.h"))
     outputs.file(out)
     val os = System.getProperty("os.name").lowercase()
     val host = when {

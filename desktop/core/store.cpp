@@ -130,6 +130,28 @@ void recent_drop(const fs::path& dir, const std::string& kind) {
     write_file_atomic(p, kept);
 }
 
+int recent_cut(const fs::path& dir, long long since, const std::string& kinds) {
+    const fs::path p = dir / RECENT_FILE;
+    std::string s;
+    if (!read_file(p, s)) return 0;
+    std::string kept;
+    int n = 0;
+    for (size_t st = 0; st < s.size();) {
+        size_t e = s.find('\n', st);
+        if (e == std::string::npos) e = s.size();
+        long long t = 0;
+        for (size_t k = st; k < e && s[k] >= '0' && s[k] <= '9'; k++) t = t * 10 + (s[k] - '0');
+        const size_t tab = s.find('\t', st);
+        const bool kind = tab != std::string::npos && tab + 1 < e && kinds.find(s[tab + 1]) != std::string::npos &&
+                          (tab + 2 >= e || s[tab + 2] == '\t');
+        if (t >= since && kind) n++;
+        else kept.append(s, st, e + 1 - st);
+        st = e + 1;
+    }
+    if (n > 0) write_file_atomic(p, kept);
+    return n;
+}
+
 // ---------------------------------------------------------------- 学習
 
 void Learning::note_commit(const u16& reading, const u16& surface, const u16& ctx) {
@@ -501,6 +523,11 @@ u16 Learning::top(const u16& reading, const u16& left) {
             here = &x.second;
             for (auto& c : x.second) all += c.second;
         }
+    // 文脈を問わずに置き換えるのは、その読みでほかの表記がほとんど選ばれていないときだけ (ほかの票が 1/4 以下)。
+    // 用途の違う表記を両方選ぶ短い読み (か/化・と/都) は、ほかの文脈で選んだ回数どうしで取り合い、初めての文脈で
+    // 交互に入れ替わった (ユーザー 2026-11-06)。そういう読みは同じ左の文脈で選んだときだけ置き換え、ほかはモデルに任せる
+    int total = 0;
+    for (auto& c : e->counts) if (c.second > 0) total += c.second;
     u16 best;
     int n = TOP_MIN_COUNT - 1;
     for (auto& c : e->counts) {
@@ -508,7 +535,8 @@ u16 Learning::top(const u16& reading, const u16& left) {
         int mine = 0;
         if (here) for (auto& h : *here) if (h.first == c.first) mine = h.second;
         const int against = all - mine;
-        if (mine - against >= SAME_CTX_MIN || (c.second >= ANY_CTX_MIN && against == 0)) { n = c.second; best = c.first; }
+        const bool dominant = (total - c.second) * 4 <= c.second;
+        if (mine - against >= SAME_CTX_MIN || (c.second >= ANY_CTX_MIN && against == 0 && dominant)) { n = c.second; best = c.first; }
     }
     return best;
 }
@@ -516,9 +544,14 @@ u16 Learning::top(const u16& reading, const u16& left) {
 std::vector<Learning::Strong> Learning::strong(int min) {
     refresh();
     std::vector<Strong> out;
-    for (auto& e : entries_)
+    // ほかの表記も選んでいる読み (ほかの票が 1/4 を超える: か/化・し/死) は入れない。網の中ではどの文脈でも安くなるので、
+    // 用途の違う所まで引っぱった (していない -> し/ていない。ユーザー 2026-11-06)。そういう読みは top の文脈ごとの置き換えだけ
+    for (auto& e : entries_) {
+        int total = 0;
+        for (auto& c : e.counts) if (c.second > 0) total += c.second;
         for (auto& c : e.counts)
-            if (c.second >= min) out.push_back({e.reading, c.first, c.second});
+            if (c.second >= min && (total - c.second) * 4 <= c.second) out.push_back({e.reading, c.first, c.second});
+    }
     return out;
 }
 

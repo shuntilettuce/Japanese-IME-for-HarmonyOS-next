@@ -3,6 +3,7 @@ import { kbTheme } from './Theme';
 import { promptAction } from '@kit.ArkUI';
 import { JP_FONT_FAMILY } from './JpFont';
 import { DEBUG_INPUT_LOG } from '../ime/InputLog';
+import { ClipItem } from '../ime/ClipHistory';
 
 // Segmented-control / card metrics (design tokens: settings cards 16px,
 // segmented-control track 20px / inner pill 20px).
@@ -41,11 +42,15 @@ export struct SettingsBar {
   @StorageLink('isDark') isDark: boolean = false;
   @StorageLink('clipboardHistory') clipboardHistory: string[] = [];
   @StorageLink('clipboardPinned') clipboardPinned: string[] = [];   // 固定した文 (履歴を消しても残る)
+  @StorageLink('clipItems') clipItems: ClipItem[] = [];   // 保存する履歴 (文・画像・動画・ファイル。ClipHistory)
+  @State clipPopupId: number = -1;     // 長押しで見本を出している履歴 (-1 = 出していない)
+  @State clipNotice: string = '';      // 貼れなかったときの一言
   @StorageLink('oneHandedMode') oneHandedMode: boolean = false;
   @StorageLink('oneHandedSide') oneHandedSide: string = 'right';
   @StorageLink('kanaKeyboardLayout') kanaKeyboardLayout: string = 'QWERTY';
   @StorageLink('alphabetKeyboardLayout') alphabetKeyboardLayout: string = 'QWERTY';
   @StorageLink('numericPadEnabled') numericPadEnabled: boolean = false;
+  @StorageLink('aiLearn') aiLearn: boolean = false;
   @StorageLink('hapticEnabled') hapticEnabled: boolean = false;
   // キーボードのライト／ダーク。'system' = 端末に合わせる。
   @StorageLink('themeMode') themeMode: string = 'system';
@@ -382,7 +387,7 @@ export struct SettingsBar {
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
         Row({ space: 6 }) {
-          Text(String(this.clipboardHistory.length))
+          Text(String(this.clipItems.length))
             .fontFamily(JP_FONT_FAMILY)
             .fontSize(12)
             .fontColor(kbTheme(this.isDark).textSecondary)
@@ -570,6 +575,32 @@ export struct SettingsBar {
           .selectedColor(kbTheme(this.isDark).accent)
           .onChange((isOn: boolean) => {
             InputHandler.getInstance().setNumericPadEnabled(isOn);
+          })
+      }
+      .width('100%')
+      .padding({ top: 12, bottom: 12 })
+
+      Divider().color(kbTheme(this.isDark).divider)
+
+      Row() {
+        Column({ space: 2 }) {
+          Text('AI学習')
+            .fontFamily(JP_FONT_FAMILY)
+            .fontSize(14)
+            .fontColor(kbTheme(this.isDark).textPrimary)
+          Text('確定した文から、この端末の中で変換を育てます')
+            .fontFamily(JP_FONT_FAMILY)
+            .fontSize(10)
+            .fontColor(kbTheme(this.isDark).textSecondary)
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.aiLearn })
+          .width(44)
+          .height(26)
+          .selectedColor(kbTheme(this.isDark).accent)
+          .onChange((isOn: boolean) => {
+            InputHandler.getInstance().setAiLearnEnabled(isOn);
           })
       }
       .width('100%')
@@ -1235,7 +1266,7 @@ export struct SettingsBar {
     .padding({ left: 14, right: 14 })
   }
 
-  // 履歴の 1 行: 押すと貼る、右の 📌 で固定する・外す
+  // 履歴の 1 行: 押すと貼る、右の 📌 で固定する・外す (固定した文の欄)
   @Builder ClipRow(item: string, pinned: boolean, onPaste: () => void) {
     Row() {
       Text(item)
@@ -1254,6 +1285,132 @@ export struct SettingsBar {
         .onClick(() => { InputHandler.getInstance().togglePin(item); })
     }
     .width('100%')
+  }
+
+  private clipLabel(c: ClipItem): string {
+    if (c.kind === 'text') { return c.text.replace(/\n/g, ' '); }
+    const head = c.kind === 'image' ? '画像' : (c.kind === 'video' ? '動画' : 'ファイル');
+    return c.name.length > 0 && c.kind !== 'image' ? `${head}  ${c.name}` : head;
+  }
+
+  private pasteItem(c: ClipItem): void {
+    if (InputHandler.getInstance().pasteClipItem(c)) {
+      this.clipNotice = '';
+      this.clipPopupId = -1;
+      this.close();
+    } else {
+      this.clipNotice = '貼り付けられませんでした';
+    }
+  }
+
+  // 長押しの見本 (画面は替えずにポップアップ。ユーザー 2026-11-05): 大きな見本と 貼り付け・固定 (文だけ)・消去
+  @Builder ClipPopup() {
+    Column({ space: 10 }) {
+      ForEach(this.clipItems.filter((c: ClipItem) => c.id === this.clipPopupId), (c: ClipItem) => {
+        if (c.thumb.length > 0) {
+          Image('file://' + c.thumb)
+            .objectFit(ImageFit.Contain)
+            .width(260).height(200)
+            .borderRadius(8)
+        } else {
+          Scroll() {
+            Text(this.clipLabel(c).length > 0 && c.kind === 'text' ? c.text : this.clipLabel(c))
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(14)
+              .fontColor(kbTheme(this.isDark).textPrimary)
+              .width('100%')
+          }
+          .width(260)
+          .constraintSize({ maxHeight: 200 })
+        }
+        if (c.kind !== 'text') {
+          Text(this.clipLabel(c))
+            .fontFamily(JP_FONT_FAMILY)
+            .fontSize(11)
+            .fontColor(kbTheme(this.isDark).textSecondary)
+        }
+        Row({ space: 8 }) {
+          Text('貼り付け')
+            .fontFamily(JP_FONT_FAMILY).fontSize(13)
+            .fontColor(kbTheme(this.isDark).onAccent)
+            .backgroundColor(kbTheme(this.isDark).accentStrong)
+            .borderRadius(8).padding({ left: 14, right: 14, top: 8, bottom: 8 })
+                        .onClick(() => { this.pasteItem(c); })
+          if (c.kind === 'text') {
+            Text('固定')
+              .fontFamily(JP_FONT_FAMILY).fontSize(13)
+              .fontColor(this.clipboardPinned.indexOf(c.text) >= 0 ? kbTheme(this.isDark).onAccent : kbTheme(this.isDark).textPrimary)
+              .backgroundColor(this.clipboardPinned.indexOf(c.text) >= 0 ? kbTheme(this.isDark).accentStrong : kbTheme(this.isDark).candidateBg)
+              .borderRadius(8).padding({ left: 14, right: 14, top: 8, bottom: 8 })
+              .onClick(() => {
+                InputHandler.getInstance().togglePin(c.text);
+                this.clipPopupId = -1;
+              })
+          }
+          Text('消去')
+            .fontFamily(JP_FONT_FAMILY).fontSize(13)
+            .fontColor(kbTheme(this.isDark).textPrimary)
+            .backgroundColor(kbTheme(this.isDark).candidateBg)
+            .borderRadius(8).padding({ left: 14, right: 14, top: 8, bottom: 8 })
+            .onClick(() => {
+              InputHandler.getInstance().removeClipItem(c.id);
+              this.clipPopupId = -1;
+            })
+        }
+      }, (c: ClipItem) => `pop-${c.id}`)
+    }
+    .padding(12)
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  // 保存する履歴の 1 行: 画像は見本、押すと貼る、長押しで見本のポップアップ
+  @Builder ClipItemRow(c: ClipItem) {
+    Row({ space: 10 }) {
+      if (c.thumb.length > 0) {
+        Image('file://' + c.thumb)
+          .objectFit(ImageFit.Cover)
+          .width(44).height(44)
+          .borderRadius(6)
+      } else if (c.kind !== 'text') {
+        Text(c.kind === 'video' ? '▶' : '…')
+          .fontSize(16)
+          .fontColor(kbTheme(this.isDark).textSecondary)
+          .textAlign(TextAlign.Center)
+          .width(44).height(44)
+          .borderRadius(6)
+          .backgroundColor(kbTheme(this.isDark).candidateBg)
+      }
+      Text(this.clipLabel(c))
+        .fontFamily(JP_FONT_FAMILY)
+        .fontSize(14)
+        .fontColor(kbTheme(this.isDark).textPrimary)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .layoutWeight(1)
+      if (c.kind === 'text' && this.clipboardPinned.indexOf(c.text) >= 0) {
+        Text('固定')
+          .fontFamily(JP_FONT_FAMILY)
+          .fontSize(11)
+          .fontColor(kbTheme(this.isDark).accentStrong)
+      }
+    }
+    .width('100%')
+    .padding({ top: c.kind === 'text' ? 14 : 6, bottom: c.kind === 'text' ? 14 : 6 })
+    .onClick(() => { this.pasteItem(c); })
+    .gesture(LongPressGesture({ duration: 450 }).onAction(() => {
+      InputHandler.getInstance().hapticTick();
+      this.clipPopupId = c.id;
+    }))
+    .bindPopup(this.clipPopupId === c.id, {
+      builder: this.ClipPopup,
+      placement: Placement.Top,
+      enableArrow: true,
+      popupColor: kbTheme(this.isDark).cardBg,
+      backgroundBlurStyle: BlurStyle.NONE,
+      radius: 12,
+      mask: { color: 0x33000000 },
+      onStateChange: (e) => { if (!e.isVisible && this.clipPopupId === c.id) { this.clipPopupId = -1; } },
+    })
   }
 
   @Builder HistoryView() {
@@ -1281,7 +1438,15 @@ export struct SettingsBar {
       .divider({ strokeWidth: 1, color: kbTheme(this.isDark).divider })
       .margin({ bottom: 12 })
     }
-    if (this.clipboardHistory.length === 0) {
+    if (this.clipNotice.length > 0) {
+      Text(this.clipNotice)
+        .fontFamily(JP_FONT_FAMILY)
+        .fontSize(11)
+        .fontColor(kbTheme(this.isDark).accentStrong)
+        .width('100%')
+        .padding({ left: 4, bottom: 6 })
+    }
+    if (this.clipItems.length === 0) {
       Text('履歴がありません')
         .fontFamily(JP_FONT_FAMILY)
         .fontSize(12)
@@ -1290,15 +1455,18 @@ export struct SettingsBar {
         .textAlign(TextAlign.Center)
         .padding({ top: 48, bottom: 48 })
     } else {
+      Text('タップで貼り付け・長押しで見本')
+        .fontFamily(JP_FONT_FAMILY)
+        .fontSize(11)
+        .fontColor(kbTheme(this.isDark).textSecondary)
+        .width('100%')
+        .padding({ left: 4, bottom: 4 })
       List() {
-        ForEach(this.clipboardHistory, (item: string, index: number) => {
+        ForEach(this.clipItems.filter((c: ClipItem) => InputHandler.getInstance().isCurrentClip(c)), (c: ClipItem) => {
           ListItem() {
-            this.ClipRow(item, this.clipboardPinned.indexOf(item) >= 0, () => {
-              InputHandler.getInstance().pasteFromHistory(index);
-              this.close();
-            })
+            this.ClipItemRow(c)
           }
-        }, (item: string, index: number) => `${index}-${item}`)
+        }, (c: ClipItem) => `clip-${c.id}-${c.thumb}`)
       }
       .width('100%')
       .backgroundColor(kbTheme(this.isDark).cardBg)

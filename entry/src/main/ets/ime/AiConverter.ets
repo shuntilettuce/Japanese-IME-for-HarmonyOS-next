@@ -8,6 +8,7 @@ import kkc, { KkcResult } from 'libkkc.so';
 import type common from '@ohos.app.ability.common';
 import { DEBUG_INPUT_LOG } from './InputLog';
 import type { UserPosEntry } from './ConjugationEngine';
+import { KanaKanjiConverter } from './KanaKanjiConverter';
 
 // 長い入力で固定した前の方の 1 か所 (読みと、選び直せる候補。cands[0] が今の表記)
 interface FrozenChunk {
@@ -85,6 +86,7 @@ export class AiConverter {
   // (読みが文の途中に出てきても候補になる)。品詞の左右 ID とコストは、辞書にある同じ品詞・同じ活用の形の代表語から写す
   // (Android 版 UserDict.kt・PC 版と同じ決まり)。動詞と形容詞は、代表語の活用形と同じ語尾の形も作って入れる
   private static userForms: string[] = [];   // [読み, 表記, 代表語の読み, 代表語の表記] を 4 つずつ
+  private static learnedForms: string[] = [];   // 同じ形の、学習で 2 回以上選んだ語
   private static readonly USER_BONUS: number = 800;
   private static readonly NOUN_TMPL: Record<string, string[]> = {
     'noun': ['ねこ', '猫'], 'person': ['やまだ', '山田'], 'place': ['とうきょう', '東京'],
@@ -143,13 +145,122 @@ export class AiConverter {
     AiConverter.applyUserWords();
   }
 
+  // 学習で 2 回以上選んだ語を網に入れる (KanaKanjiConverter.strongForms)
+  static setLearnedWords(forms: string[]): void {
+    if (forms.join('\u0001') === AiConverter.learnedForms.join('\u0001')) { return; }   // 変わらないなら変換の控えを捨てない
+    AiConverter.learnedForms = forms;
+    AiConverter.applyUserWords();
+  }
+
   private static applyUserWords(): void {
     if (!AiConverter.ready) {
       return;
     }
-    const n = kkc.setUserWords(AiConverter.userForms, AiConverter.USER_BONUS);
+    const forms = AiConverter.userForms.concat(AiConverter.learnedForms);
+    const n = kkc.setUserWords(forms, AiConverter.USER_BONUS);
     AiConverter.cache.clear();   // 前の辞書で変換した結果を使わない
-    console.info(`shuntiIME AiConverter user words ${n}/${AiConverter.userForms.length / 4}`);
+    console.info(`shuntiIME AiConverter user words ${n}/${forms.length / 4}`);
+  }
+
+  // 1 位の文の語を学習で置き換える。置き換えた文を新しい 1 位にして、元の 1 位は 2 位に残す (選び直せば反対の票になる)。
+  // 語の区切りは学習したときと違うことがあるので、続く語も 3 語までつなげて引く
+  private static withLearned(ctx: string, tail: string, r: KkcResult): KkcResult {
+    const paths = r.paths ?? [];
+    if (paths.length === 0 || r.cands.length === 0) { return r; }
+    const top = paths[0].split('\u0001');
+    if (top.filter((_w: string, i: number) => i % 2 === 1).join('') !== r.cands[0]) { return r; }
+    const path: string[] = [];
+    let left = ctx;
+    let start = 0;
+    let i = 0;
+    let changed = false;
+    while (i < top.length) {
+      let take = 1;
+      let surf = top[i + 1];
+      for (let k = Math.min(3, (top.length - i) / 2); k >= 1; k--) {
+        const t = KanaKanjiConverter.top(tail.slice(start, Number(top[i + 2 * k - 2])), left);
+        if (t === undefined) { continue; }
+        take = k;
+        let was = '';
+        for (let m = 0; m < k; m++) { was += top[i + 2 * m + 1]; }
+        changed = changed || t !== was;
+        surf = t;
+        break;
+      }
+      start = Number(top[i + 2 * take - 2]);
+      path.push(String(start), surf);
+      left += surf;
+      i += 2 * take;
+    }
+    if (!changed) { return r; }
+    const sentence = left.slice(ctx.length);
+    const ends: number[] = [];
+    const lens: number[] = [];
+    for (let p = 0; p < path.length; p += 2) {
+      ends.push(Number(path[p]));
+      lens.push(path[p + 1].length);
+    }
+    return { cands: [sentence].concat(r.cands.filter((c: string) => c !== sentence)), ends: ends, lens: lens,
+      paths: [path.join('\u0001')].concat(paths), sugg: r.sugg ?? [], suggKinds: r.suggKinds ?? [] } as KkcResult;
+  }
+
+  // 1 位以外を選んだとき、1 位の経路と違う所を [読み, 表記, 語の左の文] で返す。分からなければ undefined (1 位を選んだ・経路に無い候補)
+  static changedWords(target: string, chosen: string): string[][] | undefined {
+    if (!target.startsWith(AiConverter.fKana) || !chosen.startsWith(AiConverter.fSurf)) {
+      return undefined;
+    }
+    const tail = target.slice(AiConverter.fKana.length);
+    const pick = chosen.slice(AiConverter.fSurf.length);
+    const ctx2 = (AiConverter.fCtx + AiConverter.fSurf).slice(-40);
+    const hit = AiConverter.cache.get(AiConverter.key(ctx2, tail));
+    const paths = (hit === undefined ? undefined : AiConverter.withLearned(ctx2, tail, hit).paths) ?? [];
+    if (paths.length < 2) {
+      return undefined;
+    }
+    const top = paths[0].split('\u0001');
+    for (let p = 1; p < paths.length; p++) {
+      const words = paths[p].split('\u0001');
+      if (words.filter((_w: string, i: number) => i % 2 === 1).join('') === pick) {
+        return AiConverter.diffWords(ctx2, tail, top, words);
+      }
+    }
+    return undefined;
+  }
+
+  // a・b は [読みの終わり, 表記, …]。両方の語の区切りがそろう所まで進めて、表記が違えば b の側を返す
+  private static diffWords(ctx: string, tail: string, a: string[], b: string[]): string[][] {
+    const out: string[][] = [];
+    let i = 0;
+    let j = 0;
+    let start = 0;
+    let left = ctx;
+    while (i < a.length && j < b.length) {
+      let ea = Number(a[i]);
+      let eb = Number(b[j]);
+      let sa = a[i + 1];
+      let sb = b[j + 1];
+      while (ea !== eb) {
+        if (ea < eb) {
+          i += 2;
+          if (i >= a.length) { return out; }
+          ea = Number(a[i]);
+          sa += a[i + 1];
+        } else {
+          j += 2;
+          if (j >= b.length) { return out; }
+          eb = Number(b[j]);
+          sb += b[j + 1];
+        }
+      }
+      if (sa !== sb) {
+        out.push([tail.slice(start, ea), sb, left]);
+      }
+      left += sb;
+      start = ea;
+      i += 2;
+      j += 2;
+    }
+    return out;
   }
 
   // 挨拶はかな書きを先に。モデルは文脈によって「こんにちは」を「今日は」と書く (教材の読みの入れ替え
@@ -219,12 +330,14 @@ export class AiConverter {
       AiConverter.chunks = [];
       AiConverter.prevSegs.clear();
     }
+    AiConverter.freezeBeforePunct(target);
     const tail = target.slice(AiConverter.fKana.length);
     if (tail.length === 0) {
       return [AiConverter.fSurf];
     }
     const ctx2 = (context + AiConverter.fSurf).slice(-40);
-    const hit = AiConverter.cache.get(AiConverter.key(ctx2, tail));
+    const cached = AiConverter.cache.get(AiConverter.key(ctx2, tail));
+    const hit = cached === undefined ? undefined : AiConverter.withLearned(ctx2, tail, cached);
     if (hit !== undefined && hit.cands.length > 0) {
       const out = AiConverter.withFrozenAlternatives(hit.cands.map((c: string) => AiConverter.fSurf + c), hit.cands[0]);
       AiConverter.lastTarget = target;
@@ -234,7 +347,10 @@ export class AiConverter {
       AiConverter.maybeFreeze(tail, hit);
       return out;
     }
-    AiConverter.request(ctx2, tail, onDone);
+    // 変換できなかった読み (長すぎるなど) は空の結果が残っている。頼み直すと届くたびに頼み直して回り続ける
+    if (hit === undefined) {
+      AiConverter.request(ctx2, tail, onDone);
+    }
     // 結果が届くまでは、前回の候補に新しく打ったかなをつないで出す (かなに戻ったり、候補の帯が縮んだりしない)
     if (AiConverter.lastTarget.length > 0 && target.startsWith(AiConverter.lastTarget) && AiConverter.lastCands.length > 0) {
       const extra = target.slice(AiConverter.lastTarget.length);
@@ -294,6 +410,13 @@ export class AiConverter {
 
   private static maybeFreeze(tail: string, r: KkcResult): void {
     const top = r.cands[0];
+    // 数字にする・打ち間違いを直すなどで 1 位が差し替わると、語の区切りは 1 位と合わない。切ると字が欠けるので固定しない
+    let total = 0;
+    for (const len of r.lens) { total += len; }
+    if (total !== top.length) {
+      AiConverter.prevSegs.clear();
+      return;
+    }
     let cum = 0;
     let freezeEnd = 0;
     let freezeLen = 0;
@@ -318,19 +441,49 @@ export class AiConverter {
     if (freezeEnd > 0) {
       const kana = tail.slice(0, freezeEnd);
       // 固定する前の方にも、挨拶のかな書きを当てる (候補の並べ替えだけでは、ここで「今日は」が固定されてしまう)
-      const surf = AiConverter.greetingFix(kana, top.slice(0, freezeLen));
-      const chunk: FrozenChunk = { kana: kana, cands: [surf] };
-      const ctx = (AiConverter.fCtx + AiConverter.fSurf).slice(-40);
-      AiConverter.chunks.push(chunk);
-      AiConverter.fKana += kana;
-      AiConverter.fSurf += surf;
-      AiConverter.prevSegs.clear();
-      // 固定した部分だけを 1 回変換して、選び直せる候補を持たせる (以後この部分は AI にかけない)
-      kkc.convertAsync(ctx, kana, 8).then((r2: KkcResult) => {
-        const alts = r2.cands.filter((c: string) => c !== surf);
-        chunk.cands = [surf].concat(alts.slice(0, AiConverter.ALT - 1));
-      }).catch((_e: Error) => {});
+      AiConverter.freezeChunk(kana, AiConverter.greetingFix(kana, top.slice(0, freezeLen)));
     }
+  }
+
+  // 読み kana・表記 surf の前の方を固定する
+  private static freezeChunk(kana: string, surf: string): void {
+    const chunk: FrozenChunk = { kana: kana, cands: [surf] };
+    const ctx = (AiConverter.fCtx + AiConverter.fSurf).slice(-40);
+    AiConverter.chunks.push(chunk);
+    AiConverter.fKana += kana;
+    AiConverter.fSurf += surf;
+    AiConverter.prevSegs.clear();
+    // 固定した部分だけを 1 回変換して、選び直せる候補を持たせる (以後この部分は AI にかけない)
+    kkc.convertAsync(ctx, kana, 8).then((r2: KkcResult) => {
+      const alts = r2.cands.filter((c: string) => c !== surf);
+      chunk.cands = [surf].concat(alts.slice(0, AiConverter.ALT - 1));
+    }).catch((_e: Error) => {});
+  }
+
+  // 句読点 (、。！？) を打った直後: その前は、打つ直前に出していた 1 位のまま固定する。打つと前の方まで変換し直されて、
+  // 良かった変換が変わってしまった (ブログの報告 2026-11-02。PC 版・Android 版と同じ決まり)。。。。 のように句読点が続くときは分けない
+  private static freezeBeforePunct(target: string): void {
+    const last = AiConverter.lastTarget;
+    if (AiConverter.lastCands.length === 0 || last.length <= AiConverter.fKana.length || !target.startsWith(last) ||
+      !last.startsWith(AiConverter.fKana)) {
+      return;
+    }
+    const punct = '、。！？!?';
+    const extra = target.slice(last.length);
+    if (extra.length === 0 || punct.indexOf(last.charAt(last.length - 1)) >= 0) {
+      return;
+    }
+    for (let i = 0; i < extra.length; i++) {
+      if (punct.indexOf(extra.charAt(i)) < 0) {
+        return;
+      }
+    }
+    const top = AiConverter.lastCands[0];
+    if (!top.startsWith(AiConverter.fSurf) || top.length <= AiConverter.fSurf.length) {
+      return;
+    }
+    const kana = last.slice(AiConverter.fKana.length);
+    AiConverter.freezeChunk(kana, AiConverter.greetingFix(kana, top.slice(AiConverter.fSurf.length)));
   }
 
   // ---- 裏のスレッドでの変換 ----
@@ -354,6 +507,36 @@ export class AiConverter {
     if (!AiConverter.inflight) {
       AiConverter.run();
     }
+  }
+
+  // ---- AI学習 (設定、既定オフ。PC 版と同じ) ----
+  // 確定した文から、変換の点に上乗せする小さいモデルを端末の中で育てる。保存先は filesDir/ai_learn.bin
+  static readonly AI_LEARN_FILE: string = 'ai_learn.bin';
+  private static aiOn: boolean = false;
+
+  // オン・オフ (dir = filesDir)。エンジンを読み込む前に呼んでもよい (読み込んだ後に入れる)。同じなら、消されたかだけを見る
+  static setAiLearn(on: boolean, dir: string): void {
+    AiConverter.aiOn = on;
+    kkc.setAiLearn(on ? `${dir}/${AiConverter.AI_LEARN_FILE}` : '');
+    AiConverter.cache.clear();
+  }
+
+  // 確定した文 (左の文脈・読み・表記) から 1 歩学ぶ (裏のスレッドで)。学んだら前の変換の結果を捨てる
+  static aiLearn(ctx: string, reading: string, text: string): void {
+    if (!AiConverter.aiOn || !AiConverter.ready || reading.length === 0 || text.length === 0 || text === reading) {
+      return;
+    }
+    kkc.aiLearnAsync(ctx, reading, text).then((loss: number) => {
+      if (loss >= 0) {
+        AiConverter.cache.clear();
+      }
+    }).catch((e: Error) => { console.error('shuntiIME aiLearn error', JSON.stringify(e)); });
+  }
+
+  // 学習のリセット: 育てた中身を消す (オフでも)
+  static forgetAiLearn(dir: string): void {
+    kkc.aiForget(`${dir}/${AiConverter.AI_LEARN_FILE}`);
+    AiConverter.cache.clear();
   }
 
   // 設定「提案を分けて表示する」。前の結果は提案の有無が違うので捨てる
@@ -473,7 +656,7 @@ export class AiConverter {
       if (AiConverter.cache.size > 256) {
         AiConverter.cache.clear();
       }
-      AiConverter.cache.set(key, { cands: r.cands, ends: r.ends, lens: r.lens,
+      AiConverter.cache.set(key, { cands: r.cands, ends: r.ends, lens: r.lens, paths: r.paths ?? [],
         sugg: r.sugg ?? [], suggKinds: r.suggKinds ?? [] } as KkcResult);
       AiConverter.inflight = false;
       if (AiConverter.wantKey !== key) {
@@ -484,6 +667,9 @@ export class AiConverter {
     }).catch((e: Error) => {
       AiConverter.inflight = false;
       console.error('shuntiIME AiConverter convert error', JSON.stringify(e));
+      if (AiConverter.wantKey !== key) {
+        AiConverter.run();      // 変換中に読みが変わっていた: 失敗しても最新の読みは変換する
+      }
     });
   }
 }

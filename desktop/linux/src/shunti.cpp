@@ -324,6 +324,8 @@ void ShuntiEngine::applyConfig(Composer& c) const {
     c.options.digits_fullwidth = *config_.digitsFullwidth;
     c.options.punct = *config_.punct;
     c.options.punct_commit = *config_.punctCommit;
+    // AI学習 (既定オフ)。変わらなければ何もしない
+    if (core_) core_->conv.set_ai_learn(*config_.aiLearn ? user_dir() / "ai_learn.bin" : fs::path());
 }
 
 void ShuntiEngine::setConfig(const fcitx::RawConfig& raw) {

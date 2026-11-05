@@ -14,7 +14,6 @@ static bool camel(const u16& w);   // 2 字目以降に大文字があり小文�
 constexpr int kCandidates = 30;
 
 namespace {
-constexpr size_t CTX_MAX = 40;   // モデルの文脈の長さ
 
 bool is_digit(char16_t c) { return c >= u'0' && c <= u'9'; }
 bool is_upper(char16_t c) { return c >= u'A' && c <= u'Z'; }
@@ -189,7 +188,7 @@ bool Composer::press(const KeyEvent& ev) {
 void Composer::start_input() {
     post_.clear();
     u16 c = context_ ? context_() : u16();
-    ctx_ = tail(c.empty() ? history_ : c, CTX_MAX);
+    ctx_ = tail(c.empty() ? history_ : c, options.ctx_max);
     state_ = State::Input;
     kana_.clear();
     caret_ = 0;
@@ -217,7 +216,7 @@ void Composer::type_kana(const u16& s) {
         for (auto& x : segs_) carry += x.surface;
         commit_all();
         start_input();
-        ctx_ = tail(carry, CTX_MAX);
+        ctx_ = tail(carry, options.ctx_max);
     } else if (state_ == State::Idle) {
         start_input();
     }
@@ -623,6 +622,8 @@ bool Composer::press_convert(const KeyEvent& ev) {
         if (s.cands.empty()) return;
         // 最後のページに入るなら、先に続きを読む (候補が途中で切れないように)
         if (i >= 0 && i / PAGE >= (int(s.cands.size()) - 1) / PAGE) load_more(focus_);
+        // 上へは 1 位で止める (読み込んだ候補の最後に回り込むと、前にも後ろにも候補があって迷子になる。ユーザー 2026-11-05)
+        if (i < 0) i = 0;
         int n = int(s.cands.size());
         const int old = s.sel;
         s.sel = ((i % n) + n) % n;
@@ -646,7 +647,7 @@ bool Composer::press_convert(const KeyEvent& ev) {
             for (auto& x : segs_) carry += x.surface;
             commit_all();
             start_input();
-            ctx_ = tail(carry, CTX_MAX);
+            ctx_ = tail(carry, options.ctx_max);
             type_char(ev.ch, ev.raw);
             return true;
         }
@@ -1227,7 +1228,7 @@ u16 Composer::frozen_surface() const {
 }
 
 // 残りの読みを変換するときの文脈 (入力欄の左 + 固定した表記)
-u16 Composer::conv_ctx() const { return tail(ctx_ + frozen_surface(), CTX_MAX); }
+u16 Composer::conv_ctx() const { return tail(ctx_ + frozen_surface(), options.ctx_max); }
 
 // 打ったキーの並び (raw_) を、学習 (kkcnative2 の kkn_type_keys) と同じ手順でローマ字に通し直して、読みの字ごとに「何打目までで
 // 決まったか」を作り、変換に渡す。読み (固定した前の方を除いた残り) がその終わりと一致するときだけ。
@@ -1264,8 +1265,9 @@ void Composer::prime_keys(const u16& reading) {
     // かなだけの読みに渡すと、neko -> neko のように打ったままの英字を選んでしまった)
     // 読みが全部かなでも、打ったキーの中に、大文字の混ざる辞書の英字の語・ユーザー辞書の英字の語の綴りがあれば渡す
     // (openai の → おぺないの でも OpenAI の辺を網に入れる。2026-10-23)
+    // l・x を打ったときも (日本語のローマ字では小さい字にしか使わない。lettuce -> ぇっつせ。2026-11-05)
     if (std::none_of(reading.begin(), reading.end(), [](char16_t ch) { return ch < 0x80 && ((ch | 0x20) >= u'a' && (ch | 0x20) <= u'z'); }) &&
-        !has_latin_word(raw_))
+        !has_latin_word(raw_) && raw_.find_first_of(u"lx") == u16::npos)
         return;
     u16 sim;
     std::vector<int32_t> span;
@@ -1420,6 +1422,11 @@ void Composer::sync_user_dict() {
                     s.pop_back();
                 }
                 if (r.empty() || s.empty() || r == s) continue;
+                // 1 字の読み (し・か・と) は網に入れない: どの文脈でも安い 1 字の辺になり、区切りまで変えた (していない ->
+                // し/ていない。ユーザー 2026-11-06)。手帳 311 読みで測った: 入力ログ 2728 件で 89.0 -> 89.2 (直した 66 -> 61・
+                // 壊した 26 -> 15)、ベンチ 1190 問で壊した 7 -> 2。安くする量を 200 に減らす形は 89.0 (壊した 23) で及ばなかった。
+                // 1 字の語も、同じ左の文脈で選んだ文節の置き換え (top) は残る
+                if (r.size() < 2) continue;
                 UserDict::Form f;
                 f.reading = r;
                 f.surface = s;
@@ -1495,8 +1502,8 @@ void Composer::convert_all() {
         u16 fr_r, fr_s, rest_s;
         for (auto& s : segs_) { fr_r += s.reading; fr_s += s.surface; }
         for (auto& s : rest) rest_s += s.surface;
-        conv_->set_right_ctx(rest_s);
-        std::vector<Seg> again = convert_phrases(tail(ctx_, CTX_MAX), fr_r, nullptr);
+        conv_->set_right_ctx(rest_s.substr(0, std::min(rest_s.size(), options.rctx_max)));
+        std::vector<Seg> again = convert_phrases(tail(ctx_, options.ctx_max), fr_r, nullptr);
         u16 as;
         for (auto& s : again) as += s.surface;
         if (!again.empty() && as != fr_s) {
@@ -1558,7 +1565,7 @@ void Composer::enter_single(const u16& surface, std::vector<u16> cands, int sel)
 u16 Composer::left_context(size_t seg) const {
     u16 c = ctx_;
     for (size_t i = 0; i < seg && i < segs_.size(); i++) c += segs_[i].surface;
-    return tail(c, CTX_MAX);
+    return tail(c, options.ctx_max);
 }
 
 void Composer::load_cands(size_t i) {
@@ -1857,7 +1864,7 @@ void Composer::commit_text(const u16& t0) {
     last_learn_ = std::move(new_learn_);
     new_learn_.clear();
     last_style_.clear();
-    history_ = tail(history_ + t, CTX_MAX);
+    history_ = tail(history_ + t, options.ctx_max);
     // M5: 確定した文の、かなでも漢字でも書ける語の書き方を、文の種類 (左の文脈から 丁寧・崩れ) と一緒に数える
     // (読みの網の上でたどって語を決める)
     if (style_ && conv_ && !quiet() && !t.empty() && !kana_.empty()) {
@@ -1869,6 +1876,8 @@ void Composer::commit_text(const u16& t0) {
     }
     if (learning_ && options.learn_log && !quiet() && !t.empty() && !kana_.empty())
         learning_->note_commit(frozen_reading() + kana_, t, ctx_);
+    // AI学習 (設定でオンのときだけ Converter が学ぶ)。パスワードの欄・学習を止めている間は学ばない
+    if (conv_ && !quiet() && !t.empty() && !kana_.empty() && t != kana_) conv_->ai_learn(ctx_, frozen_reading() + kana_, t);
     if (!t.empty() && !kana_.empty() && !quiet()) {   // 再変換のための (表記, 読み)
         recent_.push_back({t, frozen_reading() + kana_});
         if (recent_.size() > 200) recent_.erase(recent_.begin());
@@ -1906,7 +1915,7 @@ bool Composer::start_reconvert(const u16& reading, const u16& original) {
 bool Composer::cancel_reconvert() {
     if (restore_.empty()) return false;
     commit_ += restore_;
-    history_ = tail(history_ + restore_, CTX_MAX);
+    history_ = tail(history_ + restore_, options.ctx_max);
     to_idle();
     return true;
 }

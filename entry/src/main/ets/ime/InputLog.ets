@@ -104,7 +104,7 @@ export const LF_KANA: string = 'kana';          // 読みと同じ (かな) を�
 // 変換の研究データとして何の価値もない一方、取り出せるファイルに平文で残ると
 // 事故にしかならないので常に除外する。
 // (値は ArkUI の InputType と同じ並び。未知の値なら通常フィールド扱い=記録する)
-const SECURE_PATTERNS: number[] = [7, 8, 9, 11];
+export const SECURE_PATTERNS: number[] = [7, 8, 9, 11];
 
 // メモリに溜めてからまとめて書く。打鍵のたびに open/write/close すると
 // 応答に乗ってくるため。どちらか早い方で flush する。打鍵単位の記録が入って

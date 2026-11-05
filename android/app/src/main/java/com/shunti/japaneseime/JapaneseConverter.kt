@@ -25,7 +25,7 @@ class JapaneseConverter(private val table: Map<String, String>) {
     fun pending() = buffer
 
     fun flushPending(): String {
-        val p = buffer
+        val p = if (buffer == "n") "ん" else buffer   // PC と同じ。語末の n は ん
         buffer = ""
         return p
     }
