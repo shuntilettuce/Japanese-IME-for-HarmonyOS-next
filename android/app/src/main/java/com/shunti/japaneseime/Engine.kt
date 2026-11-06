@@ -13,7 +13,9 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
                  /** 提案 (種類, 表記)。種類は engine.h の KKC_SUGGEST_* (1 打ち間違いの直し 2 日付 3 住所 4 英単語 6 気分 7 記号) */
                  val sugg: List<Pair<Int, String>> = emptyList(),
                  /** 上位の経路 (表示しない。確定した語を学習するのに使う)。1 本ごとに "読みの終わり\u0001表記\u0001…" */
-                 val paths: List<String> = emptyList())
+                 val paths: List<String> = emptyList(),
+                 /** 1 位の経路 (paths[0]) の文節ごとの読みの終わり (PC 版と同じ決まり。学習の置き換えの単位)。分からなければ空 */
+                 val phraseEnds: IntArray = IntArray(0))
 
     /** 上位の候補。ctx = 確定済みの左の文脈、kana = 読み。times に段階ごとのミリ秒が入る (5 個) */
     fun convert(ctx: String, kana: String, max: Int = 10, model: Boolean = true, times: DoubleArray? = null): List<String> =
@@ -27,6 +29,7 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
         val raw = nativeConvert(handle, ctx, kana, max * 2, model, times)
         val seg = nativeSegments(handle)
         val paths = nativePaths(handle).toList()
+        val phraseEnds = if (raw.isNotEmpty()) nativePhraseEnds(handle, kana, raw[0]) else IntArray(0)
         val sugg =nativeLastSuggest(handle).mapNotNull { s ->
             val i = s.indexOf('\u0001')
             if (i <= 0) null else (s.substring(0, i).toIntOrNull() ?: 0) to s.substring(i + 1)
@@ -35,7 +38,7 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
         // 差別語で 1 位が落ちたときは区切りを使わない (区切りは元の 1 位のもの)
         val ok = raw.isNotEmpty() && cands.isNotEmpty() && cands[0] == raw[0]
         val n = if (ok) seg.size / 2 else 0
-        return Result(cands, IntArray(n) { seg[2 * it] }, IntArray(n) { seg[2 * it + 1] }, sugg, paths)
+        return Result(cands, IntArray(n) { seg[2 * it] }, IntArray(n) { seg[2 * it + 1] }, sugg, paths, phraseEnds)
     }
 
     /**
@@ -107,6 +110,7 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
         @JvmStatic private external fun nativeLastSuggest(h: Long): Array<String>
         @JvmStatic private external fun nativeSegments(h: Long): IntArray
         @JvmStatic private external fun nativePaths(h: Long): Array<String>
+        @JvmStatic private external fun nativePhraseEnds(h: Long, kana: String, top: String): IntArray
         @JvmStatic private external fun nativeUserClear(h: Long)
         @JvmStatic private external fun nativeComplete(h: Long, prefix: String, maxExtra: Int, maxOut: Int): Array<String>
         @JvmStatic private external fun nativeAiSet(h: Long, path: String)

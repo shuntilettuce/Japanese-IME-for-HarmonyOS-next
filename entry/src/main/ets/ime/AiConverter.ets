@@ -163,10 +163,12 @@ export class AiConverter {
   }
 
   // 1 位の文の語を学習で置き換える。置き換えた文を新しい 1 位にして、元の 1 位は 2 位に残す (選び直せば反対の票になる)。
-  // 語の区切りは学習したときと違うことがあるので、続く語も 3 語までつなげて引く
+  // 引くのは文節 (自立語 + 付属語) の読みごと (PC 版 Composer::convert_phrases と同じ単位)。語の単位 (1〜3 語) で引くと、
+  // か・と・て のような 1 字の付属語まで覚えた表記に置き換わった (ユーザー 2026-11-07)
   private static withLearned(ctx: string, tail: string, r: KkcResult): KkcResult {
     const paths = r.paths ?? [];
-    if (paths.length === 0 || r.cands.length === 0) { return r; }
+    const phraseEnds = r.phraseEnds ?? [];
+    if (paths.length === 0 || r.cands.length === 0 || phraseEnds.length === 0) { return r; }
     const top = paths[0].split('\u0001');
     if (top.filter((_w: string, i: number) => i % 2 === 1).join('') !== r.cands[0]) { return r; }
     const path: string[] = [];
@@ -174,25 +176,29 @@ export class AiConverter {
     let start = 0;
     let i = 0;
     let changed = false;
-    while (i < top.length) {
-      let take = 1;
-      let surf = top[i + 1];
-      for (let k = Math.min(3, (top.length - i) / 2); k >= 1; k--) {
-        const t = KanaKanjiConverter.top(tail.slice(start, Number(top[i + 2 * k - 2])), left);
-        if (t === undefined) { continue; }
-        take = k;
-        let was = '';
-        for (let m = 0; m < k; m++) { was += top[i + 2 * m + 1]; }
-        changed = changed || t !== was;
-        surf = t;
-        break;
+    for (const pe of phraseEnds) {
+      let j = i;
+      let was = '';
+      while (j < top.length && Number(top[j]) <= pe) {
+        was += top[j + 1];
+        const end = Number(top[j]);
+        j += 2;
+        if (end === pe) { break; }
       }
-      start = Number(top[i + 2 * take - 2]);
-      path.push(String(start), surf);
-      left += surf;
-      i += 2 * take;
+      if (j === i || Number(top[j - 2]) !== pe) { return r; }   // 文節の区切りが経路の語の区切りと合わない
+      const t = KanaKanjiConverter.top(tail.slice(start, pe), left);
+      if (t !== undefined && t !== was) {
+        changed = true;
+        path.push(String(pe), t);
+        left += t;
+      } else {
+        for (let k = i; k < j; k++) { path.push(top[k]); }   // 置き換えない文節は語の区切りのまま (選んだ語の学習が経路の語と比べる)
+        left += was;
+      }
+      start = pe;
+      i = j;
     }
-    if (!changed) { return r; }
+    if (i !== top.length || !changed) { return r; }
     const sentence = left.slice(ctx.length);
     const ends: number[] = [];
     const lens: number[] = [];

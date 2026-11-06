@@ -94,6 +94,9 @@ export class KanaKanjiConverter {
     const votes: Record<string, number> = typeof here === 'object' && here !== null ? here : {};
     let all = 0;
     for (const s of Object.keys(votes)) { all += votes[s]; }
+    // 文脈を問わずに置き換えるのは、その読みでほかの表記がほとんど選ばれていないときだけ (ほかの票が 1/4 以下。PC 版と同じ)。
+    // 用途の違う表記を両方選ぶ短い読み (か/化・と/都) は同じ左の文脈で選んだときだけ置き換え、ほかはモデルに任せる (ユーザー 2026-11-06)
+    const total = KanaKanjiConverter.totalOf(entry);
     let best: string | undefined = undefined;
     let most = 0;
     for (const s of Object.keys(entry)) {
@@ -102,7 +105,8 @@ export class KanaKanjiConverter {
       const v = votes[s];
       const mine = typeof v === 'number' ? v : 0;
       const against = all - mine;
-      if (mine - against >= KanaKanjiConverter.SAME_CTX_MIN || (n >= KanaKanjiConverter.ANY_CTX_MIN && against === 0)) {
+      const dominant = (total - n) * 4 <= n;
+      if (mine - against >= KanaKanjiConverter.SAME_CTX_MIN || (n >= KanaKanjiConverter.ANY_CTX_MIN && against === 0 && dominant)) {
         most = n;
         best = s;
       }
@@ -219,6 +223,35 @@ export class KanaKanjiConverter {
     KanaKanjiConverter.learnedCtx[kana] = kept;
   }
 
+  // 間違いだった表記の票を 1 減らす (確定した直後に消して、同じ読みで別の表記を確定した。PC 版 Learning::demote と同じ。
+  // ユーザー 2026-11-06)。票の無い表記は何もしない。減らしたら true
+  static demote(kana: string, surface: string, left: string): boolean {
+    const entry = KanaKanjiConverter.entryOf(kana);
+    if (entry === undefined) { return false; }
+    const n0 = entry[surface];
+    if (typeof n0 !== 'number' || n0 <= 0) { return false; }
+    if (n0 <= 1) {
+      KanaKanjiConverter.forgetChoice(kana, surface);
+      return true;
+    }
+    entry[surface] = n0 - 1;
+    const table = KanaKanjiConverter.ctxOf(kana);
+    const key = KanaKanjiConverter.leftKey(left);
+    const votes = table?.[key];
+    if (table !== undefined && typeof votes === 'object' && votes !== null && typeof votes[surface] === 'number') {
+      const kept: Record<string, number> = {};
+      for (const s of Object.keys(votes)) {
+        if (s !== surface) { kept[s] = votes[s]; } else if (votes[s] > 1) { kept[s] = votes[s] - 1; }
+      }
+      const next: Record<string, Record<string, number>> = {};
+      for (const k of Object.keys(table)) {
+        if (k !== key) { next[k] = table[k]; } else if (Object.keys(kept).length > 0) { next[k] = kept; }
+      }
+      KanaKanjiConverter.learnedCtx[kana] = next;
+    }
+    return true;
+  }
+
   // 候補を消したとき: 学習の回数も消す (残すと、消した候補を並べ替えや予測が出し続ける)
   static forgetChoice(kana: string, candidate: string): void {
     const entry = KanaKanjiConverter.entryOf(kana);
@@ -250,6 +283,16 @@ export class KanaKanjiConverter {
     }
   }
 
+  // その読みで選んだ回数の合計 (正の数だけ)
+  private static totalOf(entry: Record<string, number>): number {
+    let t = 0;
+    for (const s of Object.keys(entry)) {
+      const n = entry[s];
+      if (typeof n === 'number' && n > 0) { t += n; }
+    }
+    return t;
+  }
+
   // 2 回以上選んだ短い語を、変換の網に入れる形で返す ([読み, 表記, 代表語の読み, 代表語の表記] を 4 つずつ)。
   // 文の途中でも AI が文脈で選べるように (PC 版と同じ)。後ろの同じかな (なにを → 何を の を) は外す
   static strongForms(): string[] {
@@ -257,14 +300,18 @@ export class KanaKanjiConverter {
     for (const r of Object.keys(KanaKanjiConverter.learned)) {
       if (r.length > KanaKanjiConverter.MAX_NET_READING) { continue; }
       const entry = KanaKanjiConverter.learned[r];
+      // ほかの表記も選んでいる読み (ほかの票が 1/4 を超える: か/化・し/死) は入れない (PC 版と同じ。ユーザー 2026-11-06)
+      const total = KanaKanjiConverter.totalOf(entry);
       for (const c of Object.keys(entry)) {
-        if (entry[c] < 2) { continue; }
+        if (entry[c] < 2 || (total - entry[c]) * 4 > entry[c]) { continue; }
         let n = 0;
         while (n < r.length && n < c.length && r.charAt(r.length - 1 - n) === c.charAt(c.length - 1 - n)
           && r.charAt(r.length - 1 - n) >= 'ぁ' && r.charAt(r.length - 1 - n) <= 'ゖ') { n++; }
         const rr = r.slice(0, r.length - n);
         const cc = c.slice(0, c.length - n);
-        if (rr.length > 0 && cc.length > 0 && rr !== cc) { found.push({ count: entry[c], reading: rr, surface: cc }); }
+        // 1 字の読み (し・か・と) は網に入れない: どの文脈でも安い 1 字の辺になり区切りまで変えた (していない -> し/ていない)。
+        // 同じ左の文脈で選んだときの置き換え (top) は残る (PC 版と同じ)
+        if (rr.length >= 2 && cc.length > 0 && rr !== cc) { found.push({ count: entry[c], reading: rr, surface: cc }); }
       }
     }
     found.sort((a: StrongWord, b: StrongWord) => b.count - a.count);

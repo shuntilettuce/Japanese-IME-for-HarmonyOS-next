@@ -9,6 +9,7 @@
 
 #include "ai_learn.h"
 #include "engine.h"
+#include "phrase_ends.h"
 
 namespace {
 struct Handle {
@@ -145,6 +146,25 @@ extern "C" JNIEXPORT jintArray JNICALL Java_com_shunti_japaneseime_Engine_native
     for (int i = 0; i < n; i++) { v.push_back(ends[i]); v.push_back(lens[i]); }
     jintArray a = env->NewIntArray(jsize(v.size()));
     if (!v.empty()) env->SetIntArrayRegion(a, 0, jsize(v.size()), v.data());
+    return a;
+}
+
+// 直前の変換の 1 位を文節 (自立語 + 付属語) にまとめた、文節ごとの読みの終わり (PC 版と同じ決まり。phrase_ends.h)。
+// top = nativeConvert が返した 1 位。nativeConvert と同じスレッドで、その直後に呼ぶ
+extern "C" JNIEXPORT jintArray JNICALL Java_com_shunti_japaneseime_Engine_nativePhraseEnds(JNIEnv* env, jclass, jlong p, jstring kana, jstring top) {
+    auto* h = reinterpret_cast<Handle*>(p);
+    int32_t out[512];
+    int n = 0;
+    if (h) {
+        const jsize nk = env->GetStringLength(kana), nt = env->GetStringLength(top);
+        const jchar* k = env->GetStringChars(kana, nullptr);
+        const jchar* t = env->GetStringChars(top, nullptr);
+        n = kkc_phrase_ends(h->e, reinterpret_cast<const uint16_t*>(k), int(nk), reinterpret_cast<const uint16_t*>(t), int(nt), out, 512);
+        env->ReleaseStringChars(kana, k);
+        env->ReleaseStringChars(top, t);
+    }
+    jintArray a = env->NewIntArray(jsize(n));
+    if (n > 0) env->SetIntArrayRegion(a, 0, jsize(n), reinterpret_cast<const jint*>(out));
     return a;
 }
 

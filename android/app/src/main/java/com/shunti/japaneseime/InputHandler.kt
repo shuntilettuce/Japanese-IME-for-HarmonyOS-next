@@ -496,15 +496,29 @@ class InputHandler(
         if (dropIfTaken()) return
         flushRomaji()
         if (composingText.isNotEmpty()) {
-            insertLearned(if (confirm && !privateField) learning.confirmKana(composingText, ctx) else null, composingText)
+            insertLearned(if (confirm && !privateField) learning.confirmKana(composingText, ctx) else null, composingText, composingText)
         }
         resetComposition()
     }
 
-    /** text を確定する。undo = 学習の前の値: 取消キーで学習も戻せるように、入れた字の記録に付ける */
-    private fun insertLearned(undo: Learning.Undo?, text: String) {
+    // 確定した直後に全部消して、10 秒以内に同じ読みで別の表記を確定したら、前の表記は間違いだった (PC 版と同じ。
+    // ユーザー 2026-11-06。PC の入力ログで 23 件中 22 件が 10 秒以内)。同じ表記を打ち直したときは何もしない
+    private class Retype(val reading: String, val surface: String, val left: String, var chars: Int, val at: Long) { var erased = false }
+    private var retype: Retype? = null
+
+    /**
+     * text を確定する。undo = 学習の前の値: 取消キーで学習も戻せるように、入れた字の記録に付ける。
+     * reading = 確定した文の読み (打ち直しの判定に使う。部分の確定は null)
+     */
+    private fun insertLearned(undo0: Learning.Undo?, text: String, reading: String? = null) {
+        val r = retype
+        val demoted = if (reading != null && r != null && r.erased && !privateField && SystemClock.uptimeMillis() - r.at <= RETYPE_MS &&
+            reading == r.reading && text != r.surface) learning.demote(r.reading, r.surface, r.left) else null
+        val undo = learning.join(demoted, undo0)
         val last = hostUndoStack.lastOrNull()
+        val left = ctx
         insertText(text)
+        if (reading != null && reading.isNotEmpty() && text.isNotEmpty()) retype = Retype(reading, text, left, text.length, SystemClock.uptimeMillis())
         if (undo == null) return
         hostUndoStack.lastOrNull()?.takeIf { it !== last }?.learn = undo
         saveLearningSoon()
@@ -582,7 +596,7 @@ class InputHandler(
 
     private fun commitChosen(text: String) {
         val (reading, tail) = splitAtConversionEnd(composingText)
-        insertLearned(if (privateField || isNonLearningCandidate(reading, text)) null else learnCommit(reading, text), text)
+        insertLearned(if (privateField || isNonLearningCandidate(reading, text)) null else learnCommit(reading, text), text, if (tail.isEmpty()) reading else null)
         if (!privateField) host.ai?.aiLearn(ctx, reading, text)   // AI学習 (設定でオンのときだけ学ぶ)
         ctx += text
         if (tail.isNotEmpty()) {
@@ -819,7 +833,7 @@ class InputHandler(
                 left += bChosen[i]
             }
         }
-        insertLearned(if (privateField) null else learning.undoOf(done), text)
+        insertLearned(if (privateField) null else learning.undoOf(done), text, reading)
         if (!privateField) host.ai?.aiLearn(ctx, reading, text)
         ctx += text
         resetComposition()
@@ -865,6 +879,7 @@ class InputHandler(
             handleDirectKana(ch)
             return
         }
+        retype = null
         val op = hostUndoStack.removeLastOrNull() ?: return
         val ic = host.ic ?: return
         ic.beginBatchEdit()
@@ -890,6 +905,7 @@ class InputHandler(
     /** 入力欄に文字を確定する (出口はここ 1 箇所。取消のための記録もここ)。raw = 貼り付けなど: 括弧を組にしない */
     fun insertText(text: String, raw: Boolean = false) {
         val ic = host.ic ?: return
+        retype = null           // 打ち直しの判定は insertLearned が付け直す
         pasteFrom = null        // 自分で入れた (アプリに頼んだ貼り付けが失敗して自分で入れたときも、ここで記録する)
         reclaimComposing()      // 確定は未確定の範囲を置き換える。範囲が無いと見えている字の後ろに足されてしまう
         composingShown = ""     // ここから先の字は確定済み (同じ字でも付け直さない)
@@ -947,6 +963,7 @@ class InputHandler(
         val ic = host.ic ?: return
         val sel = ic.getSelectedText(0)
         if (!sel.isNullOrEmpty()) {
+            retype = null
             val at = cursor()
             ic.commitText("", 1)
             at?.let { pushHostOp(false, sel.toString(), it) }
@@ -965,6 +982,8 @@ class InputHandler(
         val start = bi.preceding(before.length).coerceAtLeast(0)
         val ch = before.substring(start)
         val at = cursor()
+        // 確定した字を後ろから消している (確定した分より多く消したら打ち直しではない)
+        retype?.let { r -> if (r.erased) retype = null else { r.chars -= ch.length; if (r.chars <= 0) r.erased = true } }
         ic.deleteSurroundingText(ch.length, 0)
         at?.let { pushHostOp(false, ch, it - ch.length) }
         predictions = emptyList()
@@ -1260,6 +1279,7 @@ class InputHandler(
         private const val FIELD_CHECK_MS = 150L   // 未確定の範囲が消えた通知を信じるまでの時間
         private const val RESTART_RETRY_MS = 80L  // 入力のやり直しの後、欄を読み直すまでの時間
         private const val LEARNING_SAVE_MS = 500L // 確定から学習をファイルに書くまでの時間 (HarmonyOS 版と同じ)
+        private const val RETYPE_MS = 10_000L     // 確定してから打ち直しとみなす時間 (PC 版と同じ)
         private const val UNIT_MARKS = "℃°%％‰℉Ω㎏㎞㎝㎜㎡㎥¥￥$＄€£"
         private val PAST_FORMS = listOf("てしまいました", "ちゃいました", "てしまった", "ちゃった", "ちゃう", "ました", "ています", "ている", "てる", "ます")
         private val TAIL_PARTICLES = listOf("ですね", "ですよ", "でした", "です", "だね", "だよ", "だな", "すぎる", "すぎ", "ね", "よ", "な", "わ", "だ")

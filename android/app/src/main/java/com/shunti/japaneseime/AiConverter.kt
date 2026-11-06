@@ -186,33 +186,43 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
 
     /**
      * 1 位の文の語を学習で置き換える。置き換えた文を新しい 1 位にして、元の 1 位は 2 位に残す (選び直せば反対の票になる)。
-     * 語の区切りは学習したときと違うことがあるので、続く語も 3 語までつなげて引く
+     * 引くのは文節 (自立語 + 付属語) の読みごと (PC 版と同じ)
      */
     private fun withLearned(ctx: String, tail: String, r: Engine.Result): Engine.Result {
         val top = r.paths.firstOrNull()?.split('\u0001') ?: return r
         if (r.cands.isEmpty() || top.filterIndexed { i, _ -> i % 2 == 1 }.joinToString("") != r.cands[0]) return r
+        // 文節 (自立語 + 付属語) ごとに学習を引く (PC 版 Composer::convert_phrases と同じ単位)。語の単位 (1〜3 語) で引くと、
+        // か・と・て のような 1 字の付属語まで覚えた表記に置き換わった (ユーザー 2026-11-07)
+        if (r.phraseEnds.isEmpty()) return r
         val path = ArrayList<String>()
         var left = ctx
         var start = 0
         var i = 0
         var changed = false
-        while (i < top.size) {
-            var take = 1
-            var surf = top[i + 1]
-            for (k in minOf(3, (top.size - i) / 2) downTo 1) {
-                val t = learnedTop(tail.substring(start, top[i + 2 * k - 2].toInt()), left) ?: continue
-                take = k
-                val was = (0 until k).joinToString("") { top[i + 2 * it + 1] }
-                changed = changed || t != was
-                surf = t
-                break
+        for (pe in r.phraseEnds) {
+            var j = i
+            val was = StringBuilder()
+            while (j < top.size && top[j].toInt() <= pe) {
+                was.append(top[j + 1])
+                val end = top[j].toInt()
+                j += 2
+                if (end == pe) break
             }
-            start = top[i + 2 * take - 2].toInt()
-            path.add(start.toString())
-            path.add(surf)
-            left += surf
-            i += 2 * take
+            if (j == i || top[j - 2].toInt() != pe) return r   // 文節の区切りが経路の語の区切りと合わない
+            val t = learnedTop(tail.substring(start, pe), left)
+            if (t != null && t != was.toString()) {
+                changed = true
+                path.add(pe.toString())
+                path.add(t)
+                left += t
+            } else {
+                for (k in i until j) path.add(top[k])   // 置き換えない文節は語の区切りのまま (選んだ語の学習が経路の語と比べる)
+                left += was
+            }
+            start = pe
+            i = j
         }
+        if (i != top.size) return r
         if (!changed) return r
         val ends = IntArray(path.size / 2) { path[2 * it].toInt() }
         val lens = IntArray(path.size / 2) { path[2 * it + 1].length }

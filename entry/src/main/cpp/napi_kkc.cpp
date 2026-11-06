@@ -22,6 +22,7 @@
 
 #include "ai_learn.h"
 #include "engine.h"
+#include "phrase_ends.h"
 
 namespace {
 
@@ -232,6 +233,7 @@ struct Job {
     std::vector<std::u16string> paths; // 上位の経路 (read_paths)
     std::vector<std::u16string> sugg;  // 提案 (kkc_last_suggest)
     std::vector<int32_t> sugg_kinds;
+    std::vector<int32_t> phrase_ends;   // 1 位の文節ごとの読みの終わり (phrase_ends.h。学習の置き換えの単位)
     std::chrono::steady_clock::time_point queued, started, done;   // 待ち時間の切り分け用
 };
 
@@ -271,6 +273,12 @@ napi_value ConvertAsync(napi_env env, napi_callback_info info) {
             j->ends.resize(m > 0 ? m : 0);
             j->lens.resize(m > 0 ? m : 0);
             j->paths = read_paths(g_engine);
+            if (!j->res.empty()) {
+                j->phrase_ends.resize(512);
+                const int np = kkc_phrase_ends(g_engine, reinterpret_cast<const uint16_t*>(j->kana.data()), int(j->kana.size()),
+                                               reinterpret_cast<const uint16_t*>(j->res[0].data()), int(j->res[0].size()), j->phrase_ends.data(), 512);
+                j->phrase_ends.resize(np > 0 ? size_t(np) : 0);
+            }
             std::vector<uint16_t> sb(4096);
             int32_t kinds[16];
             int ns = kkc_last_suggest(g_engine, sb.data(), int(sb.size()), kinds, 16);
@@ -314,6 +322,14 @@ napi_value ConvertAsync(napi_env env, napi_callback_info info) {
                 napi_set_element(env, pa, i, s);
             }
             napi_set_named_property(env, obj, "paths", pa);
+            napi_value pe;
+            napi_create_array(env, &pe);
+            for (uint32_t i = 0; i < j->phrase_ends.size(); i++) {
+                napi_value v;
+                napi_create_int32(env, j->phrase_ends[i], &v);
+                napi_set_element(env, pe, i, v);
+            }
+            napi_set_named_property(env, obj, "phraseEnds", pe);
             napi_value sg, sk;
             napi_create_array(env, &sg);
             napi_create_array(env, &sk);

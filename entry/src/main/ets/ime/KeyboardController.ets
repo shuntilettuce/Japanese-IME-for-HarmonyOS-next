@@ -238,6 +238,24 @@ function emailCompletions(composing: string): string[] {
     .map((d: string) => `${m[1]}@${d}`);
 }
 
+// 直前の確定 (打ち直しで前の表記を弱めるため。afterCommitRetype)
+class RetypeState {
+  reading: string;
+  surface: string;
+  left: string;
+  chars: number;
+  erased: boolean = false;
+  at: number;
+
+  constructor(reading: string, surface: string, left: string) {
+    this.reading = reading;
+    this.surface = surface;
+    this.left = left;
+    this.chars = surface.length;
+    this.at = Date.now();
+  }
+}
+
 export class InputHandler {
   private static _instance: InputHandler | undefined = undefined;
   private kbController: inputMethodEngine.KeyboardController | undefined;
@@ -2238,6 +2256,12 @@ export class InputHandler {
       if (deleted.length === 0) { deleted = this.insertedBuffer.pop() ?? ''; }
       else { this.insertedBuffer.pop(); }
       if (deleted.length > 0) { this.pushHostOp('delete', deleted); }
+      // 確定した字を後ろから消している (確定した分より多く消したら打ち直しではない)
+      const rt = this.retype;
+      if (rt !== undefined) {
+        if (rt.erased) { this.retype = undefined; }
+        else { rt.chars -= Math.max(1, deleted.length); if (rt.chars <= 0) { rt.erased = true; } }
+      }
       InputLog.recordDeleteChar(deleted, InputState.IDLE);
       // 自動モードの保留は「開き括弧〜次の確定」の間しか生きないので、
       // 何を消したかに関わらず破棄してよい (従来どおり。賢く追おうとは
@@ -2390,8 +2414,10 @@ export class InputHandler {
     const pending = this.flushPendingKana();
     const all = composing + pending;
     InputLog.recordRaw(composing, all);
-    if (all.length > 0) { this.insertText(all); }
+    const prevRetype = this.retype;
     const rawLeft = KanaKanjiConverter.recentContext();
+    if (all.length > 0) { this.insertText(all); }
+    if (all.length > 0) { this.afterCommitRetype(prevRetype, all, all, rawLeft); }
     if (!this.secureField && all.length > 0) { KanaKanjiConverter.addContext(all); }
     // かなのまま確定したことも数える (数えないと、かなで打ち続けても覚えた漢字が 1 位のまま下がらない)
     if (!this.secureField && KanaKanjiConverter.confirmChoice(all, all, rawLeft)) { this.saveLearning(); }
@@ -2467,7 +2493,10 @@ export class InputHandler {
       }
       // AI学習 (設定でオンのときだけ。パスワードの欄では学ばない)
       if (!this.secureField) { AiConverter.aiLearn(KanaKanjiConverter.recentContext(), reading, text); }
+      const prevRetype = this.retype;
+      const leftRt = KanaKanjiConverter.recentContext();
       this.insertText(text);
+      if (tail.length === 0) { this.afterCommitRetype(prevRetype, reading, text, leftRt); }
       if (!this.secureField) { KanaKanjiConverter.addContext(text); }
       const words = this.committedWords(text);
       // 残りがあるなら、それはまだ変換していない入力。確定させずに composing に
@@ -2517,6 +2546,8 @@ export class InputHandler {
   // the learning store (and turn into noisy predictive completions, since
   // PredictiveConversion completes straight out of that store).
   private static readonly MAX_WHOLE_LEARN_LEN = 12;
+  private static readonly RETYPE_MS = 10000;
+  private retype: RetypeState | undefined = undefined;
 
   private learnCommit(composing: string, text: string): void {
     // 1 位以外を選んだ: 選び直した語だけを語として数える (読み全体だけだと次の文に効かない)
@@ -2575,7 +2606,10 @@ export class InputHandler {
         this.saveLearning();
         this.observeUnknownWord(reading, chosen);
       }
+      const prevRetype = this.retype;
+      const leftRt = KanaKanjiConverter.recentContext();
       this.insertText(chosen);
+      if (tail.length === 0) { this.afterCommitRetype(prevRetype, reading, chosen, leftRt); }
       if (!this.secureField) { KanaKanjiConverter.addContext(chosen); }
       const words = this.committedWords(chosen);
       if (tail.length > 0) {
@@ -3210,6 +3244,7 @@ export class InputHandler {
   // 戻ってから取り消す -- 挿入も削除も貼り付けも区別せず、本当のctrl+zと
   // 同じ順序で遡る。
   undoLastDeletion(): void {
+    this.retype = undefined;
     const state = AppStorage.get<string>('inputState') ?? InputState.IDLE;
     if (state === InputState.IDLE) {
       this.undoLastHostEdit();
@@ -3904,7 +3939,10 @@ export class InputHandler {
       ShortTermMemory.record(this.bSegs[i], this.bChosen[i]);
     }
     this.saveUnknownWords();
+    const prevRetype = this.retype;
+    const leftRt = KanaKanjiConverter.recentContext();
     this.insertText(text);
+    this.afterCommitRetype(prevRetype, this.bSegs.join(''), text, leftRt);
     if (!this.secureField) { KanaKanjiConverter.addContext(text); }
     // 複数文節にまたがる文の確定はここが通り道で、commitCandidate/
     // commitTopCandidate と違って pushPredictions() が一度も呼ばれていな
@@ -3956,7 +3994,23 @@ export class InputHandler {
   // 「打ち込んだ通りそのまま出したい」文字列専用)。ユーザーがコピーした
   // 内容がたまたま "()" のような2文字と一致しても、括弧機能に横取りされて
   // 別の場所へ送られては困るため。
+  // 確定した直後に全部消して、10 秒以内に同じ読みで別の表記を確定したら、前の表記は間違いだった (PC 版と同じ。
+  // ユーザー 2026-11-06。PC の入力ログで 23 件中 22 件が 10 秒以内)。同じ表記を打ち直したときは何もしない。
+  // prev = insertText の前の状態 (insertText が消すので先に取っておく)
+  private afterCommitRetype(prev: RetypeState | undefined, reading: string, text: string, left: string): void {
+    if (this.secureField || this.captureTarget.length > 0) { this.retype = undefined; return; }
+    if (prev !== undefined && prev.erased && Date.now() - prev.at <= InputHandler.RETYPE_MS &&
+        reading === prev.reading && text !== prev.surface) {
+      if (KanaKanjiConverter.demote(prev.reading, prev.surface, prev.left)) {
+        AiConverter.setLearnedWords(KanaKanjiConverter.strongForms());
+        this.saveLearning();
+      }
+    }
+    this.retype = reading.length > 0 && text.length > 0 ? new RetypeState(reading, text, left) : undefined;
+  }
+
   insertText(text: string, opts?: InsertTextOptions): void {
+    this.retype = undefined;   // 確定の後に afterCommitRetype が付け直す
     // 辞書の自由入力中は、確定した文字をホストアプリではなくパネル内の欄に送る。
     //
     // キーボードのパネルに TextInput を置いても、キーボード自身が入力対象に

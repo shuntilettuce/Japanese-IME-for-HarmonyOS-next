@@ -11,6 +11,8 @@ export interface KkcResult {
   lens: number[];
   /** 上位の経路 (表示しない。確定した語を学習するのに使う)。1 本ごとに "読みの終わり\u0001表記\u0001…"。convertAsync のときだけ */
   paths?: string[];
+  /** 1 位の経路 (paths[0]) の文節 (自立語 + 付属語) ごとの読みの終わり (PC 版と同じ決まり。学習の置き換えの単位)。convertAsync のときだけ */
+  phraseEnds?: number[];
   /** 待ち時間の内訳 (ms): 裏のスレッドの順番待ち / 変換 / 変換が終わってから JS に届くまで */
   waitMs: number;
   runMs: number;

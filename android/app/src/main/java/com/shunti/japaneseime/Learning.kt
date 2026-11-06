@@ -56,6 +56,7 @@ class Learning(private val file: File) {
         val kana: String, val candidate: String, val count: Int, val day: Int?, val left: String?, val more: List<Undo> = emptyList(),
         val evicted: String? = null, val evictedCount: Int = 0,   // 枠から押し出した表記
         val generation: Int = 0,                                  // clear の前の控えは戻さない
+        val ctxAdd: Int = 1,                                      // 文脈の表に足した分 (demote は -1: 戻すときに足し戻す)
     )
 
     /** strongForms の中身が変わるたびに増える */
@@ -113,13 +114,17 @@ class Learning(private val file: File) {
         val e = learned[kana] ?: return null
         val here = contexts[kana]?.get(leftKey(left))
         val all = here?.values?.sum() ?: 0
+        // 文脈を問わずに置き換えるのは、その読みでほかの表記がほとんど選ばれていないときだけ (ほかの票が 1/4 以下。PC 版と同じ)。
+        // 用途の違う表記を両方選ぶ短い読み (か/化・と/都) は同じ左の文脈で選んだときだけ置き換え、ほかはモデルに任せる (ユーザー 2026-11-06)
+        val total = e.values.filter { it > 0 }.sum()
         var best: String? = null
         var most = 0
         for ((s, n) in e) {
             if (n <= most) continue
             val mine = here?.get(s) ?: 0
             val against = all - mine
-            if (mine - against >= SAME_CTX_MIN || (n >= ANY_CTX_MIN && against == 0)) {
+            val dominant = (total - n) * 4 <= n
+            if (mine - against >= SAME_CTX_MIN || (n >= ANY_CTX_MIN && against == 0 && dominant)) {
                 most = n
                 best = s
             }
@@ -128,7 +133,39 @@ class Learning(private val file: File) {
     }
 
     /** 語ごとの記録と読み全体の記録をまとめて、1 回の取り消しで戻せる形に */
-    fun undoOf(list: List<Undo>): Undo? = list.lastOrNull()?.let { Undo(it.kana, it.candidate, it.count, it.day, it.left, list.dropLast(1), it.evicted, it.evictedCount, it.generation) }
+    fun undoOf(list: List<Undo>): Undo? = list.lastOrNull()?.let { Undo(it.kana, it.candidate, it.count, it.day, it.left, list.dropLast(1), it.evicted, it.evictedCount, it.generation, it.ctxAdd) }
+
+    /** 2 つの控えを 1 回の取り消しで戻せる形に */
+    fun join(a: Undo?, b: Undo?): Undo? {
+        if (a == null) return b
+        if (b == null) return a
+        fun flat(u: Undo) = u.more + Undo(u.kana, u.candidate, u.count, u.day, u.left, emptyList(), u.evicted, u.evictedCount, u.generation, u.ctxAdd)
+        return undoOf(flat(a) + flat(b))
+    }
+
+    /**
+     * 間違いだった表記の票を 1 減らす (確定した直後に消して、同じ読みで別の表記を確定した。PC 版 Learning::demote と同じ。
+     * ユーザー 2026-11-06)。票の無い表記は何もしない。返り値は restore で戻す控え
+     */
+    fun demote(kana: String, surface: String, left: String?): Undo? {
+        val entry = learned[kana] ?: return null
+        val n0 = entry[surface] ?: return null
+        if (n0 <= 0) return null
+        val key = left?.let { leftKey(it) }
+        val had = key?.let { contexts[kana]?.get(it)?.get(surface) } ?: 0
+        val undo = Undo(kana, surface, n0, days[kana], if (had > 0) key else null, emptyList(), null, 0, generation, -1)
+        if (had > 0) note(kana, key!!, surface, -1)
+        if (n0 > 1) {
+            entry[surface] = n0 - 1
+        } else {
+            entry.remove(surface)
+            dropVotes(kana, surface)
+            if (entry.isEmpty()) { learned.remove(kana); days.remove(kana); contexts.remove(kana) }
+        }
+        dirty = true
+        version++
+        return undo
+    }
 
     /**
      * 2 回以上選んだ短い語を、変換の網に入れる形で返す。文の途中でも AI が文脈で選べるように (PC 版と同じ)。
@@ -138,13 +175,17 @@ class Learning(private val file: File) {
         val found = ArrayList<Triple<Int, String, String>>()
         for ((r, e) in learned) {
             if (r.length > MAX_NET_READING) continue
+            // ほかの表記も選んでいる読み (ほかの票が 1/4 を超える: か/化・し/死) は入れない (PC 版と同じ。ユーザー 2026-11-06)
+            val total = e.values.filter { it > 0 }.sum()
             for ((s, n) in e) {
-                if (n < 2) continue
+                if (n < 2 || (total - n) * 4 > n) continue
                 var k = 0
                 while (k < r.length && k < s.length && r[r.length - 1 - k] == s[s.length - 1 - k] && r[r.length - 1 - k] in 'ぁ'..'ゖ') k++
                 val rr = r.dropLast(k)
                 val ss = s.dropLast(k)
-                if (rr.isNotEmpty() && ss.isNotEmpty() && rr != ss) found.add(Triple(n, rr, ss))
+                // 1 字の読み (し・か・と) は網に入れない: どの文脈でも安い 1 字の辺になり区切りまで変えた (していない -> し/ていない)。
+                // 同じ左の文脈で選んだときの置き換え (top) は残る (PC 版と同じ)
+                if (rr.length >= 2 && ss.isNotEmpty() && rr != ss) found.add(Triple(n, rr, ss))
             }
         }
         // 上位を取ったあとは読みの順に (数の順のままだと、回数が 1 増えるたびに並びが変わって網を入れ直すことになる)
@@ -167,7 +208,7 @@ class Learning(private val file: File) {
     }
 
     private fun restoreOne(u: Undo) {
-        if (u.left != null) note(u.kana, u.left, u.candidate, -1)
+        if (u.left != null && u.ctxAdd != 0) note(u.kana, u.left, u.candidate, -u.ctxAdd)
         if (u.count == 0 && !learned.containsKey(u.kana)) return
         val entry = learned.getOrPut(u.kana) { LinkedHashMap() }
         if (u.count > 0) entry[u.candidate] = u.count else entry.remove(u.candidate)
