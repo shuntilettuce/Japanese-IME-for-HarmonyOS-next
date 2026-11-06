@@ -636,6 +636,23 @@ std::vector<u16> Converter::complete(const u16& prefix, int max, int max_extra) 
     return out;
 }
 
+std::vector<Word> Converter::path_pos(const u16& reading, const u16& text) const {
+    std::vector<Word> out;
+    if (!e_ || reading.empty() || text.empty()) return out;
+    const size_t cap = reading.size() + 1;
+    std::vector<int32_t> ends(cap), l16(cap), lids(cap), rids(cap);
+    const int n = kkc_path_pos(e_, p16(reading), int(reading.size()), p16(text), int(text.size()), ends.data(), l16.data(), lids.data(), rids.data(), int(cap));
+    size_t r0 = 0, s0 = 0;
+    for (int i = 0; i < n; i++) {
+        const size_t r1 = size_t(ends[size_t(i)]), s1 = s0 + size_t(l16[size_t(i)]);
+        if (r1 > reading.size() || s1 > text.size()) return {};
+        out.push_back(Word{reading.substr(r0, r1 - r0), text.substr(s0, s1 - s0), lids[size_t(i)], rids[size_t(i)], false});
+        r0 = r1;
+        s0 = s1;
+    }
+    return out;
+}
+
 int Converter::set_user_words(const std::vector<UserDict::Form>& forms, int bonus) {
     user_ = forms;
     user_bonus_ = bonus;
@@ -645,6 +662,11 @@ int Converter::set_user_words(const std::vector<UserDict::Form>& forms, int bonu
     for (auto& f : forms)
     {
         const int b = f.bonus >= 0 ? f.bonus : bonus;
+        if (f.lid >= 0 && kkc_user_add_pos(e_, p16(f.reading), int(f.reading.size()), p16(f.surface), int(f.surface.size()), b, f.whole ? 1 : 0, f.lid, POS_GROUPS, POS_CLASS_COUNT)) {   // 学習した語: 選んだときの品詞の仲間の項目として (2026-11-06)。辞書に無い語は下の名詞の見本で
+            n++;
+            continue;
+        }
+        if (f.lid >= 0 && f.reading.size() < 2) continue;   // 1 字の語は品詞を決めて置けるときだけ (どの文脈でも安い 1 字の辺にしない)
         // 代表語が空 = その語そのもの (学習で選んだ語)。辞書に無ければ名詞の代表語で (AI の知らない語)
         const u16& tr = f.tmpl_reading.empty() ? f.reading : f.tmpl_reading;
         const u16& ts = f.tmpl_reading.empty() ? f.surface : f.tmpl_surface;

@@ -3254,6 +3254,77 @@ KKC_API int kkc_path_variants(kkc_engine* e, const uint16_t* reading, int nr, co
     return w;
 }
 
+// 確定した文を読みの網の上でたどり、その文になる経路のうちコスト (語 + つながり) のいちばん低いものの語ごとに
+// 読みの終わり・表記の長さ (UTF-16)・品詞の左右 ID を返す (学習を品詞ごとに分ける。2026-11-06)。返り値は語の数 (経路が無ければ 0)
+KKC_API int kkc_path_pos(kkc_engine* e, const uint16_t* reading, int nr, const uint16_t* text, int nt,
+                         int32_t* ends, int32_t* l16, int32_t* lids, int32_t* rids, int cap) {
+    if (!e || nr <= 0 || nt <= 0) return 0;
+    const ustr r = from16(reading, size_t(nr)), t = from16(text, size_t(nt));
+    std::vector<Edge> E = edges(e->lex, r, &e->user);
+    const Lex& L = e->lex;
+    const int n = int(r.size()), G = int(t.size());
+    const size_t W = size_t(G) + 1;
+    // 辺 i を文の位置 k から使ったときの最小のコスト (F) と前の (辺, 文の位置)
+    std::vector<std::vector<int>> by_start(size_t(n) + 1);
+    for (int i = 0; i < int(E.size()); i++) by_start[size_t(E[size_t(i)].s)].push_back(i);
+    std::vector<double> F(E.size() * W, 1e18);
+    std::vector<int> prev(E.size() * W, -1);
+    // 読みの位置の順に (辺は読みを左から右へ進むので、始まりの位置の順に回せば前の辺は決まっている)
+    std::vector<std::vector<std::pair<int, int>>> ending(size_t(n) + 1);   // 読みの位置 -> (辺, 文の終わりの位置) の決まったもの
+    for (int p = 0; p < n; p++) {
+        for (int i : by_start[size_t(p)]) {
+            const Edge& x = E[size_t(i)];
+            if (x.surf.empty()) continue;
+            if (p == 0) {
+                if (starts_with(t, 0, x.surf)) {
+                    F[size_t(i) * W] = double(x.cost) + L.conn(0, x.lid);
+                    ending[size_t(x.e)].push_back({i, int(x.surf.size())});
+                }
+                continue;
+            }
+            for (auto& [j, k] : ending[size_t(p)]) {
+                if (k >= G || !starts_with(t, size_t(k), x.surf)) continue;
+                const double c = F[size_t(j) * W + size_t(k - int(E[size_t(j)].surf.size()))] + x.cost + L.conn(E[size_t(j)].rid, x.lid);
+                double& f = F[size_t(i) * W + size_t(k)];
+                if (c < f) {
+                    if (f >= 1e17) ending[size_t(x.e)].push_back({i, k + int(x.surf.size())});
+                    f = c;
+                    prev[size_t(i) * W + size_t(k)] = j * int(W) + (k - int(E[size_t(j)].surf.size()));
+                }
+            }
+        }
+    }
+    int bi = -1, bk = -1;
+    double best = 1e18;
+    for (auto& [j, k] : ending[size_t(n)]) {
+        if (k != G) continue;
+        const int st = k - int(E[size_t(j)].surf.size());
+        const double c = F[size_t(j) * W + size_t(st)] + L.conn(E[size_t(j)].rid, 0);
+        if (c < best) { best = c; bi = j; bk = st; }
+    }
+    if (bi < 0) return 0;
+    std::vector<int> path;
+    for (int i = bi, k = bk; i >= 0;) {
+        path.push_back(i);
+        const int pv = prev[size_t(i) * W + size_t(k)];
+        if (pv < 0) break;
+        i = pv / int(W);
+        k = pv % int(W);
+    }
+    std::reverse(path.begin(), path.end());
+    if (int(path.size()) > cap) return -1;
+    for (size_t q = 0; q < path.size(); q++) {
+        const Edge& x = E[size_t(path[q])];
+        std::vector<uint16_t> s16;
+        to16(x.surf, s16);
+        ends[q] = x.e;
+        l16[q] = int32_t(s16.size());
+        lids[q] = x.lid;
+        rids[q] = x.rid;
+    }
+    return int(path.size());
+}
+
 KKC_API int kkc_set_variants(kkc_engine* e, const uint16_t* tsv, int n) {
     if (!e) return -1;
     e->var.clear();
@@ -4003,6 +4074,29 @@ KKC_API int kkc_user_add_like2(kkc_engine* e, const uint16_t* r, int nr, const u
     const int ok = kkc_user_add_like(e, r, nr, s, ns, tr, ntr, ts, nts, bonus);
     if (ok && (flags & 1)) e->user.back().whole = true;
     return ok;
+}
+
+// kkc_user_add_like2 と同じ。lid >= 0 なら、見本の語のうち品詞の左 ID が lid のものだけを使う (無ければ置かない)。
+// 学習した語を、選んだときの品詞の辺としてだけ安くする (か を助詞で選んでも 化 の接尾の辺は変えない。2026-11-06)
+KKC_API int kkc_user_add_pos(kkc_engine* e, const uint16_t* r, int nr, const uint16_t* s, int ns, int bonus, int flags, int lid,
+                             const char* groups, int ngroups) {
+    if (lid < 0) return kkc_user_add_like2(e, r, nr, s, ns, r, nr, s, ns, bonus, flags);
+    if (!e || nr <= 0 || ns <= 0) return 0;
+    uint32_t a, b;
+    if (!e->lex.find(r, nr, a, b)) return 0;
+    const ustr want = from16(s, size_t(ns));
+    Ent best{};
+    bool found = false;
+    for (uint32_t j = a; j < b; j++) {
+        const Ent en = e->lex.ent(j);
+        // groups があれば同じ品詞の仲間 (groups[lid] が同じ) の項目のうちいちばん安いもの。無ければ左 ID が同じもの
+        const bool same = groups && lid < ngroups && int(en.lid) < ngroups ? groups[en.lid] == groups[lid] : en.lid == lid;
+        if (same && from16(e->lex.s_blob + en.soff, en.slen) == want && (!found || en.cost < best.cost)) { best = en; found = true; }
+    }
+    if (!found) return 0;
+    e->user.push_back({from16(r, size_t(nr)), want, best.lid, best.rid, best.cost - bonus});
+    if (flags & 1) e->user.back().whole = true;
+    return 1;
 }
 
 #ifndef KKC_FRAG

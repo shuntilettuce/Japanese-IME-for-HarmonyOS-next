@@ -82,6 +82,13 @@ KKC_API int kkc_personal(kkc_engine* e);
 KKC_API int kkc_typo_spans(kkc_engine* e, int32_t* out, int cap);
 // 確定した文を読みの網の上でたどり、通った語のうち書き方の対の表にある表記を 0 区切りで out に (書き方の記録に数える語)
 KKC_API int kkc_path_variants(kkc_engine* e, const uint16_t* reading, int nr, const uint16_t* text, int nt, uint16_t* out, int cap);
+// 確定した文になる経路のうちコストのいちばん低いものの語ごとの 読みの終わり・表記の長さ・品詞の左右 ID。返り値は語の数 (無ければ 0、cap 不足は -1)
+KKC_API int kkc_path_pos(kkc_engine* e, const uint16_t* reading, int nr, const uint16_t* text, int nt,
+                         int32_t* ends, int32_t* l16, int32_t* lids, int32_t* rids, int cap);
+// 学習した語を網に置く。lid >= 0 なら辞書のその品詞の項目だけを見本にする (無ければ置かない)。flags は kkc_user_add_like2 と同じ
+// groups (品詞の左 ID ごとの仲間の字、長さ ngroups) を渡すと、同じ仲間の項目のうちいちばん安いものを見本にする
+KKC_API int kkc_user_add_pos(kkc_engine* e, const uint16_t* r, int nr, const uint16_t* s, int ns, int bonus, int flags, int lid,
+                             const char* groups, int ngroups);
 // 表記が書き方の対の表にあれば out3 = (見出しの番号, 種類, 漢字か) で 1、無ければ 0
 KKC_API int kkc_variant_info(kkc_engine* e, const uint16_t* s, int n, int32_t* out3);
 // 表記ごとの使う人の印 (1〜24 = 回数の段階 × 時期。表記を 0 区切りで並べたもの と それぞれの印)

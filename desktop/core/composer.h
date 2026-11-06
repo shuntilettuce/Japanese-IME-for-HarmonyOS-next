@@ -14,6 +14,7 @@
 //   (末尾の KEEP 字は残す)。確定した分は文脈としてモデルに渡すので、後ろの変換の質は落ちない。
 #pragma once
 #include <array>
+#include <chrono>
 #include <functional>
 #include <map>
 #include <string>
@@ -128,7 +129,7 @@ public:
     void set_app(const std::string& app) { app_ = app; }
     void set_context_provider(std::function<u16()> f) { context_ = std::move(f); }
     // 入力欄が変わったとき: これまでに確定した文 (文脈の代わり) を忘れる
-    void reset_history() { history_.clear(); post_.clear(); last_commit_ = {}; if (flow) flow->reset(); }
+    void reset_history() { history_.clear(); post_.clear(); last_commit_ = {}; retype_ = {}; if (flow) flow->reset(); }
     // 確定の取り消し (Ctrl+Backspace、Google 日本語入力と同じ): 確定した直後だけ、その (表記, 読み)。無ければ表記が空
     const std::pair<u16, u16>& undoable() const { return last_commit_; }
     // 確定の取り消し: 入力欄から表記を消したあとで呼ぶ。読みに戻して変換し直す (変換中にする)
@@ -256,6 +257,9 @@ private:
     std::vector<Learning::Undo> new_learn_, last_learn_;   // 確定で覚えたことの控え (確定の取り消しで戻す)
     std::vector<std::pair<u16, std::array<float, 2>>> last_style_;
     std::pair<u16, u16> last_commit_;   // 直前の確定 (表記, 読み)。確定の取り消しのため (次のキーで忘れる)
+    // 確定した直後に全部消して、10 秒以内に同じ読みで別の表記を確定したら、前の表記は間違いだった (ユーザー 2026-11-06。
+    // 入力ログで 23 件中 22 件が 10 秒以内)。同じ表記を打ち直したときは何もしない
+    struct Retype { u16 reading, surface, left; int chars = 0; bool erased = false; std::chrono::steady_clock::time_point at; } retype_;
     std::vector<std::pair<u16, u16>> recent_;   // 最近確定した (表記, 読み)。再変換で読みに戻すため (200 件まで)
     u16 commit_;
     View view_;
@@ -286,7 +290,7 @@ private:
     u16 sugg_note(const u16& x) const;   // 候補の右に添える種類 (もしかして・絵文字 …)
     std::vector<u16> sugg_set_;           // 候補に混ぜた提案 (✦ を付けて見せる・学習しない)
     std::vector<u16> date_cands_;         // 日付・時刻の候補 (学習しない。sugg_note で日付と添える)
-    void confirm_learned(const u16& reading, const u16& surface, const u16& left);   // 選び直さずに確定した表記を学習に足す
+    void confirm_learned(const u16& reading, const u16& surface, const u16& left, int lid = -1);   // 選び直さずに確定した表記を学習に足す
     u16 confirm_frozen();   // 固定した文節も数える。返り値はその後ろの左の文脈
     void apply_learned_words(Conversion& c, const u16& ctx);         // 文の語を学習で置き換える (Conversion は変換の結果)
     void learn_picked_words(const u16& picked);                      // 打っている間の候補を選んだ: 1 位と違う語を数える

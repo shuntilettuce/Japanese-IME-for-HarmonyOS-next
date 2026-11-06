@@ -34,15 +34,19 @@ public:
     struct Undo { u16 reading, surface; int count = 0, day = 0; bool hidden = false; u16 left; int add = 0; u16 evicted; int evicted_count = 0; };   // hidden: 消した操作を戻す。left・add: 文脈の表に足した分。evicted: 枠から押し出した表記
     // 手で選び直した表記を覚えて、すぐ保存する。2 回分に数える (実機の入力ログの時刻順の評価は MELTYPE_NOTES。ユーザー 2026-10-30)
     // left = 左の文脈 (語の学習を文脈ごとに数える。top が見る)
-    Undo record(const u16& reading, const u16& surface, int add = 2, const u16& left = u16());
+    // lid = 選んだときの文の中での頭の語の品詞 (左 ID、-1 = 分からない)。品詞ごとに分けて数える (2026-11-06)
+    Undo record(const u16& reading, const u16& surface, int add = 2, const u16& left = u16(), int lid = -1);
     // 選び直さずに確定した表記。すでに学習のある読みでだけ 1 回分足す (選び直した表記が 1 位を奪い続けないように)
-    Undo confirm(const u16& reading, const u16& surface, const u16& left = u16());
+    Undo confirm(const u16& reading, const u16& surface, const u16& left = u16(), int lid = -1);
     // 確定した文 (読み・表記・左の文脈) を控えに足す。「学習を始める」で同意したときだけ呼ぶ
     void note_commit(const u16& reading, const u16& surface, const u16& ctx);
     // 控えの順に元の値へ戻す。消した (回数 -1 の) 表記は、hidden の控えでだけ戻す
     void restore(const std::vector<Undo>& us);
     // その読みでその表記を選んだ記録を消す
     void forget(const u16& reading, const u16& surface);
+    // 間違いだった表記の票を n 減らす (確定した直後に消して、同じ読みで別の表記を確定した。ユーザー 2026-11-06)。
+    // 票の無い表記 (モデルが 1 位にしただけ) は何もしない。0 以下になったら数えない。返り値は restore で戻す控え
+    Undo demote(const u16& reading, const u16& surface, const u16& left = u16(), int n = 2);
     // その読みではその表記を候補に出さない (Ctrl+Delete。MS-IME と同じ。回数 -1 として覚える。選び直すと戻る)
     void hide(const u16& reading, const u16& surface, bool keep_recent = true);
     bool hidden(const u16& reading, const u16& surface);
@@ -55,10 +59,16 @@ public:
     // 文節の読みの表記を置き換える学習。同じ左の文脈で選んだ (SAME_CTX_MIN 回分、別の表記の票を引く)、または
     // ANY_CTX_MIN 回分選んでいてこの文脈に別の表記の票が無く、その読みでほかの表記がほとんど選ばれていない (1/4 以下) 表記のうち、
     // いちばん多く選んだもの (無ければ空)
-    u16 top(const u16& reading, const u16& left = u16());
+    // lid >= 0 なら、その品詞の仲間 (pos_group) の表記だけで決める (か を助詞の所で 化 に置き換えない)
+    u16 top(const u16& reading, const u16& left = u16(), int lid = -1);
     // min 回以上選んだ (読み, 表記, 回数)。変換の網に候補として入れる (AI が文脈で選ぶ。ブログの報告 2026-10-21)
-    struct Strong { u16 reading, surface; int count; };
+    // ほかの表記の票は同じ品詞の仲間の中で比べる。lid = その表記の品詞 (分からなければ -1)
+    struct Strong { u16 reading, surface; int count; int lid = -1; };
     std::vector<Strong> strong(int min);
+    // 表記の品詞 (記録に無ければ resolver に聞く。resolver も無ければ -1)
+    int lid_of(const u16& reading, const u16& surface);
+    // 記録に品詞の無い (前の版の) 表記の品詞を決める関数 (読みと表記だけで網をたどる)。Composer が付ける
+    void set_lid_resolver(std::function<int(const u16&, const u16&)> f) { resolver_ = std::move(f); }
     uint64_t version() { refresh(); return version_; }   // 覚えた中身が変わるたびに増える
     void clear();
     // かなを数えていなかった頃の学習の直し: kana_first が真の短い読みは、漢字の回数を 0 に下げて順位を AI に戻す
@@ -84,7 +94,7 @@ public:
 
 private:
     using Counts = std::vector<std::pair<u16, int>>;
-    struct Entry { u16 reading; Counts counts; int day = 0; std::vector<std::pair<u16, Counts>> ctx; };   // ctx: 左の文脈 -> (表記, 回数)
+    struct Entry { u16 reading; Counts counts; int day = 0; std::vector<std::pair<u16, Counts>> ctx; Counts pos; };   // pos: 表記 -> 品詞の左 ID   // ctx: 左の文脈 -> (表記, 回数)
     static u16 left_key(const u16& left);
     static void note(Entry& e, const u16& key, const u16& surface, int add);
     static void drop_ctx(Entry& e, const u16& surface);
@@ -92,6 +102,8 @@ private:
     void save();
     void reindex();
     Entry* find(const u16& reading);
+    int lid_in(const Entry& e, const u16& surface);
+    std::function<int(const u16&, const u16&)> resolver_;
     std::unordered_map<u16, size_t> idx_;   // 読み -> entries_ の位置
 
     std::filesystem::path file_;
@@ -131,7 +143,7 @@ public:
     struct Entry { u16 reading, word; std::string pos = "noun", group; };
     // 変換の網に入れる形: 読み・表記と、品詞を写す代表語の同じ形
     // whole = 読み全体が一致したときだけ (短縮よみ)。bonus = 代表語より下げるコスト (-1 は Converter の既定)
-    struct Form { u16 reading, surface, tmpl_reading, tmpl_surface; bool whole = false; int bonus = -1; };
+    struct Form { u16 reading, surface, tmpl_reading, tmpl_surface; bool whole = false; int bonus = -1; int lid = -1; };   // lid >= 0: 辞書のその品詞の項目としてだけ置く (学習した語)
 
     explicit UserDict(std::filesystem::path file) : file_(std::move(file)) {}
 

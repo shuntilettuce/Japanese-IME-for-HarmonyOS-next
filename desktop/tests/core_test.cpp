@@ -1103,6 +1103,45 @@ int main(int argc, char** argv) {
         expect("romaji reading", c.romaji_reading(u"konnichiha Sekai"), u"こんにちはせかい");
         expect("romaji reading bad", c.romaji_reading(u"hello2"), u16());
         expect("romaji reading word", c.romaji_reading(u"xyz"), u16());
+        // 確定してすぐ全部消し、同じ読みで別の表記を確定したら、前の表記の票を減らす。確定の取り消しで戻る (2026-11-06)
+        {
+            auto count_of = [&](const u16& s) { int n = 0; for (auto& p : learning.counts(u"やまば")) if (p.first == s) n = p.second; return n; };
+            KeyEvent bs;
+            bs.key = Key::Backspace;
+            keys(c, "yamaba{sp}{sp}{enter}");
+            const u16 a = c.take_commit();
+            const int before = count_of(a);
+            for (size_t i = 0; i < a.size(); i++) c.passthrough(bs);
+            keys(c, "yamaba{sp}");
+            if (c.view().text == a) keys(c, "{sp}");
+            keys(c, "{enter}");
+            const u16 b = c.take_commit();
+            const int after = count_of(a);
+            printf("     retype: %d -> %d\n", before, after);
+            if (b == a || before <= 0 || after != std::max(0, before - 2)) { printf("FAIL retype demote\n"); failures++; }
+            if (!c.undo_commit()) { printf("FAIL retype undo\n"); failures++; }
+            else if (count_of(a) != before) { printf("FAIL retype restore %d %d\n", before, count_of(a)); failures++; }
+            keys(c, "{esc}{esc}{esc}");
+            c.take_commit();
+            // 同じ表記を打ち直したとき・一部だけ消したときは減らさない
+            keys(c, "yamaba{sp}");
+            const u16 t1 = c.view().text;
+            keys(c, "{enter}");
+            c.take_commit();
+            const int b1 = count_of(t1);
+            for (size_t i = 0; i < t1.size(); i++) c.passthrough(bs);
+            keys(c, "yamaba{sp}{enter}");
+            const u16 t2 = c.take_commit();
+            if (t2 == t1 && count_of(t1) < b1) { printf("FAIL retype same\n"); failures++; }
+            keys(c, "yamaba{sp}{enter}");
+            const u16 t3 = c.take_commit();
+            const int b3 = count_of(t3);
+            c.passthrough(bs);
+            keys(c, "yamaba{sp}{sp}{enter}");
+            c.take_commit();
+            if (count_of(t3) < b3) { printf("FAIL retype partial\n"); failures++; }
+            keys(c, "{esc}{esc}{esc}");
+        }
         keys(c, "kawa{sp}{enter}a{esc}");   // ほかのキーを押したら取り消せない
         c.take_commit();
         if (!c.undoable().first.empty()) { printf("FAIL undoable after key\n"); failures++; }

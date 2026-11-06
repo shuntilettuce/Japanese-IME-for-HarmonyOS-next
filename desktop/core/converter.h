@@ -82,6 +82,8 @@ public:
     std::vector<std::pair<int, int>> typo_spans() const;
     // 確定した文 (読み, 表記) の中の、書き方の対の表にある語 (書き方の記録に数える)
     std::vector<u16> path_variants(const u16& reading, const u16& text) const;
+    // 確定した文になる経路のうちコストのいちばん低いものの語 (読み・表記・品詞)。経路が無ければ空
+    std::vector<Word> path_pos(const u16& reading, const u16& text) const;
     u16 latin_word(const u16& key) const;   // 綴り (小文字) の辞書の英字の語の表記 (無ければ空)
     // 予測: 読みが prefix で始まる辞書の語
     std::vector<u16> complete(const u16& prefix, int max, int max_extra = 6);

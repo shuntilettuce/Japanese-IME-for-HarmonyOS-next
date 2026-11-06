@@ -6,6 +6,11 @@
 
 #include "datetime.h"
 #include "tables.h"
+#include "pos_classes.h"
+#include <memory>
+#include <cstdlib>
+#include <mutex>
+#include <unordered_map>
 
 namespace shunti {
 static bool camel(const u16& w);   // 2 字目以降に大文字があり小文字も混ざる英字の語 (下で)
@@ -139,7 +144,48 @@ u16 greeting_fix(const u16& reading, const u16& surf) {
     return surf;
 }
 
-Composer::Composer(Converter* conv, Learning* learning, UserDict* dict) : conv_(conv), learning_(learning), dict_(dict) {}
+// 文の語のうち、読みの位置 r0 から始まる文節の頭の語の品詞 (接頭詞は飛ばす)。無ければ -1
+static int head_lid(const std::vector<Word>& ws, size_t r0) {
+    size_t r = 0;
+    for (size_t i = 0; i < ws.size(); i++) {
+        if (r == r0) {
+            size_t k = i;
+            while (k + 1 < ws.size() && ws[k].lid >= 0 && ws[k].lid < POS_CLASS_COUNT && POS_CLASSES[ws[k].lid] == '2') k++;
+            return ws[k].lid;
+        }
+        if (r > r0) return -1;
+        r += ws[i].reading.size();
+    }
+    return -1;
+}
+
+Composer::Composer(Converter* conv, Learning* learning, UserDict* dict) : conv_(conv), learning_(learning), dict_(dict) {
+    // 品詞の記録の無い (前の版の) 学習の表記は、読みと表記だけで網をたどって品詞を決める (2026-11-06)
+    if (learning_ && conv_) {
+        // 辞書が同じなら品詞も同じなので Composer の間で共有 (別のスレッドの Composer もあるので鍵をかける)
+        struct Cache { std::mutex m; std::unordered_map<u16, int> map; };
+        static const auto shared_cache = std::make_shared<Cache>();
+        auto cache = shared_cache;
+        Converter* cv = conv_;
+        learning_->set_lid_resolver([cv, cache](const u16& r, const u16& s) {
+            u16 key = r;
+            key.push_back(u'\t');
+            key += s;
+            {
+                std::lock_guard<std::mutex> g(cache->m);
+                auto it = cache->map.find(key);
+                if (it != cache->map.end()) return it->second;
+            }
+            const std::vector<Word> ws = cv->path_pos(r, s);
+            const int lid = ws.empty() ? -1 : head_lid(ws, 0);
+            std::lock_guard<std::mutex> g(cache->m);
+            if (cache->map.size() > 50000) cache->map.clear();
+            cache->map[key] = lid;
+            return lid;
+        });
+    }
+}
+
 
 // ---------------------------------------------------------------- キー
 
@@ -794,7 +840,7 @@ void Composer::select_candidate(int index) {
         }
         if (learning_ && !quiet() && !contains(sugg_set_, c) && !is_completion(kana_, c)) {
             learn_picked_words(c);
-            new_learn_.push_back(learning_->record(kana_, c, 2, conv_ctx()));
+            new_learn_.push_back(learning_->record(kana_, c, 2, conv_ctx(), head_lid(conv_->path_pos(kana_, c), 0)));
         }
         if (flow && !quiet() && contains(sugg_set_, c)) flow->record_suggest(c);
         commit_text(frozen_surface() + c);
@@ -1170,7 +1216,7 @@ void Composer::apply_learned_words(Conversion& c, const u16& ctx) {
     for (auto& p : group_phrases(c.words)) {
         const size_t first = i;
         for (size_t r = 0; r < p.reading.size(); r += c.words[i++].reading.size()) {}
-        const u16 t = learning_->top(p.reading, left);
+        const u16 t = learning_->top(p.reading, left, c.words[first].lid);
         if (!t.empty() && t != p.surface) {
             Word w = c.words[first];
             w.reading = p.reading;
@@ -1426,10 +1472,12 @@ void Composer::sync_user_dict() {
                 // し/ていない。ユーザー 2026-11-06)。手帳 311 読みで測った: 入力ログ 2728 件で 89.0 -> 89.2 (直した 66 -> 61・
                 // 壊した 26 -> 15)、ベンチ 1190 問で壊した 7 -> 2。安くする量を 200 に減らす形は 89.0 (壊した 23) で及ばなかった。
                 // 1 字の語も、同じ左の文脈で選んだ文節の置き換え (top) は残る
-                if (r.size() < 2) continue;
+                // 品詞の分かる語は、その品詞の辺としてだけ置くので 1 字の読みも入れる (2026-11-06)。分からない語は前のとおり外す
+                if (r.size() < 2 && st.lid < 0) continue;
                 UserDict::Form f;
                 f.reading = r;
                 f.surface = s;
+                f.lid = st.lid;
                 f.bonus = st.count >= 3 ? 1000 : 600;
                 forms.push_back(std::move(f));
             }
@@ -1452,7 +1500,10 @@ std::vector<Composer::Seg> Composer::convert_phrases(const u16& ctx, const u16& 
     std::vector<Word> words = c.words;
     if (words.empty()) words.push_back({reading, c.cands.empty() ? reading : c.cands[0]});
     u16 left = ctx;
+    size_t wi = 0;
     for (auto& p : group_phrases(words)) {
+        const int plid = wi < words.size() ? words[wi].lid : -1;
+        for (size_t r = 0; r < p.reading.size() && wi < words.size(); r += words[wi++].reading.size()) {}
         Seg s{p.reading, greeting_fix(p.reading, p.surface)};
         if (p.head_r < p.reading.size() && p.head_s < p.surface.size()) {
             s.tail_r = p.reading.substr(p.head_r);
@@ -1460,7 +1511,7 @@ std::vector<Composer::Seg> Composer::convert_phrases(const u16& ctx, const u16& 
         }
         // 自分で選び直したことのある文節の読みは、そのとき選んだ表記にする
         if (learning_) {
-            u16 t = learning_->top(p.reading, left);
+            u16 t = learning_->top(p.reading, left, plid);
             if (!t.empty()) s.surface = t;
         }
         left += s.surface;
@@ -1752,6 +1803,7 @@ void Composer::learn_picked_words(const u16& picked) {
         size_t a = 0, b = 0, ea = 0, start = 0;
         int eb = 0;
         u16 sa, sb, left = conv_ctx();
+        const std::vector<Word> pw = conv_->path_pos(kana_, picked);   // 選んだ文の中での品詞
         while (a < live_words_.size() && b < path.size()) {
             ea += live_words_[a].reading.size();
             sa += live_words_[a++].surface;
@@ -1768,7 +1820,7 @@ void Composer::learn_picked_words(const u16& picked) {
                     sb += path[b++].surface;
                 }
             }
-            if (sa != sb && ea - start < kana_.size()) new_learn_.push_back(learning_->record(kana_.substr(start, ea - start), sb, 2, left));
+            if (sa != sb && ea - start < kana_.size()) new_learn_.push_back(learning_->record(kana_.substr(start, ea - start), sb, 2, left, head_lid(pw, start)));
             left += sb;
             start = ea;
             sa.clear();
@@ -1778,8 +1830,8 @@ void Composer::learn_picked_words(const u16& picked) {
     }
 }
 
-void Composer::confirm_learned(const u16& reading, const u16& surface, const u16& left) {
-    if (learning_ && !quiet() && !contains(sugg_set_, surface) && !is_completion(reading, surface)) new_learn_.push_back(learning_->confirm(reading, surface, left));
+void Composer::confirm_learned(const u16& reading, const u16& surface, const u16& left, int lid) {
+    if (learning_ && !quiet() && !contains(sugg_set_, surface) && !is_completion(reading, surface)) new_learn_.push_back(learning_->confirm(reading, surface, left, lid));
 }
 
 u16 Composer::confirm_frozen() {
@@ -1800,9 +1852,11 @@ void Composer::confirm_live(const u16& top) {
     if (joined != top) return;   // 学習や挨拶で 1 位が変わった文は、語の区切りが合わない
     std::vector<Phrase> ph = group_phrases(live_words_);
     if (ph.size() < 2) return;   // 文全体と同じ
+    size_t r0 = 0;
     for (auto& p : ph) {
-        confirm_learned(p.reading, p.surface, left);
+        confirm_learned(p.reading, p.surface, left, head_lid(live_words_, r0));
         left += p.surface;
+        r0 += p.reading.size();
     }
 }
 
@@ -1810,18 +1864,26 @@ void Composer::commit_all() {
     u16 t, reading;
     std::vector<u16> segs;
     int changed = 0;
+    // 確定した文の中での品詞 (文節ごとの頭の語。学習を品詞ごとに分ける)
+    std::vector<Word> pw;
+    if (learning_ && !quiet() && conv_) {
+        u16 fr, ft;
+        for (auto& s : segs_) { fr += s.reading; ft += s.surface; }
+        pw = conv_->path_pos(fr, ft);
+    }
     for (auto& s : segs_) {
         const u16 left = ctx_ + t;
+        const int lid = pw.empty() ? -1 : head_lid(pw, reading.size());
         t += s.surface;
         reading += s.reading;
         segs.push_back(s.surface);
         if (s.changed) {
             changed++;
-            if (learning_ && !quiet() && !contains(sugg_set_, s.surface) && !is_completion(s.reading, s.surface)) new_learn_.push_back(learning_->record(s.reading, s.surface, 2, left));
+            if (learning_ && !quiet() && !contains(sugg_set_, s.surface) && !is_completion(s.reading, s.surface)) new_learn_.push_back(learning_->record(s.reading, s.surface, 2, left, lid));
             if (flow && !quiet() && contains(sugg_set_, s.surface)) flow->record_suggest(s.surface);
             log({"bseg", s.reading, s.surface, u16(), s.cands, s.sel});
         } else {
-            confirm_learned(s.reading, s.surface, left);
+            confirm_learned(s.reading, s.surface, left, lid);
         }
     }
     if (on_log) {
@@ -1864,6 +1926,21 @@ void Composer::commit_text(const u16& t0) {
     last_learn_ = std::move(new_learn_);
     new_learn_.clear();
     last_style_.clear();
+    {
+        const auto now = std::chrono::steady_clock::now();
+        const u16 reading = kana_.empty() ? u16() : frozen_reading() + kana_;
+        if (learning_ && !quiet() && retype_.erased && now - retype_.at <= std::chrono::seconds(10) && !t.empty() &&
+            reading == retype_.reading && t != retype_.surface) {
+            const Learning::Undo u = learning_->demote(retype_.reading, retype_.surface, retype_.left);
+            if (!u.reading.empty()) last_learn_.push_back(u);   // この確定を取り消したら戻す
+        }
+        retype_ = {};
+        if (!t.empty() && !reading.empty()) {
+            int chars = 0;
+            for (char16_t c : t) chars += (c & 0xFC00) != 0xDC00;
+            retype_ = {reading, t, ctx_, chars, false, now};
+        }
+    }
     history_ = tail(history_ + t, options.ctx_max);
     // M5: 確定した文の、かなでも漢字でも書ける語の書き方を、文の種類 (左の文脈から 丁寧・崩れ) と一緒に数える
     // (読みの網の上でたどって語を決める)
@@ -1931,6 +2008,7 @@ bool Composer::undo_commit() {
     if (last_commit_.first.empty() || state_ != State::Idle) return false;
     const u16 surface = last_commit_.first, reading = last_commit_.second;
     last_commit_ = {};
+    retype_ = {};
     // 文脈から取り消した確定を外す
     if (history_.size() >= surface.size() && history_.compare(history_.size() - surface.size(), surface.size(), surface) == 0)
         history_.resize(history_.size() - surface.size());
@@ -1970,6 +2048,12 @@ u16 Composer::romaji_reading(const u16& text) const {
 
 void Composer::passthrough(const KeyEvent& ev) {
     last_commit_ = {};
+    // 確定した文字を後ろから消している (確定した分より多く消したり、ほかのキーを押したら打ち直しではない)
+    if (ev.key == Key::Backspace && !retype_.surface.empty() && !retype_.erased) {
+        if (--retype_.chars <= 0) retype_.erased = true;
+    } else {
+        retype_ = {};
+    }
     if (!flow || state_ != State::Idle) return;
     if (ev.key == Key::Backspace) flow->backspace();
     else if (ev.key == Key::Enter) flow->boundary();

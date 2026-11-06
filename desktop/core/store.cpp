@@ -1,8 +1,10 @@
 #include "store.h"
+#include "pos_classes.h"
 
 #include <cstdio>
 
 #include <algorithm>
+#include <cstdlib>
 #include <chrono>
 #include <fstream>
 #include <sstream>
@@ -188,6 +190,10 @@ void Learning::refresh() {
                 }
                 continue;
             }
+            if (c.first == "@p" && c.second.type == json::Value::Object) {   // 表記ごとの品詞 (2026-11-06)
+                for (auto& x : c.second.obj) if (x.second.type == json::Value::Number) e.pos.push_back({from_utf8(x.first), int(x.second.num)});
+                continue;
+            }
             if (c.second.type != json::Value::Number) continue;
             if (c.first == "@day") e.day = int(c.second.num);   // 最後に選んだ日 (前の版のファイルには無い)
             else e.counts.push_back({from_utf8(c.first), int(c.second.num)});
@@ -258,6 +264,14 @@ void Learning::save() {
             o += json::quote(to_utf8(e.counts[i].first)) + ":" + std::to_string(e.counts[i].second);
         }
         if (e.day > 0) o += ",\"@day\":" + std::to_string(e.day);
+        if (!e.pos.empty()) {
+            o += ",\"@p\":{";
+            for (size_t i = 0; i < e.pos.size(); i++) {
+                if (i) o += ",";
+                o += json::quote(to_utf8(e.pos[i].first)) + ":" + std::to_string(e.pos[i].second);
+            }
+            o += "}";
+        }
         if (!e.ctx.empty()) {
             o += ",\"@c\":{";
             for (size_t i = 0; i < e.ctx.size(); i++) {
@@ -319,15 +333,30 @@ void Learning::drop_ctx(Entry& e, const u16& surface) {
     e.ctx.erase(std::remove_if(e.ctx.begin(), e.ctx.end(), [](auto& x) { return x.second.empty(); }), e.ctx.end());
 }
 
-Learning::Undo Learning::confirm(const u16& reading, const u16& surface, const u16& left) {
+Learning::Undo Learning::confirm(const u16& reading, const u16& surface, const u16& left, int lid) {
     refresh();
     Entry* e = find(reading);
     if (!e) return {};
     for (auto& c : e->counts) if (c.first == surface && c.second < 0) return {};   // 消した候補は選び直すまで戻さない
-    return record(reading, surface, 1, left);
+    return record(reading, surface, 1, left, lid);
 }
 
-Learning::Undo Learning::record(const u16& reading, const u16& surface, int add, const u16& left) {
+// 表記の品詞の仲間 (pos_classes.h の POS_GROUPS)。分からなければ 0
+static char group_of_lid(int lid) { return lid >= 0 && lid < POS_CLASS_COUNT ? POS_GROUPS[lid] : 0; }
+
+int Learning::lid_in(const Entry& e, const u16& surface) {
+    for (auto& p : e.pos) if (p.first == surface) return p.second;
+    return resolver_ ? resolver_(e.reading, surface) : -1;
+}
+
+int Learning::lid_of(const u16& reading, const u16& surface) {
+    refresh();
+    Entry* e = find(reading);
+    if (e) return lid_in(*e, surface);
+    return resolver_ ? resolver_(reading, surface) : -1;
+}
+
+Learning::Undo Learning::record(const u16& reading, const u16& surface, int add, const u16& left, int lid) {
     // かなのままの表記も数える。数えないと、かなで打ち続けても 1 回選んだ漢字に勝てない (ユーザー 2026-10-31)
     if (reading.empty() || surface.empty()) return {};
     refresh();
@@ -361,6 +390,10 @@ Learning::Undo Learning::record(const u16& reading, const u16& surface, int add,
     }
     e->day = today();
     note(*e, undo.left, surface, add);
+    if (lid >= 0) {   // 品詞は最後に選んだときのもの
+        auto p = std::find_if(e->pos.begin(), e->pos.end(), [&](auto& x) { return x.first == surface; });
+        if (p != e->pos.end()) p->second = lid; else e->pos.push_back({surface, lid});
+    }
     for (auto& c : e->counts) {
         if (c.first == surface) { c.second = c.second < 0 ? add : c.second + add; save(); return undo; }   // 消した表記を自分で選んだら戻す
     }
@@ -376,6 +409,8 @@ Learning::Undo Learning::record(const u16& reading, const u16& surface, int add,
             undo.evicted = weakest->first;
             undo.evicted_count = weakest->second;
             drop_ctx(*e, weakest->first);
+            const u16 gone = weakest->first;
+            e->pos.erase(std::remove_if(e->pos.begin(), e->pos.end(), [&](auto& x) { return x.first == gone; }), e->pos.end());
             e->counts.erase(weakest);
         }
     }
@@ -406,7 +441,7 @@ void Learning::restore(const std::vector<Undo>& us) {
         }
         if (!u.evicted.empty()) e->counts.push_back({u.evicted, u.evicted_count});
         e->day = u.day;
-        if (u.add > 0) note(*e, u.left, u.surface, -u.add);
+        if (u.add != 0) note(*e, u.left, u.surface, -u.add);   // 負 = demote で引いた分を足し戻す
         changed = true;
         if (e->counts.empty()) {
             entries_.erase(entries_.begin() + (e - entries_.data()));
@@ -414,6 +449,38 @@ void Learning::restore(const std::vector<Undo>& us) {
         }
     }
     if (changed) save();
+}
+
+Learning::Undo Learning::demote(const u16& reading, const u16& surface, const u16& left, int n) {
+    if (reading.empty() || surface.empty() || n <= 0) return {};
+    refresh();
+    Entry* e = find(reading);
+    if (!e) return {};
+    auto it = std::find_if(e->counts.begin(), e->counts.end(), [&](auto& c) { return c.first == surface; });
+    if (it == e->counts.end() || it->second <= 0) return {};
+    Undo undo{reading, surface};
+    undo.count = it->second;
+    undo.day = e->day;
+    undo.left = left_key(left);
+    // 文脈の表の票も引く (控えの add は負: restore で足し戻す)
+    auto cx = std::find_if(e->ctx.begin(), e->ctx.end(), [&](auto& x) { return x.first == undo.left; });
+    if (cx != e->ctx.end()) {
+        auto c = std::find_if(cx->second.begin(), cx->second.end(), [&](auto& x) { return x.first == surface; });
+        if (c != cx->second.end()) {
+            undo.add = -std::min(n, c->second);
+            note(*e, undo.left, surface, undo.add);
+        }
+    }
+    it->second -= n;
+    if (it->second <= 0) {
+        e->counts.erase(it);
+        if (e->counts.empty()) {
+            entries_.erase(entries_.begin() + (e - entries_.data()));
+            reindex();
+        }
+    }
+    save();
+    return undo;
 }
 
 void Learning::hide(const u16& reading, const u16& surface, bool keep_recent) {
@@ -511,10 +578,14 @@ std::vector<std::pair<u16, int>> Learning::counts(const u16& reading) {
     return e ? e->counts : std::vector<std::pair<u16, int>>{};
 }
 
-u16 Learning::top(const u16& reading, const u16& left) {
+u16 Learning::top(const u16& reading, const u16& left, int lid) {
     refresh();
     Entry* e = find(reading);
     if (!e) return u16();
+    // 品詞 (2026-11-06): 置き換える所の品詞の仲間 (want) と同じ仲間の表記は、その仲間の中の票だけでも「ほとんどこれ」と
+    // 言えれば置き換える (か を助詞で、化 を接尾で選んでいる読みでも、接尾の所は 化 に)。品詞の分からない表記はどの仲間にも入れる
+    const char want = group_of_lid(lid);
+    auto same = [&](const u16& s) { if (!want) return true; const char g = group_of_lid(lid_in(*e, s)); return !g || g == want; };
     const u16 key = left_key(left);
     const Counts* here = nullptr;
     int all = 0;
@@ -526,8 +597,10 @@ u16 Learning::top(const u16& reading, const u16& left) {
     // 文脈を問わずに置き換えるのは、その読みでほかの表記がほとんど選ばれていないときだけ (ほかの票が 1/4 以下)。
     // 用途の違う表記を両方選ぶ短い読み (か/化・と/都) は、ほかの文脈で選んだ回数どうしで取り合い、初めての文脈で
     // 交互に入れ替わった (ユーザー 2026-11-06)。そういう読みは同じ左の文脈で選んだときだけ置き換え、ほかはモデルに任せる
-    int total = 0;
-    for (auto& c : e->counts) if (c.second > 0) total += c.second;
+    // 品詞で絞る形 (仲間の違う表記は置き換えない) は、入力ログを時刻順になぞると 直した 3・壊した 22 で悪かった
+    // (モデルの経路の品詞が違うから選び直している所まで止める)。仲間の中で数えるのは、置き換えてよい条件を足す側だけ
+    int total = 0, total_all = 0;
+    for (auto& c : e->counts) if (c.second > 0) { total_all += c.second; if (same(c.first)) total += c.second; }
     u16 best;
     int n = TOP_MIN_COUNT - 1;
     for (auto& c : e->counts) {
@@ -535,7 +608,7 @@ u16 Learning::top(const u16& reading, const u16& left) {
         int mine = 0;
         if (here) for (auto& h : *here) if (h.first == c.first) mine = h.second;
         const int against = all - mine;
-        const bool dominant = (total - c.second) * 4 <= c.second;
+        const bool dominant = (total_all - c.second) * 4 <= c.second || (want && same(c.first) && (total - c.second) * 4 <= c.second);
         if (mine - against >= SAME_CTX_MIN || (c.second >= ANY_CTX_MIN && against == 0 && dominant)) { n = c.second; best = c.first; }
     }
     return best;
@@ -546,11 +619,19 @@ std::vector<Learning::Strong> Learning::strong(int min) {
     std::vector<Strong> out;
     // ほかの表記も選んでいる読み (ほかの票が 1/4 を超える: か/化・し/死) は入れない。網の中ではどの文脈でも安くなるので、
     // 用途の違う所まで引っぱった (していない -> し/ていない。ユーザー 2026-11-06)。そういう読みは top の文脈ごとの置き換えだけ
+    // 品詞ごとに分ける (2026-11-06): ほかの票は同じ品詞の仲間の表記だけで数える (か の助詞と 化 の接尾は取り合わない)
     for (auto& e : entries_) {
-        int total = 0;
-        for (auto& c : e.counts) if (c.second > 0) total += c.second;
-        for (auto& c : e.counts)
-            if (c.second >= min && (total - c.second) * 4 <= c.second) out.push_back({e.reading, c.first, c.second});
+        std::vector<int> lids;
+        for (auto& c : e.counts) lids.push_back(c.second > 0 ? lid_in(e, c.first) : -1);
+        for (size_t i = 0; i < e.counts.size(); i++) {
+            const auto& c = e.counts[i];
+            if (c.second < min) continue;
+            const char g = group_of_lid(lids[i]);
+            int total = 0;
+            for (size_t k = 0; k < e.counts.size(); k++)
+                if (e.counts[k].second > 0 && (!g || !group_of_lid(lids[k]) || group_of_lid(lids[k]) == g)) total += e.counts[k].second;
+            if ((total - c.second) * 4 <= c.second) out.push_back({e.reading, c.first, c.second, lids[i]});
+        }
     }
     return out;
 }
