@@ -66,6 +66,7 @@ bool Converter::open(const void* lex, size_t lex_size, const void* model, size_t
     if (e_ && threads > 0) kkc_set_threads(e_, threads);
     if (e_) kkc_set_suggest(e_, suggest_ ? 1 : 0);
     if (e_) kkc_set_latin(e_, latin_ ? 1 : 0);
+    if (e_) kkc_set_latin_mid2(e_, mid2_ ? 1 : 0);
     if (e_ && (!typo_ || typo_bias_ != 0.f)) kkc_set_typo(e_, typo_ ? 1 : 0, typo_bias_);
     if (e_ && !variants_.empty()) set_variants(variants_);
     if (e_ && !user_.empty()) set_user_words(std::vector<UserDict::Form>(user_), user_bonus_);   // モデルを替えて開き直したとき

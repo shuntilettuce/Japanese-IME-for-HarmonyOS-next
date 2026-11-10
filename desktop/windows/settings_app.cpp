@@ -38,7 +38,7 @@ enum Id {
 };
 
 // 変換モデル (settings.json の model の値と、画面の表示)。名前は配布の呼び名 (開発名は出さない)
-std::vector<std::string> g_models = {"light", "standard", "s2"};   // 変換モデルの欄の並び
+std::vector<std::string> g_models = {"light", "standard", "s2", "m5"};   // 変換モデルの欄の並び
 
 struct PosItem { const wchar_t* label; const char* pos; const char* group; };
 // 品詞は MS-IME の分類にそろえる (MS-IME の一覧の出力をそのまま読み込めるように)
@@ -1013,7 +1013,7 @@ void build() {
     int y = 8;
     group(T(32), y, 60);
     make(L"STATIC", T(101), 0, 24, y + 27, 170, 20, 0);
-    combo(200, y + 23, 250, ID_MODEL, {T(102), T(103), T(189)});
+    combo(200, y + 23, 250, ID_MODEL, {T(102), T(103), T(189), T(231)});
     y += 68;
 
     group(T(50), y, 360);

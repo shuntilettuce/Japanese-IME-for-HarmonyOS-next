@@ -74,6 +74,7 @@ void Core::use_model(const std::string& name) {
     size_t ms = 0;
     const void* model = map_file(dir_ / file, ms);
     if (!model) return;
+    conv.set_latin_mid2(file == "kkc_model_m5.bin");   // M5 は網 mid2 で学んでいる
     if (!conv.open(lex_, lex_size_, model, ms, 2)) {
         UnmapViewOfFile(model);
         return;

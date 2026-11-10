@@ -151,6 +151,7 @@ bool save_settings(const fs::path& p, const Settings& s) {
 const char* model_file_name(const std::string& model) {
     if (model == "light") return "kkc_model_light.bin";
     if (model == "s2") return "kkc_model_s2.bin";   // 比較用の昔のモデル
+    if (model == "m5") return "kkc_model_m5.bin";   // M5 (試用、2026-11-11。英字の辺は mid2)
     // 高精度 (M4) は廃止: S7 (標準) の方が精度が上で、誤字も直せる (2026-10-14)。前に high を選んでいた人も標準を読む
     return "kkc_model.bin";
 }

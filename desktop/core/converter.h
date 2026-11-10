@@ -68,6 +68,7 @@ public:
     // ローマ字の打ち間違いの直し (既定オン)。bias = 打ち間違いの辺の点数から引く値 (0 = 学習どおり、大きいほど控えめ。typo_bias_of)
     void set_typo(bool on, float bias = 0.f);
     void set_latin(bool on);   // 英字の打ち分け (既定オン)
+    void set_latin_mid2(bool on) { mid2_ = on; }   // M5 の世代のモデル: 英字の語の後ろのキーを読み直す辺 (次の open で効く)
     // M5 の個人化 (版 6 のモデルのときだけ効く)。書き方の対の表 (TSV)・表記ごとの使う人の印
     bool personal() const;
     void set_variants(const std::string& tsv_utf8);
@@ -113,6 +114,7 @@ private:
     int user_bonus_ = 800;
     bool suggest_ = true;
     bool latin_ = true;
+    bool mid2_ = false;
     bool typo_ = true;
     float typo_bias_ = 0.f;
     std::string variants_;   // モデルを替えて開き直したときに入れ直す

@@ -577,6 +577,7 @@ constexpr int32_t ENG_LATIN_COST = 9000;   // 英カタカナ辞書の語を英�
 constexpr int32_t LATIN_BIAS = 3000;
 // 辞書に無い英字の並び (打ったまま・大文字・頭だけ大文字) の語のコスト (学習の網 kkcnative2 と同じ)
 constexpr int32_t LATIN_RAW_COST = 6000;
+constexpr int32_t LATIN_CASE_ALT = 1500;   // mid2: 辞書の書き方と大文字小文字だけ違う、打ったとおりの書き方の上乗せ (学習の網と同じ)
 
 // ---------------------------------------------------------------- 打ち間違いの辺 (S7、モデルが辺の種類 K_TYPO を知っているときだけ)
 // 打った読みをローマ字に直し、打ち間違い 1 打ぶんを戻した読み (余分な 1 打を消す・隣のキーを正しいキーに・抜けた 1 打を足す・
@@ -1397,7 +1398,7 @@ bool unromaji(const uint16_t* k, int n) {
 // left_latin・right_latin: 読みの前 (確定した左の文脈の終わり)・後ろ (後ろの文脈の頭) が英字か空白 = 英語の文の続き
 void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vector<int32_t>& span_end, int n,
                  const ustr& r, const std::unordered_map<std::string, LatinWord>& user_latin, std::vector<Edge>& out,
-                 bool left_latin = false, bool right_latin = false) {
+                 bool left_latin = false, bool right_latin = false, bool mid2 = false) {
     const int nkeys = int(keys.size());
     // 空白で区切った塊 (読みに英字が残った所を含む) の打ったキー全体が英字の語 (harmony) なら、その塊の中を英字の語で
     // 切らない。切ると harmo + NY (読み はrもny) のように、塊の一部が別の英字の語に当たった (ユーザー 2026-11-06)
@@ -1504,6 +1505,13 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
                 for (int i = ks; i < ke; i++) surf.push_back(char32_t(keys[size_t(i)]));
             }
             out.push_back({s, e, surf, it->second.lid, it->second.rid, it->second.cost + LATIN_BIAS, K_LATIN});
+            // mid2 (M5 から): 辞書の書き方と大文字小文字だけ違う、打ったとおりの書き方も少し高いコストで (drive -> Drive・ok -> OK・amazon -> Amazon
+            // のとき、打った drive を 2 番目以降に出せるように。英字まじりベンチ v3 で正解が網に無かった。学習の網と同じ)
+            if (mid2 && !std::all_of(r.begin() + s, r.begin() + e, is_kana)) {   // 読みに英字が残ったとき (dりゔぇ・おk) だけ (あんどれ -> andore にしない)
+                ustr typed;
+                for (int i = ks; i < ke; i++) typed.push_back(char32_t(keys[size_t(i)]));
+                if (typed != surf) out.push_back({s, e, typed, it->second.lid, it->second.rid, it->second.cost + LATIN_BIAS + LATIN_CASE_ALT, K_LATIN});
+            }
             return;
         }
         // 辞書に無い英字の並び (略語・新しい語): 打ったまま (大文字小文字も打った通り) を、辞書の語より高い点で (名詞として)。
@@ -1527,50 +1535,121 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
     }
     // 英字の語がかなの途中で終わる所 (minecraftapuri -> 読み みねcらfたぷり: minecraft は「た」の t で終わり、a は次の語の頭)。
     // かなの区切りにしか辺を置けないので、英字の語 + 残りの母音で始まる辞書の語 (あぷり -> アプリ) を 1 つの辺にする (ユーザー 2026-11-05)
-    // e: かなの塊 (同じキーで決まった字の並び。va -> ゔぁ・ryo -> りょ) の終わり。c0: 塊の頭の字 (学習の網 kkcnative2 と同じ)
-    for (int e = 1; e < n; e++) {
+    // mid2 (M5 から、kkc_set_latin_mid2。学習の網 kkcnative2 の KKC_LATIN_MID=2 と同じ。2026-11-08): 残りのキーが母音 1 つでなくてもよい。
+    // 残りのキー (決まらなければ次の塊のキーも) を to_kana で読み直したかなで始まる辞書の語とつなぐ。
+    // IDha -> いでゃ (ID + は)・jsonni -> jそんい (json + に)・CDya -> cぢゃ (CD + や)・PRyou -> pりょう (PR + 用)。英字まじりベンチ v3 で
+    // M5 は 87.2 -> 89.4%、誤爆は同じ。S8plus は学んでいない辺なので 68.6 -> 62.7% に下がる (S8plus では使わない)
+    // 塊: [cs, ce) の字。e: 塊の終わり、c0: 塊の頭の字 (学習の網 kkcnative2 と同じ)
+    std::vector<int> cs, ce;
+    for (int e = 1; e <= n; e++) {
+        if (e < n && span_end[size_t(e)] == span_end[size_t(e - 1)]) continue;
+        cs.push_back(ce.empty() ? 0 : ce.back());
+        ce.push_back(e);
+    }
+    static const char16_t* const VOWELS = u"aiueo";
+    static const char16_t* const KANA = u"あいうえお";
+    for (size_t ci = 0; ci < cs.size(); ci++) {
+        const int c0 = cs[ci], e = ce[ci];
+        if (e >= n && !mid2) continue;
         const int kend = span_end[size_t(e - 1)];
-        if (span_end[size_t(e)] == kend) continue;   // 塊の途中
-        int c0 = e - 1;
-        while (c0 > 0 && span_end[size_t(c0 - 1)] == kend) c0--;
         const int kb = c0 == 0 ? 0 : span_end[size_t(c0 - 1)];
-        if (kend - kb < 2 || !std::all_of(r.begin() + c0, r.begin() + e, is_kana)) continue;
-        static const char16_t* const VOWELS = u"aiueo";
-        static const char16_t* const KANA = u"あいうえお";
-        uint16_t vk = keys[size_t(kend - 1)];
-        if (vk >= u'A' && vk <= u'Z') vk = uint16_t(vk + 32);
-        const char16_t* vp = std::char_traits<char16_t>::find(VOWELS, 5, char16_t(vk));
-        if (!vp) continue;
-        const uint16_t vowel = uint16_t(KANA[vp - VOWELS]);
-        for (int s = 0; s < c0; s++) {
-            const int ks = s == 0 ? 0 : span_end[size_t(s - 1)];
-            if (kend - 1 - ks < 2) continue;
-            // 辞書・ユーザー辞書にある英字の語か、Shift で大文字を打った語 (AC・ROM・CSV: 英語のつもりがはっきりしている) だけ
-            // (小文字の打ったままの並びを途中で切ると minecraftap + 売り のような辺ができた)
-            std::string lower;
-            bool up = false;
-            for (int i = ks; i < kend - 1; i++) {
-                const uint16_t c = keys[size_t(i)];
-                up |= c >= u'A' && c <= u'Z';
-                lower.push_back(c >= u'A' && c <= u'Z' ? char(c + 32) : c < 0x80 ? char(c) : '?');
+        // mid2: 塊に英字が混ざっていてもよい (resultwo -> れすlt を: t と を は同じキー o で決まるので 1 つの塊)
+        if (kend - kb < 2 || (!mid2 && !std::all_of(r.begin() + c0, r.begin() + e, is_kana))) continue;
+        // 英字の語の終わりのキー p (塊の途中)。mid2 でなければ p = kend - 1 で、残りが母音のときだけ
+        for (int p = mid2 ? kb + 1 : kend - 1; p < kend; p++) {
+            std::vector<uint16_t> rest;
+            int e1 = e, cj = int(ci);
+            if (!mid2) {
+                uint16_t vk = keys[size_t(kend - 1)];
+                if (vk >= u'A' && vk <= u'Z') vk = uint16_t(vk + 32);
+                const char16_t* vp = std::char_traits<char16_t>::find(VOWELS, 5, char16_t(vk));
+                if (!vp) continue;
+                rest.push_back(uint16_t(KANA[vp - VOWELS]));
+            } else {
+                bool ok = false;
+                for (int ext = 0; ext < 3 && !ok; ext++) {
+                    if (ext > 0) {
+                        if (++cj >= int(cs.size())) break;
+                        if (!std::all_of(r.begin() + cs[size_t(cj)], r.begin() + ce[size_t(cj)], is_kana)) break;
+                        e1 = ce[size_t(cj)];
+                    }
+                    // n 1 つで終わるのは決まっていない (json|n|i は次の塊の i まで)
+                    const int kto = span_end[size_t(e1 - 1)];
+                    std::string rk;
+                    bool bad = false;
+                    for (int i = p; i < kto; i++) {
+                        uint16_t c = keys[size_t(i)];
+                        if (c >= u'A' && c <= u'Z') c = uint16_t(c + 32);
+                        if (!((c >= u'a' && c <= u'z') || c == u'-')) { bad = true; break; }
+                        rk.push_back(char(c));
+                    }
+                    if (bad) break;
+                    const bool lone_n = !rk.empty() && rk.back() == 'n' && (rk.size() < 2 || rk[rk.size() - 2] != 'n');
+                    ustr kk;
+                    rest.clear();
+                    if (lone_n || !typo::to_kana(rk, kk)) continue;
+                    for (char32_t ch : kk) rest.push_back(uint16_t(ch));
+                    ok = !rest.empty() && std::all_of(rest.begin(), rest.end(), [](uint16_t ch) { return ch >= 0x3041 && ch <= 0x30FC; });
+                }
+                if (!ok) continue;
             }
-            if (!L.latin_words.count(lower) && !user_latin.count(lower) && !up) continue;
-            const size_t before = out.size();
-            add(ks, kend - 1, s, e);   // 英字の語 (キーは母音の前まで)
-            if (out.size() == before) continue;
-            std::vector<Edge> words(out.begin() + long(before), out.end());
-            out.resize(before);   // かなの途中までの辺だけでは読みが合わない
-            std::vector<uint16_t> key(1, vowel);
-            for (int e2 = e + 1; e2 <= std::min(n, e + L.max_word - 1); e2++) {
-                if (!is_kana(r[size_t(e2 - 1)])) break;
-                key.push_back(uint16_t(r[size_t(e2 - 1)]));
-                uint32_t a, b;
-                if (!L.find(key.data(), int(key.size()), a, b)) continue;
-                for (uint32_t j = a; j < b; j++) {
-                    const Ent en = L.ent(j);
-                    if (en.cost >= ENG_COST) continue;
-                    for (const Edge& w : words)
-                        out.push_back({s, e2, w.surf + from16(L.s_blob + en.soff, en.slen), w.lid, int32_t(en.rid), w.cost + en.cost, K_LATIN});
+            // 英字の語の頭 s: mid2 でなければ c0 より前の全部の字。mid2 は塊の頭だけ、同じ塊の頭も (10Senjin の S は「せ」の塊の頭から)
+            const int ns = mid2 ? int(ci) + 1 : c0;
+            for (int si = 0; si < ns; si++) {
+                const int s = mid2 ? cs[size_t(si)] : si;
+                const int ks = s == 0 ? 0 : span_end[size_t(s - 1)];
+                if (ks >= p) continue;
+                // 辞書・ユーザー辞書にある英字の語か、Shift で大文字を打った語 (AC・ROM・CSV: 英語のつもりがはっきりしている) だけ
+                // (小文字の打ったままの並びを途中で切ると minecraftap + 売り のような辺ができた)
+                std::string lower;
+                bool up = false, letters = true;
+                for (int i = ks; i < p; i++) {
+                    const uint16_t c = keys[size_t(i)];
+                    up |= c >= u'A' && c <= u'Z';
+                    letters &= (c >= u'A' && c <= u'Z') || (c >= u'a' && c <= u'z');
+                    lower.push_back(c >= u'A' && c <= u'Z' ? char(c + 32) : c < 0x80 ? char(c) : '?');
+                }
+                if (mid2 && !letters) continue;
+                if (p - ks < 2 && !(mid2 && up)) continue;
+                if (mid2) {
+                    const bool vowel_only = p == kend - 1 && rest.size() == 1 && std::u16string_view(u"あいうえお").find(char16_t(rest[0])) != std::u16string_view::npos;
+                    if (!up && !vowel_only && std::all_of(r.begin() + s, r.begin() + e, is_kana)) continue;   // まっちゃん -> まcc半 にしない
+                    const auto nk = keys[size_t(p)];
+                    if (nk >= u'A' && nk <= u'Z') continue;   // 大文字の語の途中 (NOW -> N + お にしない)
+                }
+                // 同じ塊の中だけの語 (し = shi の sh) は Shift で大文字を打ったときだけ (SHい の誤爆)
+                if (mid2 && s == c0 && !up) continue;
+                if (!L.latin_words.count(lower) && !user_latin.count(lower) && !up) continue;
+                const size_t before = out.size();
+                add(ks, p, s, e);   // 英字の語 (キーは p まで)
+                if (out.size() == before) continue;
+                std::vector<Edge> words(out.begin() + long(before), out.end());
+                out.resize(before);   // かなの途中までの辺だけでは読みが合わない
+                std::vector<uint16_t> key(rest);
+                // mid2 でなければ残りの母音だけの語は作らない (e2 は e + 1 から)。mid2 は残りだけの語 (ID + は) も
+                for (int e2 = mid2 ? e1 : e1 + 1; e2 <= std::min(n, e1 + L.max_word); e2++) {
+                    if (e2 > e1) {
+                        if (!is_kana(r[size_t(e2 - 1)])) break;
+                        key.push_back(uint16_t(r[size_t(e2 - 1)]));
+                    }
+                    if (int(key.size()) > L.max_word) break;
+                    uint32_t a, b;
+                    if (!L.find(key.data(), int(key.size()), a, b)) continue;
+                    for (uint32_t j = a; j < b; j++) {
+                        const Ent en = L.ent(j);
+                        if (en.cost >= ENG_COST) continue;
+                        if (mid2) {
+                            const ustr sf = from16(L.s_blob + en.soff, en.slen);
+                            // 変体仮名・ゐゑゟ などの珍しい字の語はつながない (F𛀅・BrushTゐp)
+                            if (std::any_of(sf.begin(), sf.end(), [](char32_t c) {
+                                    return c >= 0x1B000 || c == U'ゐ' || c == U'ゑ' || c == U'ゟ' || c == U'ヰ' || c == U'ヱ' || (c >= U'ヷ' && c <= U'ヺ'); }))
+                                continue;
+                            // 残りのかなだけの語 (ID + は) は助詞 1 字だけ (MARS + 葉・North -> N + お にしない)
+                            if (e2 == e1 && (sf.size() != 1 || std::u32string_view(U"はがをにへとでやのもかねよ").find(sf[0]) == std::u32string_view::npos)) continue;
+                        }
+                        for (const Edge& w : words)
+                            out.push_back({s, e2, w.surf + from16(L.s_blob + en.soff, en.slen), w.lid, int32_t(en.rid), w.cost + en.cost, K_LATIN});
+                    }
                 }
             }
         }
@@ -2126,6 +2205,7 @@ struct kkc_engine {
     // 提案 (kkc_set_suggest でオン): 変換の域を超えるもの (打ち間違いの直し・日付・郵便番号の住所) を候補に混ぜず、
     // 別の出口 (kkc_last_suggest) に種類つきで出す。候補は打ったとおりの変換だけになる
     bool suggest_mode = false;
+    bool latin_mid2 = false;   // 英字の語の後ろに残ったキーを読み直してつなぐ辺 (M5 から。kkc_set_latin_mid2)
     bool latin = true;   // 英字の辺 (ローマ字で打った英単語)。kkc_set_latin でオフにすると英字の打ち分けをしない (暴発が嫌な人向け)
     // 豆腐になる字の除外 (kkc_set_char_filter)。既定は全部除外 (HarmonyOS)。Android は Paint.hasGlyph、PC は字形の有無で
     // 端末側が調べるので切る (Android 15 から AOSP に Noto Serif Hentaigana が入り、変体仮名も出る端末がある)
@@ -3401,7 +3481,7 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
         std::vector<Edge> lat;
         auto latin_ch = [](uint16_t c) { return c == u' ' || (c < 0x80 && std::isalpha(int(c))); };
         const bool left_latin = nctx > 0 && latin_ch(ctx[nctx - 1]), right_latin = !rctx.empty() && latin_ch(rctx[0]);
-        if (e->latin) latin_edges(e->lex, keys, span_end, n, r, e->user_latin, lat, left_latin, right_latin);
+        if (e->latin) latin_edges(e->lex, keys, span_end, n, r, e->user_latin, lat, left_latin, right_latin, e->latin_mid2);
         // 読みに英字が残った所 (ローマ字の打ち間違い: arigstou -> ありgsとう) は、キーの並びから 1 打戻した読みで打ち間違いの辺を作る。
         // かなだけの区間の打ち間違いは edges() が読みから作っている
         if (e->lex.typo) {
@@ -3948,6 +4028,8 @@ KKC_API double kkc_last_margin(kkc_engine* e) { return e ? e->last_cost[1] - e->
 // 直前の kkc_convert の提案 (kkc_set_suggest がオンのとき)。表記を 0 区切りで out に、種類を kinds に。返り値は数 (out が足りなければ -1)
 KKC_API void kkc_set_typo_promote(kkc_engine* e, double per_char) { if (e) e->typo_promote = per_char; }
 KKC_API void kkc_set_latin(kkc_engine* e, int on) { if (e) e->latin = on != 0; }
+// 英字の語の後ろに残ったキーを読み直してつなぐ辺 (IDha -> ID + は)。M5 から学んでいる網なので、M5 の世代のモデルを読んだときだけオンにする
+KKC_API void kkc_set_latin_mid2(kkc_engine* e, int on) { if (e) e->latin_mid2 = on != 0; }
 
 // 綴り (英字・数字、小文字) の辞書の英字の語の表記を out に。無い・英字の打ち分けがオフなら 0。返り値は表記の長さ (UTF-16)
 KKC_API int kkc_latin_word(kkc_engine* e, const uint16_t* key, int nk, uint16_t* out, int cap) {
@@ -4107,9 +4189,44 @@ KKC_API int kkc_user_add_pos(kkc_engine* e, const uint16_t* r, int nr, const uin
 // 「いく」で 生田絵梨花・育、「おつ」で 尾辻舞・乙骨耐軒 が並んでいた (ユーザー 2026-10-17)。名前は読みを打ち切れば変換の候補に出る
 static bool proper_noun_lid(int lid) { return (lid >= 1920 && lid <= 1923) || lid == 1929; }
 
+// 予測で、打っていない性的な語・罵倒の語を足さない (ちゃっとえ → チャットエッチ が出た。ユーザー 2026-11-07)。
+// 表記にこの字列を含む語は、その読みを打っているとき (えっち まで打った) だけ出す。変換そのものには関わらない
+namespace {
+struct NgWord { const char16_t* surf; const char16_t* read; };
+const NgWord kNgPredict[] = {
+    {u"エッチ", u"えっち"}, {u"えっち", u"えっち"}, {u"セックス", u"せっくす"}, {u"セックル", u"せっくる"}, {u"オナ", u"おな"},
+    {u"パイズリ", u"ぱいずり"}, {u"フェラ", u"ふぇら"}, {u"チンコ", u"ちんこ"}, {u"ちんこ", u"ちんこ"}, {u"チンポ", u"ちんぽ"},
+    {u"ちんぽ", u"ちんぽ"}, {u"マンコ", u"まんこ"}, {u"まんこ", u"まんこ"}, {u"勃起", u"ぼっき"}, {u"射精", u"しゃせい"},
+    {u"中出し", u"なかだし"}, {u"手コキ", u"てこき"}, {u"痴漢", u"ちかん"}, {u"痴女", u"ちじょ"}, {u"強姦", u"ごうかん"},
+    {u"レイプ", u"れいぷ"}, {u"乳首", u"ちくび"}, {u"おっぱい", u"おっぱい"}, {u"巨乳", u"きょにゅう"}, {u"爆乳", u"ばくにゅう"},
+    {u"貧乳", u"ひんにゅう"}, {u"淫", u"いん"}, {u"童貞", u"どうてい"}, {u"処女", u"しょじょ"}, {u"風俗", u"ふうぞく"},
+    {u"ソープ嬢", u"そーぷじょう"}, {u"デリヘル", u"でりへる"}, {u"ラブホ", u"らぶほ"}, {u"アダルト", u"あだると"}, {u"エロ", u"えろ"},
+    {u"ヌード", u"ぬーど"}, {u"全裸", u"ぜんら"}, {u"陰毛", u"いんもう"}, {u"陰部", u"いんぶ"}, {u"性器", u"せいき"},
+    {u"性交", u"せいこう"}, {u"売春", u"ばいしゅん"}, {u"援交", u"えんこう"}, {u"援助交際", u"えんじょこうさい"}, {u"姦", u"かん"},
+    {u"肉便器", u"にくべんき"}, {u"精液", u"せいえき"}, {u"愛液", u"あいえき"}, {u"潮吹き", u"しおふき"}, {u"クンニ", u"くんに"},
+    {u"アナル", u"あなる"}, {u"素股", u"すまた"}, {u"乱交", u"らんこう"}, {u"ビッチ", u"びっち"}, {u"熟女", u"じゅくじょ"},
+    {u"人妻", u"ひとづま"}, {u"ハメ撮り", u"はめどり"}, {u"夜這い", u"よばい"}, {u"獣姦", u"じゅうかん"}, {u"ロリコン", u"ろりこん"},
+    {u"うんこ", u"うんこ"}, {u"ウンコ", u"うんこ"}, {u"死ね", u"しね"}, {u"キチガイ", u"きちがい"}, {u"気違い", u"きちがい"},
+    {u"基地外", u"きちがい"}, {u"ガイジ", u"がいじ"}, {u"池沼", u"ちしょう"}, {u"土人", u"どじん"},
+};
+inline bool contains16(const std::u16string& s, const char16_t* t) { return s.find(t) != std::u16string::npos; }
+// 表記 sf (UTF-32) が、打った読み pre に無い NG の語を含むか
+bool ng_predict(const ustr& sf, const std::u16string& pre) {
+    std::u16string s;
+    for (char32_t c : sf) {
+        if (c < 0x10000) s.push_back(char16_t(c));
+        else { c -= 0x10000; s.push_back(char16_t(0xD800 + (c >> 10))); s.push_back(char16_t(0xDC00 + (c & 0x3FF))); }
+    }
+    for (const NgWord& w : kNgPredict)
+        if (contains16(s, w.surf) && !contains16(pre, w.read)) return true;
+    return false;
+}
+}  // namespace
+
 KKC_API int kkc_complete(kkc_engine* e, const uint16_t* prefix, int np, int max_extra, int maxout, uint16_t* out, int cap) {
     if (!e || np <= 0) return 0;
     const Lex& L = e->lex;
+    const std::u16string pre16(reinterpret_cast<const char16_t*>(prefix), size_t(np));
     // 読みは辞書の中で並んでいるので、prefix で始まる読みの範囲の先頭を二分探索で探す
     const int lo = L.lower_bound(prefix, np);
     // 終助詞「ね」の左 ID (読み ね・表記 ね の語のうちコストのいちばん低いもの)
@@ -4160,6 +4277,7 @@ KKC_API int kkc_complete(kkc_engine* e, const uint16_t* prefix, int np, int max_
         // 歩こ・楽しも・住み着こ (後ろに う の付いた 歩こう が候補にあれば、言いかけの形は出さない)。
         // 感動詞・接続詞 (Mozc の ID 2591・2593: おはよ / おはよう) は別の語なので除かない
         if (en.lid != 2591 && en.lid != 2593 && all.count(sf + U"う")) continue;
+        if (ng_predict(sf, pre16)) continue;
         if (!seen.insert(sf).second) continue;
         to16(sf, buf);
         buf.push_back(0);

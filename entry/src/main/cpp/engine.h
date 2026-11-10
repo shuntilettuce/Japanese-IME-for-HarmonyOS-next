@@ -27,6 +27,7 @@ KKC_API void kkc_set_suggest(kkc_engine* e, int on);
 // 豆腐になる字を含む候補を除外する (1 = 変体仮名、2 = ヒエログリフ、4 = 麻雀牌など。既定 7)。端末側で字形の有無を調べるなら 0 に
 KKC_API void kkc_set_char_filter(kkc_engine* e, int mask);
 KKC_API void kkc_set_latin(kkc_engine* e, int on);
+KKC_API void kkc_set_latin_mid2(kkc_engine* e, int on);   // M5 の世代: 英字の語の後ろに残ったキーを読み直してつなぐ (IDha -> ID + は)
 KKC_API int kkc_latin_word(kkc_engine* e, const uint16_t* key, int nk, uint16_t* out, int cap);   // 綴り -> 辞書の英字の語の表記   // 英字の打ち分け (ローマ字で打った英単語の辺)。既定はオン
 KKC_API void kkc_set_typo_promote(kkc_engine* e, double per_char);   // 打ち間違いの直しを 1 位にする差 (1 字あたり)
 KKC_API double kkc_last_typo_margin(kkc_engine* e);

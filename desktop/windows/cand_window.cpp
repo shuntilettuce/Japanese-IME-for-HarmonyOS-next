@@ -3,6 +3,11 @@
 #include <dwmapi.h>
 #include <objidl.h>
 #include <gdiplus.h>
+#include <d2d1.h>
+#include <dwrite.h>
+
+#pragma comment(lib, "d2d1.lib")
+#pragma comment(lib, "dwrite.lib")
 
 #include <algorithm>
 #include <cmath>
@@ -44,6 +49,110 @@ const wchar_t* ui_face() {
         return found ? L"BIZ UDPGothic" : L"Yu Gothic UI";
     }();
     return face;
+}
+
+// 絵文字 (2026-11-11): GDI の DrawText は BIZ UDP ゴシックに絵文字の代わりの字を持たず豆腐になる (0.7.4 でフォントを替えてから)。
+// 絵文字を含む字だけ DirectWrite で描く (代わりの字を自動で探し、Segoe UI Emoji のカラーで出す)。ほかは今までどおり GDI
+bool has_emoji(const wchar_t* s, int n) {
+    for (int i = 0; i < n; i++) {
+        unsigned c = s[i];
+        if ((c >= 0xD800 && c <= 0xDBFF) || c == 0xFE0F || c == 0x200D || c == 0x20E3 || (c >= 0x2300 && c <= 0x23FF) ||
+            (c >= 0x2600 && c <= 0x27BF) || (c >= 0x2B00 && c <= 0x2BFF))
+            return true;
+    }
+    return false;
+}
+
+struct Dw {
+    ID2D1Factory* d2d = nullptr;
+    IDWriteFactory* dw = nullptr;
+    ID2D1DCRenderTarget* rt = nullptr;
+    ID2D1DCRenderTarget* rt_alpha = nullptr;   // 候補の木 (透明度つきの絵) 用。ClearType は使えないので白黒の滑らかさで
+    bool ok = false;
+    Dw() {
+        if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &d2d))) return;
+        if (FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), reinterpret_cast<IUnknown**>(&dw)))) return;
+        // 単位は画素 (96 DPI の目盛りにして、GDI と同じ座標で描く)
+        D2D1_RENDER_TARGET_PROPERTIES p = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_IGNORE), 96.f, 96.f);
+        ok = SUCCEEDED(d2d->CreateDCRenderTarget(&p, &rt));
+        D2D1_RENDER_TARGET_PROPERTIES pa = D2D1::RenderTargetProperties(D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.f, 96.f);
+        if (SUCCEEDED(d2d->CreateDCRenderTarget(&pa, &rt_alpha))) rt_alpha->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+    }
+};
+Dw& dw() { static Dw d; return d; }
+
+// font の大きさ (画素) と太さで、字の並びを作る。max_w・max_h の箱の中で、縦は真ん中
+IDWriteTextLayout* dw_layout(const wchar_t* s, int n, HFONT font, float max_w, float max_h, DWRITE_TEXT_ALIGNMENT align, bool ellipsis) {
+    Dw& d = dw();
+    if (!d.ok) return nullptr;
+    LOGFONTW lf = {};
+    GetObjectW(font, sizeof lf, &lf);
+    IDWriteTextFormat* fmt = nullptr;
+    if (FAILED(d.dw->CreateTextFormat(lf.lfFaceName, nullptr, DWRITE_FONT_WEIGHT(lf.lfWeight ? lf.lfWeight : 400), DWRITE_FONT_STYLE_NORMAL,
+                                      DWRITE_FONT_STRETCH_NORMAL, float(std::abs(lf.lfHeight)), L"ja-jp", &fmt)))
+        return nullptr;
+    fmt->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    fmt->SetTextAlignment(align);
+    fmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    if (ellipsis) {
+        IDWriteInlineObject* sign = nullptr;
+        if (SUCCEEDED(d.dw->CreateEllipsisTrimmingSign(fmt, &sign))) {
+            DWRITE_TRIMMING t = {DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+            fmt->SetTrimming(&t, sign);
+            sign->Release();
+        }
+    }
+    IDWriteTextLayout* lay = nullptr;
+    d.dw->CreateTextLayout(s, UINT32(n), fmt, max_w, max_h, &lay);
+    fmt->Release();
+    return lay;
+}
+
+// 字の幅 (画素)。絵文字を含む字は DirectWrite で測る
+int text_width(HDC dc, const wchar_t* s, int n) {
+    if (has_emoji(s, n)) {
+        if (IDWriteTextLayout* lay = dw_layout(s, n, HFONT(GetCurrentObject(dc, OBJ_FONT)), 100000.f, 1000.f, DWRITE_TEXT_ALIGNMENT_LEADING, false)) {
+            DWRITE_TEXT_METRICS m = {};
+            lay->GetMetrics(&m);
+            lay->Release();
+            return int(std::ceil(m.widthIncludingTrailingWhitespace));
+        }
+    }
+    SIZE z = {};
+    GetTextExtentPoint32W(dc, s, n, &z);
+    return z.cx;
+}
+
+// DirectWrite で 1 行を箱 r (dc の論理座標) に描く。縦は真ん中。描けなければ false
+bool dw_draw(ID2D1DCRenderTarget* rt, HDC dc, const wchar_t* s, int n, RECT r, COLORREF c, HFONT font, DWRITE_TEXT_ALIGNMENT a, bool ellipsis) {
+    if (!rt) return false;
+    POINT o = {};
+    GetViewportOrgEx(dc, &o);   // 一覧は viewport をずらして描いている。D2D は装置の座標で
+    RECT dev = {r.left + o.x, r.top + o.y, r.right + o.x, r.bottom + o.y};
+    IDWriteTextLayout* lay = dw_layout(s, n, font, float(dev.right - dev.left), float(dev.bottom - dev.top), a, ellipsis);
+    if (!lay) return false;
+    HRESULT hr = E_FAIL;
+    if (SUCCEEDED(rt->BindDC(dc, &dev))) {
+        ID2D1SolidColorBrush* br = nullptr;
+        rt->BeginDraw();
+        rt->CreateSolidColorBrush(D2D1::ColorF(GetRValue(c) / 255.f, GetGValue(c) / 255.f, GetBValue(c) / 255.f), &br);
+        if (br) rt->DrawTextLayout(D2D1::Point2F(0, 0), lay, br, D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+        hr = rt->EndDraw();
+        if (br) br->Release();
+    }
+    lay->Release();
+    return SUCCEEDED(hr);
+}
+
+// DrawTextW (DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX) の代わり。絵文字を含む字は DirectWrite でカラーの絵文字に
+void draw_text(HDC dc, const wchar_t* s, int n, RECT r, UINT fmt) {
+    if (has_emoji(s, n) && dw().ok) {
+        DWRITE_TEXT_ALIGNMENT a = (fmt & DT_CENTER) ? DWRITE_TEXT_ALIGNMENT_CENTER : (fmt & DT_RIGHT) ? DWRITE_TEXT_ALIGNMENT_TRAILING : DWRITE_TEXT_ALIGNMENT_LEADING;
+        if (dw_draw(dw().rt, dc, s, n, r, GetTextColor(dc), HFONT(GetCurrentObject(dc, OBJ_FONT)), a, (fmt & DT_END_ELLIPSIS) != 0)) return;
+    }
+    DrawTextW(dc, s, n, &r, fmt);
 }
 
 bool register_class() {
@@ -201,9 +310,7 @@ void CandWindow::layout() {
         GetTextExtentPoint32W(dc, foot.c_str(), int(foot.size()), &fz);
         int x = pad_ + lz.cx + MulDiv(8, int(dpi_), 96);
         for (auto& s : sugg_) {
-            SIZE z;
-            GetTextExtentPoint32W(dc, W(s), int(s.size()), &z);
-            int w = z.cx + MulDiv(14, int(dpi_), 96);
+            int w = text_width(dc, W(s), int(s.size())) + MulDiv(14, int(dpi_), 96);
             sugg_x_.push_back({x, x + w});
             x += w + MulDiv(6, int(dpi_), 96);
         }
@@ -214,7 +321,7 @@ void CandWindow::layout() {
     int start = page_ * Composer::PAGE;
     int end = std::min(int(cands_.size()), start + Composer::PAGE);
     for (int i = start; i < end; i++) {
-        GetTextExtentPoint32W(dc, W(cands_[size_t(i)]), int(cands_[size_t(i)].size()), &sz);
+        sz.cx = text_width(dc, W(cands_[size_t(i)]), int(cands_[size_t(i)].size()));
         int nw = 0;   // 右に添える種類の幅
         if (size_t(i) < notes_.size() && !notes_[size_t(i)].empty()) {
             SIZE ns;
@@ -282,6 +389,15 @@ SIZE text_size(HDC dc, HFONT f, const u16& t) {
     g.MeasureString(W(t), INT(t.size()), &font, Gdiplus::PointF(0, 0), Gdiplus::StringFormat::GenericTypographic(), &out);
     z.cx = LONG(std::ceil(out.Width));
     z.cy = LONG(std::ceil(font.GetHeight(&g)));
+    // 絵文字を含む字は DirectWrite で描くので、幅も DirectWrite で
+    if (has_emoji(W(t), int(t.size()))) {
+        if (IDWriteTextLayout* lay = dw_layout(W(t), int(t.size()), f, 100000.f, 1000.f, DWRITE_TEXT_ALIGNMENT_LEADING, false)) {
+            DWRITE_TEXT_METRICS m = {};
+            lay->GetMetrics(&m);
+            lay->Release();
+            z.cx = LONG(std::ceil(m.widthIncludingTrailingWhitespace));
+        }
+    }
     return z;
 }
 // 強さの色: 弱い 赤 → オレンジ → 黄 → 黄緑 → 青 強い (青の濃さだけでは見分けにくい。ユーザー 2026-10-20)。
@@ -597,6 +713,14 @@ void CandWindow::paint_tree(Gdiplus::Graphics& g, HDC dc) {
         g.FillPath(&b, &p);
     };
     auto box_text = [&](const u16& t, Gdiplus::Font& f, const RECT& rc, COLORREF fg, Gdiplus::StringAlignment al) {
+        // 絵文字を含む字は DirectWrite でカラーの絵文字に (GDI+ の DrawString は豆腐になる。2026-11-11)
+        if (has_emoji(W(t), int(t.size()))) {
+            HFONT hf = &f == &fbig ? tfont_ : &f == &falt ? talt_ : tsmall_;
+            DWRITE_TEXT_ALIGNMENT a = al == Gdiplus::StringAlignmentCenter ? DWRITE_TEXT_ALIGNMENT_CENTER
+                                    : al == Gdiplus::StringAlignmentFar ? DWRITE_TEXT_ALIGNMENT_TRAILING : DWRITE_TEXT_ALIGNMENT_LEADING;
+            g.Flush(Gdiplus::FlushIntentionSync);   // ここまでの GDI+ の絵を先に書き込む (同じ絵に D2D が重ねる)
+            if (dw_draw(dw().rt_alpha, dc, W(t), int(t.size()), rc, fg, hf, a, false)) return;
+        }
         Gdiplus::StringFormat sf(Gdiplus::StringFormat::GenericTypographic());
         sf.SetAlignment(al);
         sf.SetLineAlignment(Gdiplus::StringAlignmentCenter);
@@ -783,7 +907,7 @@ void CandWindow::paint(HDC wdc) {
         RECT tr = {pad_ + num_w_, top, width_ - pad_, top + row_h_};
         u16 s = cands_[size_t(i)];
         SetTextColor(dc, selected ? c.sel_text : c.text);
-        DrawTextW(dc, W(s), int(s.size()), &tr, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
+        draw_text(dc, W(s), int(s.size()), tr, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX | DT_END_ELLIPSIS);
         // 提案の種類を右に薄い字で (もしかして・絵文字 …。Windows の候補の窓の見た目に合わせる、2026-10-14)
         if (size_t(i) < notes_.size() && !notes_[size_t(i)].empty()) {
             const u16& n = notes_[size_t(i)];   // 括弧は付けない (薄い字で注釈だと分かる)
@@ -821,7 +945,7 @@ void CandWindow::paint(HDC wdc) {
                 RoundRect(dc, xs.first, fy + m, xs.second, height_ - m, r, r);
             }
             RECT tr2 = {xs.first, fy, xs.second, height_};
-            DrawTextW(dc, W(sugg_[i]), int(sugg_[i].size()), &tr2, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+            draw_text(dc, W(sugg_[i]), int(sugg_[i].size()), tr2, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
         }
         SelectObject(dc, ob);
         SelectObject(dc, op);
