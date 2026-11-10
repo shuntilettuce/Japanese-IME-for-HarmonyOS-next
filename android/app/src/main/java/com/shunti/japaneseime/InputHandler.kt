@@ -348,6 +348,25 @@ class InputHandler(
             return
         }
         alphaRun = false
+        // ローマ字にならずに英字のまま読みに残った子音 (「kq」の k・打ち間違いを消した後の「p」): 続けて打ったキーとつながる綴りなら、
+        // 溜めている分に戻してつなぐ (p + a → ぱ、t + t → っt)。PC 版 Composer::type_char と同じ (ユーザー 2026-11-11
+        // 「子音が次の文字を打たれた時点で子音としてのフラグを失ってただのアルファベットになってる」)
+        if (romaji.pending().isEmpty() && key.length == 1 && key[0] in 'a'..'z') {
+            val c = key[0]
+            var n = 0
+            while (n < 3 && composingText.length > n && composingText[composingText.length - 1 - n] in 'a'..'z') n++
+            while (n > 0) {
+                val back = composingText.takeLast(n)
+                val sokuon = n == 1 && back[0] == c && c != 'n' && c !in "aiueo"
+                if (romaji.isPrefix(back + c) || sokuon) {
+                    composingText = composingText.dropLast(n)
+                    romaji.unread(back)
+                    if (conversionEnd > composingText.length) conversionEnd = 0
+                    break
+                }
+                n--
+            }
+        }
         val r = romaji.processKey(key)
         rawKeys.append(key)
         composingText += r.committed
