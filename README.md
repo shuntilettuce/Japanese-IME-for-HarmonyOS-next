@@ -1,6 +1,6 @@
-# shunti IME — zenz を使わない、自作 AI の日本語入力
+# shunti IME — zenz を使わないオリジナル AI の日本語入力
 
-Windows・Linux・Android・HarmonyOS で動く日本語 IME です。漢字変換は、モデルの設計・学習・推論エンジンまで一から作った小さな AI（**shuntelligence**）が、端末の中だけで行います。個人開発のオープンソースです。
+Windows・Linux・Android・HarmonyOS で動く日本語 IME です。漢字変換は、モデルの設計・学習・推論エンジンまでゼロから作った小さな AI（**shuntelligence**）が、端末の中だけで行います。個人開発のオープンソースです。
 
 **入手**: [Windows 版](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/windows-v0.7.9) ・ [Linux 版 (.deb)](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/linux-v0.7.7) ・ [Android 版](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/android-v1.3.4) ・ HarmonyOS 版（AppGallery で「shunti Japanese IME」）
 
@@ -9,33 +9,34 @@ Windows・Linux・Android・HarmonyOS で動く日本語 IME です。漢字変�
 > **ライセンス**: [MIT](./LICENSE)（辞書とモデルの重みは別ライセンス、下記参照）
 
 ---
-## zenz を使わない変換 AI
+## zenz 不使用の変換 AI
 
-AI で変換する日本語 IME の多くは、azooKey の zenz を使っています。shunti IME の AI は、zenz の重みも、zenz を先生にした学習も使っていない別系統です（作者の調べた範囲では、ほかに見当たりません）。
+AI で変換する日本語 IME の多くは、azooKey の zenz のラッパーソフトです。shunti IME の AI は、zenz の重みも、zenz の蒸留も使っていない完全な別系統です。（調べの限り日本唯一）。
 
-- 約 640 万パラメータの小さな Transformer。重みは **8.2MB**（int8）で、スマホの CPU だけで動きます
-- 辞書で読みから表記の候補の網を作り、AI がカーソルの左の文（と、固定した前の方を直すときは後ろの文）を読んで道を選びます
+- 約 640 万(6.3M)パラメータのごく小さな Transformer。重みは **8.2MB**（int8）で、スマホの CPU だけで動きます
+- 辞書で読みから表記の候補の網を作り、AI が左右の文を読んで道を選びます
 - 推論エンジンは C++ で自作し、4 つの OS で同じものが動きます
 
 ### 大手 IME より 20 ポイント以上高い
 
-同じ打鍵（ローマ字で打つ → スペースで変換 → Enter で確定）を各 IME に流し込み、確定した文を同じやり方で採点しました（前の文脈つき。shunti IME は同じ問題を変換エンジンに直接渡して測った）。
+同じ打鍵（ローマ字で打つ → スペースで変換 → Enter で確定）を各 IME に流し込み、確定した文を同じやり方で採点しました（shunti IME は同じ問題を変換エンジンに直接渡して計測）。
+zenz-v3.1-xsmall の約1/3のサイズで v3.1-small と同等のスコアを叩き出します。
 
-| 1 位の正解率 | 動き方 | AJIMEE-Bench | 日常の文 | dev |
+| 1 位の正解率 | サイズ | AJIMEE-Bench | 日常の文 | dev |
 |---|---|---|---|---|
-| **shunti IME（S8）** | **CPU だけ・端末の中（8.2MB）** | **81.3%** | **94.3%** | **85.6%** |
+| **shunti IME（S8）** | **6.3M** | 81.3% | **94.3%** | **85.6%** |
 | Google 日本語入力 | | 53.8% | 81.0% | 70.9% |
 | Microsoft IME | | 54.4% | 78.1% | 71.7% |
 | Copilot Keyboard（Microsoft） | | 54.9% | 88.6% | 68.8% |
-| zenz-v3.1-xsmall（azooKey） | 端末の中 | 70.3% | 91.4% | 79.5% |
-| zenz-v3.1-small（azooKey） | 端末の中・より大きいモデル | 88.5% | 94.3% | 85.5% |
+| zenz-v3.1-xsmall（azooKey） | 22.5M | 70.3% | 91.4% | 79.5% |
+| zenz-v3.1-small（azooKey） | 90.5M | **88.5%** | **94.3%** | 85.5% |
 
 難しい変換を集めた [AJIMEE-Bench](https://github.com/azooKey/AJIMEE-Bench)（azooKey 作、CC BY-SA 3.0。ローマ字で打てない字を含む 18 問を除いた 182 問）では、より重いモデルの zenz-v3.1-small に及びませんが、日常の文では並びます。日常の文（105 文）は普通の会話で出るような文を集めた自作のベンチです。2026 年 10〜11 月、作者調べ。
 
 ### 完全ローカル
 
-- 変換は端末の中で完結し、打った文字を外へ送信しません。Android 版はインターネットの権限そのものを持ちません
-- モデルの重みと推論のコードは公開しています
+- 変換は端末の中で完結し、打った文字を外へ送信しません。
+- モデルの重みと推論のコードは公開されています。
 
 ### タイプミスは文脈を見て直す
 
@@ -49,10 +50,10 @@ AI で変換する日本語 IME の多くは、azooKey の zenz を使ってい�
 - 英字の語は、ふだん書かれる形で出ます（iphone → **iPhone**、ぎっとはぶ → **GitHub**）
 - 固有名詞は Wikipedia から約 39 万語、企業名や人名地名など
 
-### 変換以外も気が利く
+### 変換以外も気が利かせる点
 
-- 日付（きょう → 2026/11/06 …）・郵便番号から住所・絵文字・顔文字・括弧も、候補の中に提案として並びます
-- 「お疲れ様です」と打つと、続けて「。」「本日の進捗報告です。」のように、よく打つ文の流れを覚えて出します
+- 日付（きょう → 2026/11/06 …）・郵便番号から住所・絵文字・顔文字・各種記号も、候補の中に提案として並びます
+- よく打つ文の流れは覚え、提案として予測します
 - ＠の後ろには gmail.com などのドメインを出します
 
 元は HarmonyOS NEXT 向けに唯一存在したフリック対応の日本語 IME で、Windows・Linux・Android には後から対応しました。
