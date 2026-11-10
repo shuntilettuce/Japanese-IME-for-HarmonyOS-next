@@ -15,8 +15,8 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
     /** 読み -> 打ったキーの並び (InputHandler が QWERTY・GODAN で打った分を覚えている。無ければ null) */
     var keysFor: (String) -> Pair<String, IntArray>? = { null }
 
-    /** (語の読み, 左の文) -> 学習で置き換える表記 (Learning.top) */
-    var learnedTop: (String, String) -> String? = { _, _ -> null }
+    /** (語の読み, 左の文, 文節の頭の語の品詞) -> 学習で置き換える表記 (Learning.top) */
+    var learnedTop: (String, String, Int) -> String? = { _, _, _ -> null }
 
     // ---- 長い入力: 前の方を固定して、後ろだけを変換する ----
     // 変換 1 回が BUDGET_MS を超えて遅れを感じる長さになったら、1 位の候補の語の区切りのうち、最後の KEEP_WORDS 語より前にあって、
@@ -194,6 +194,12 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
         // 文節 (自立語 + 付属語) ごとに学習を引く (PC 版 Composer::convert_phrases と同じ単位)。語の単位 (1〜3 語) で引くと、
         // か・と・て のような 1 字の付属語まで覚えた表記に置き換わった (ユーザー 2026-11-07)
         if (r.phraseEnds.isEmpty()) return r
+        // 1 位の語ごとの品詞 (語の読みの始まり -> 左 ID)。文節の頭の語の品詞で学習を引く (PC 版と同じ。2026-11-09)
+        val lidAt = HashMap<Int, Int>()
+        if (r.lids.size == r.ends.size) {
+            var st = 0
+            for (w in r.ends.indices) { lidAt[st] = r.lids[w]; st = r.ends[w] }
+        }
         val path = ArrayList<String>()
         var left = ctx
         var start = 0
@@ -209,7 +215,7 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
                 if (end == pe) break
             }
             if (j == i || top[j - 2].toInt() != pe) return r   // 文節の区切りが経路の語の区切りと合わない
-            val t = learnedTop(tail.substring(start, pe), left)
+            val t = learnedTop(tail.substring(start, pe), left, lidAt[start] ?: -1)
             if (t != null && t != was.toString()) {
                 changed = true
                 path.add(pe.toString())
@@ -229,8 +235,8 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
         return Engine.Result((listOf(left.substring(ctx.length)) + r.cands).distinct(), ends, lens, r.sugg, listOf(path.joinToString("\u0001")) + r.paths)
     }
 
-    /** 語の置き換え: 読み・表記・語の左の文 */
-    class Word(val reading: String, val surface: String, val left: String)
+    /** 語の置き換え: 読み・表記・語の左の文。start = 読みの全体 (changedWords の target) の中での語の始まり (品詞を引く) */
+    class Word(val reading: String, val surface: String, val left: String, val start: Int = -1)
 
     /** 1 位以外を選んだとき、1 位の経路と違う所を返す。分からなければ null (1 位を選んだ・経路に無い候補) */
     fun changedWords(target: String, chosen: String): List<Word>? {
@@ -244,7 +250,7 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
         val top = paths[0].split('\u0001')
         for (p in 1 until paths.size) {
             val words = paths[p].split('\u0001')
-            if (words.filterIndexed { i, _ -> i % 2 == 1 }.joinToString("") == pick) return diffWords(ctx2, tail, top, words)
+            if (words.filterIndexed { i, _ -> i % 2 == 1 }.joinToString("") == pick) return diffWords(ctx2, tail, top, words, fKana.length)
         }
         return null
     }
@@ -256,14 +262,14 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
                 val head = chunks.mapIndexed { idx, c -> if (idx == i) c.cands[j] else c.cands[0] }.joinToString("")
                 if (!chosen.startsWith(head)) continue
                 val left = (fCtx + chunks.take(i).joinToString("") { it.cands[0] }).takeLast(40)
-                return listOf(Word(chunks[i].kana, chunks[i].cands[j], left))
+                return listOf(Word(chunks[i].kana, chunks[i].cands[j], left, chunks.take(i).sumOf { it.kana.length }))
             }
         }
         return null
     }
 
     /** a・b は [読みの終わり, 表記, …]。両方の語の区切りがそろう所まで進めて、表記が違えば b の側を返す */
-    private fun diffWords(ctx: String, tail: String, a: List<String>, b: List<String>): List<Word> {
+    private fun diffWords(ctx: String, tail: String, a: List<String>, b: List<String>, base: Int): List<Word> {
         val out = ArrayList<Word>()
         var i = 0
         var j = 0
@@ -287,7 +293,7 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
                     sb += b[j + 1]
                 }
             }
-            if (sa != sb) out.add(Word(tail.substring(start, ea), sb, left))
+            if (sa != sb) out.add(Word(tail.substring(start, ea), sb, left, base + start))
             left += sb
             start = ea
             i += 2
@@ -297,6 +303,38 @@ class AiConverter(private val engine: Engine, private val worker: ExecutorServic
     }
 
     /** 予測 (読みの続く辞書の語) */
+    /**
+     * 確定した文 (読み, 表記) の語ごとの品詞 (Engine.pathPos)。エンジンは変換と同じ worker で呼ぶ (確定のときに 1 回。辞書の網をたどるだけ)。
+     * 品詞ごとの学習で、選んだ文の中での品詞を決める (PC 版と同じ。2026-11-09)。間に合わなければ空
+     */
+    fun pathPos(reading: String, text: String): List<Engine.PosWord> {
+        if (reading.isEmpty() || text.isEmpty() || worker.isShutdown) return emptyList()
+        return runCatching {
+            worker.submit(java.util.concurrent.Callable { engine.pathPos(reading, text) }).get(1, java.util.concurrent.TimeUnit.SECONDS)
+        }.getOrElse { emptyList() }
+    }
+
+    // 品詞の記録の無い (前の版の) 学習の表記の品詞 (PC 版 Composer の lid_resolver と同じく、読みと表記だけで網をたどって
+    // 文節の頭の語の品詞)。PC はその場で引くが、ここは main のスレッドから呼ばれるので、無ければ worker に頼んで今回は -1
+    // (分からない = 前の版と同じ扱い)。結果は控えて次から使う
+    private val lidCache = HashMap<String, Int>()
+    private val lidPending = HashSet<String>()
+
+    fun resolveLid(reading: String, surface: String): Int {
+        val key = reading + "\t" + surface
+        lidCache[key]?.let { return it }
+        if (worker.isShutdown || !lidPending.add(key)) return -1
+        worker.execute {
+            val lid = runCatching { engine.pathPos(reading, surface).let { if (it.isEmpty()) -1 else Pos.headLid(it, 0) } }.getOrElse { -1 }
+            main.post {
+                lidPending.remove(key)
+                if (lidCache.size > 50000) lidCache.clear()
+                lidCache[key] = lid
+            }
+        }
+        return -1
+    }
+
     /**
      * その場で変換して待つ (文節の区切り・文節ごとの候補。HarmonyOS 版の convertNow)。エンジンは裏の変換と同じ 1 本の
      * worker で呼ぶ (2 つのスレッドから同時に触らない)。keys = true なら打ったキーの並びを渡す (読み全体のときだけ合う)

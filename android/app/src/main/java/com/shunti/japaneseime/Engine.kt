@@ -15,7 +15,12 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
                  /** 上位の経路 (表示しない。確定した語を学習するのに使う)。1 本ごとに "読みの終わり\u0001表記\u0001…" */
                  val paths: List<String> = emptyList(),
                  /** 1 位の経路 (paths[0]) の文節ごとの読みの終わり (PC 版と同じ決まり。学習の置き換えの単位)。分からなければ空 */
-                 val phraseEnds: IntArray = IntArray(0))
+                 val phraseEnds: IntArray = IntArray(0),
+                 /** 1 位の候補の語ごとの品詞の左 ID (ends と同じ並び。PC 版の Conversion の words の lid)。分からなければ空 */
+                 val lids: IntArray = IntArray(0))
+
+    /** 文の中の語 (読み・表記・品詞の左 ID) */
+    class PosWord(val reading: String, val surface: String, val lid: Int)
 
     /** 上位の候補。ctx = 確定済みの左の文脈、kana = 読み。times に段階ごとのミリ秒が入る (5 個) */
     fun convert(ctx: String, kana: String, max: Int = 10, model: Boolean = true, times: DoubleArray? = null): List<String> =
@@ -28,6 +33,7 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
         if (keys != null && keys.second.size == kana.length) nativeSetKeys(handle, keys.first, keys.second)
         val raw = nativeConvert(handle, ctx, kana, max * 2, model, times)
         val seg = nativeSegments(handle)
+        val segPos = nativeSegmentPos(handle)
         val paths = nativePaths(handle).toList()
         val phraseEnds = if (raw.isNotEmpty()) nativePhraseEnds(handle, kana, raw[0]) else IntArray(0)
         val sugg =nativeLastSuggest(handle).mapNotNull { s ->
@@ -38,7 +44,29 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
         // 差別語で 1 位が落ちたときは区切りを使わない (区切りは元の 1 位のもの)
         val ok = raw.isNotEmpty() && cands.isNotEmpty() && cands[0] == raw[0]
         val n = if (ok) seg.size / 2 else 0
-        return Result(cands, IntArray(n) { seg[2 * it] }, IntArray(n) { seg[2 * it + 1] }, sugg, paths, phraseEnds)
+        return Result(cands, IntArray(n) { seg[2 * it] }, IntArray(n) { seg[2 * it + 1] }, sugg, paths, phraseEnds,
+            if (segPos.size == n) segPos else IntArray(0))
+    }
+
+    /**
+     * 確定した文 (読み, 表記) になる経路のうちコストのいちばん低いものの語 (PC 版 Converter::path_pos)。経路が無ければ空。
+     * 品詞ごとの学習で、選んだ文の中での品詞を決める (2026-11-09)。convert と同じスレッドで呼ぶ
+     */
+    fun pathPos(reading: String, text: String): List<PosWord> {
+        if (handle == 0L || reading.isEmpty() || text.isEmpty()) return emptyList()
+        val a = nativePathPos(handle, reading, text)
+        val out = ArrayList<PosWord>()
+        var r0 = 0
+        var s0 = 0
+        for (i in 0 until a.size / 4) {
+            val r1 = a[4 * i]
+            val s1 = s0 + a[4 * i + 1]
+            if (r1 > reading.length || s1 > text.length || r1 < r0) return emptyList()
+            out.add(PosWord(reading.substring(r0, r1), text.substring(s0, s1), a[4 * i + 2]))
+            r0 = r1
+            s0 = s1
+        }
+        return out
     }
 
     /**
@@ -50,6 +78,12 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
         nativeUserClear(handle)
         var n = 0
         for (f in forms) {
+            // 学習した語で品詞が分かるもの: 選んだときの品詞の仲間の項目として (PC 版 set_user_words と同じ。2026-11-09)
+            if (f.lid >= 0 && nativeUserAddPos(handle, f.reading, f.surface, bonus, 0, f.lid) != 0) {
+                n++
+                continue
+            }
+            if (f.lid >= 0 && f.reading.length < 2) continue   // 1 字の語は品詞を決めて置けるときだけ (どの文脈でも安い 1 字の辺にしない)
             var ok = nativeUserAddLike(handle, f.reading, f.surface, f.tmplReading, f.tmplSurface, bonus)
             // 代表語がその語そのもの (学習で選んだ語) で辞書に無いときは、名詞の代表語で入れる (PC 版と同じ)
             if (ok == 0 && f.tmplReading == f.reading && f.tmplSurface == f.surface) ok = nativeUserAddLike(handle, f.reading, f.surface, "ねこ", "猫", bonus)
@@ -115,6 +149,13 @@ class Engine private constructor(private var handle: Long, private val slurs: Re
         @JvmStatic private external fun nativeComplete(h: Long, prefix: String, maxExtra: Int, maxOut: Int): Array<String>
         @JvmStatic private external fun nativeAiSet(h: Long, path: String)
         @JvmStatic private external fun nativeAiLearn(h: Long, ctx: String, reading: String, text: String): Float
+        /** 品詞の表 (Pos が使う) */
+        internal fun posTables(): Array<String> = nativePosTables()
+
+        @JvmStatic private external fun nativeSegmentPos(h: Long): IntArray
+        @JvmStatic private external fun nativePathPos(h: Long, reading: String, text: String): IntArray
+        @JvmStatic private external fun nativePosTables(): Array<String>
+        @JvmStatic private external fun nativeUserAddPos(h: Long, r: String, s: String, bonus: Int, flags: Int, lid: Int): Int
         @JvmStatic private external fun nativeUserAddLike(h: Long, r: String, s: String, tr: String, ts: String, bonus: Int): Int
     }
 }

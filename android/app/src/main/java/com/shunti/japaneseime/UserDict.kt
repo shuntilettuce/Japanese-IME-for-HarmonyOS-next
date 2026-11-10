@@ -18,7 +18,8 @@ class UserDict private constructor(private val file: File) {
     class Entry(val reading: String, val word: String, val pos: String = "noun", val group: String = "")
 
     /** 網に入れる形: 読み・表記と、品詞を写す代表語の同じ形 */
-    class Form(val reading: String, val surface: String, val tmplReading: String, val tmplSurface: String)
+    /** lid >= 0: 学習した語。辞書のその品詞の仲間の項目としてだけ置く (PC 版 UserDict::Form の lid。2026-11-09) */
+    class Form(val reading: String, val surface: String, val tmplReading: String, val tmplSurface: String, val lid: Int = -1)
 
     private val entries = ArrayList<Entry>()
 

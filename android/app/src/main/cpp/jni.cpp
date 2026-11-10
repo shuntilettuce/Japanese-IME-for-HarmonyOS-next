@@ -194,6 +194,65 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_com_shunti_japaneseime_Engine_nat
     return out;
 }
 
+// 直前の変換の 1 位の語ごとの品詞の左 ID (nativeSegments と同じ並び。PC 版の Conversion の words の lid)。nativeConvert の直後に同じスレッドで
+extern "C" JNIEXPORT jintArray JNICALL Java_com_shunti_japaneseime_Engine_nativeSegmentPos(JNIEnv* env, jclass, jlong p) {
+    auto* h = reinterpret_cast<Handle*>(p);
+    int32_t lids[512], rids[512];
+    int n = h ? kkc_last_segment_pos(h->e, lids, rids, 512) : 0;
+    if (n < 0) n = 0;
+    jintArray a = env->NewIntArray(jsize(n));
+    if (n > 0) env->SetIntArrayRegion(a, 0, jsize(n), reinterpret_cast<const jint*>(lids));
+    return a;
+}
+
+// 確定した文 (読み, 表記) になる経路のうちコストのいちばん低いものの語ごとの [読みの終わり, 表記の長さ, 左 ID, 右 ID] を並べたもの
+// (PC 版 Converter::path_pos。品詞ごとの学習で、選んだ文の中での品詞を決める。2026-11-09)。経路が無ければ空。nativeConvert と同じスレッドで
+extern "C" JNIEXPORT jintArray JNICALL Java_com_shunti_japaneseime_Engine_nativePathPos(JNIEnv* env, jclass, jlong p, jstring reading, jstring text) {
+    auto* h = reinterpret_cast<Handle*>(p);
+    std::vector<jint> v;
+    if (h) {
+        const jsize nr = env->GetStringLength(reading), nt = env->GetStringLength(text);
+        const size_t cap = size_t(nr) + 1;
+        std::vector<int32_t> ends(cap), l16(cap), lids(cap), rids(cap);
+        const jchar* r = env->GetStringChars(reading, nullptr);
+        const jchar* t = env->GetStringChars(text, nullptr);
+        const int n = kkc_path_pos(h->e, reinterpret_cast<const uint16_t*>(r), int(nr), reinterpret_cast<const uint16_t*>(t), int(nt),
+                                   ends.data(), l16.data(), lids.data(), rids.data(), int(cap));
+        env->ReleaseStringChars(reading, r);
+        env->ReleaseStringChars(text, t);
+        for (int i = 0; i < n; i++) { v.push_back(ends[size_t(i)]); v.push_back(l16[size_t(i)]); v.push_back(lids[size_t(i)]); v.push_back(rids[size_t(i)]); }
+    }
+    jintArray a = env->NewIntArray(jsize(v.size()));
+    if (!v.empty()) env->SetIntArrayRegion(a, 0, jsize(v.size()), v.data());
+    return a;
+}
+
+// 品詞の表 (desktop/core/pos_classes.h の POS_CLASSES・POS_GROUPS、左 ID ごとに 1 字)。[分類, 仲間]
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_shunti_japaneseime_Engine_nativePosTables(JNIEnv* env, jclass) {
+    jobjectArray out = env->NewObjectArray(2, env->FindClass("java/lang/String"), nullptr);
+    std::string c(shunti::POS_CLASSES, size_t(shunti::POS_CLASS_COUNT)), g(shunti::POS_GROUPS, size_t(shunti::POS_CLASS_COUNT));
+    jstring a = env->NewStringUTF(c.c_str()), b = env->NewStringUTF(g.c_str());
+    env->SetObjectArrayElement(out, 0, a);
+    env->SetObjectArrayElement(out, 1, b);
+    return out;
+}
+
+// 学習した語を、選んだときの品詞の仲間の中でいちばん安い辞書の項目を見本にして網に置く (PC 版 set_user_words と同じ
+// kkc_user_add_pos + POS_GROUPS。2026-11-09)。辞書にその仲間の項目が無ければ 0。nativeConvert と同じスレッドで
+extern "C" JNIEXPORT jint JNICALL Java_com_shunti_japaneseime_Engine_nativeUserAddPos(JNIEnv* env, jclass, jlong p, jstring r, jstring s,
+                                                                                     jint bonus, jint flags, jint lid) {
+    auto* h = reinterpret_cast<Handle*>(p);
+    if (!h || lid < 0) return 0;
+    const jsize nr = env->GetStringLength(r), ns = env->GetStringLength(s);
+    const jchar* a = env->GetStringChars(r, nullptr);
+    const jchar* b = env->GetStringChars(s, nullptr);
+    const int ok = kkc_user_add_pos(h->e, reinterpret_cast<const uint16_t*>(a), int(nr), reinterpret_cast<const uint16_t*>(b), int(ns), bonus, flags, lid,
+                                    shunti::POS_GROUPS, shunti::POS_CLASS_COUNT);
+    env->ReleaseStringChars(r, a);
+    env->ReleaseStringChars(s, b);
+    return ok;
+}
+
 // ユーザー辞書 (kkc_user_clear / kkc_user_add_like)。nativeConvert と同じスレッドで呼ぶ
 extern "C" JNIEXPORT void JNICALL Java_com_shunti_japaneseime_Engine_nativeUserClear(JNIEnv*, jclass, jlong p) {
     auto* h = reinterpret_cast<Handle*>(p);

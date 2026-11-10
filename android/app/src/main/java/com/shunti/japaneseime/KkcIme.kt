@@ -113,7 +113,9 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
                 engine = e
                 e?.setSuggest(settings.separateSuggest)
                 e?.allowSlurs = settings.allowSlurs
-                ai = if (e != null) AiConverter(e, worker, main).also { a -> a.keysFor = { k -> input.keysFor(k) }; a.learnedTop = { r, l -> learning.top(r, l) } } else null
+                ai = if (e != null) AiConverter(e, worker, main).also { a -> a.keysFor = { k -> input.keysFor(k) }; a.learnedTop = { r, l, lid -> learning.top(r, l, lid) } } else null
+                // 品詞の記録の無い (前の版の) 学習の表記は、読みと表記だけで網をたどって品詞を決める (PC 版と同じ。2026-11-09)
+                learning.lidResolver = ai?.let { a -> { r: String, s: String -> a.resolveLid(r, s) } }
                 ai?.setAiLearn(aiLearnPath())
                 userSynced = -1   // 新しいエンジンにユーザー辞書を入れ直す
                 sentForms = null
@@ -442,7 +444,7 @@ class KkcIme : InputMethodService(), InputHandler.Host, MenuView.Host {
         learnSynced = learning.version
         val forms = dict.engineForms() + learning.strongForms()
         // 学習のたびに版は変わるが、網に入れる語はたいてい同じ。同じなら入れ直さない (変換の控えも捨てずに済む)
-        val key = forms.joinToString("\u0001") { "${it.reading}\u0002${it.surface}\u0002${it.tmplReading}\u0002${it.tmplSurface}" }
+        val key = forms.joinToString("\u0001") { "${it.reading}\u0002${it.surface}\u0002${it.tmplReading}\u0002${it.tmplSurface}\u0002${it.lid}" }
         if (key == sentForms) return
         sentForms = key
         worker.execute {

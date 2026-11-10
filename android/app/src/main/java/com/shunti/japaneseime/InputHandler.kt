@@ -588,9 +588,12 @@ class InputHandler(
     /** 1 位以外を選んだ: 選び直した語だけを語として数える (読み全体だけだと次の文に効かない) */
     private fun learnCommit(reading: String, text: String): Learning.Undo? {
         val words = host.ai?.changedWords(reading, text)?.filter { it.reading != reading }.orEmpty()
-        if (words.isEmpty()) return if (reading.length <= MAX_WHOLE_LEARN_LEN) learning.recordChoice(reading, text, ctx) else null
-        val done = words.mapNotNull { learning.recordChoice(it.reading, it.surface, it.left) }
-        val whole = if (reading.length <= MAX_WHOLE_LEARN_LEN) learning.recordChoice(reading, text, ctx) else null
+        // 選んだ文の中での品詞 (文節の頭の語)。品詞ごとに分けて数える (PC 版と同じ。2026-11-09)
+        val pw = host.ai?.pathPos(reading, text).orEmpty()
+        val wholeLid = Pos.headLid(pw, 0)
+        if (words.isEmpty()) return if (reading.length <= MAX_WHOLE_LEARN_LEN) learning.recordChoice(reading, text, ctx, wholeLid) else null
+        val done = words.mapNotNull { learning.recordChoice(it.reading, it.surface, it.left, if (it.start >= 0) Pos.headLid(pw, it.start) else -1) }
+        val whole = if (reading.length <= MAX_WHOLE_LEARN_LEN) learning.recordChoice(reading, text, ctx, wholeLid) else null
         return learning.undoOf(done + listOfNotNull(whole))
     }
 
@@ -827,10 +830,15 @@ class InputHandler(
         val done = ArrayList<Learning.Undo>()
         if (!privateField) {
             var left = ctx
+            // 確定した文の中での品詞 (文節ごとの頭の語。学習を品詞ごとに分ける。PC 版と同じ。2026-11-09)
+            val pw = host.ai?.pathPos(reading, text).orEmpty()
+            var r0 = 0
             for (i in bSegs.indices) {
-                val u = if (bSegs[i] == bChosen[i]) learning.confirm(bSegs[i], bChosen[i], left) else learning.recordChoice(bSegs[i], bChosen[i], left)
+                val lid = if (pw.isEmpty()) -1 else Pos.headLid(pw, r0)
+                val u = if (bSegs[i] == bChosen[i]) learning.confirm(bSegs[i], bChosen[i], left, lid) else learning.recordChoice(bSegs[i], bChosen[i], left, lid)
                 if (u != null) done.add(u)
                 left += bChosen[i]
+                r0 += bSegs[i].length
             }
         }
         insertLearned(if (privateField) null else learning.undoOf(done), text, reading)

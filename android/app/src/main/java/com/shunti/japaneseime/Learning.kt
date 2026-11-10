@@ -17,7 +17,7 @@ internal fun writeAtomic(file: File, text: String): Boolean = runCatching {
 
 /**
  * 変換の学習 (HarmonyOS 版 KanaKanjiConverter の recordChoice / applyLearnedOrder と同じ決まり)。
- * 読み → {選んだ表記: 回数, "@day": 最後に選んだ日, "@c": {左の文脈: {表記: 回数}}}。読みは 2 万個まで (あふれたら、回数が少なく長く使っていない読みから捨てる。
+ * 読み → {選んだ表記: 回数, "@day": 最後に選んだ日, "@c": {左の文脈: {表記: 回数}}, "@p": {表記: 品詞の左 ID}}。読みは 2 万個まで (あふれたら、回数が少なく長く使っていない読みから捨てる。
  * 以前は 500 個で、普段使いだとすぐ押し出されていた。2026-10-24)、
  * 1 つの読みに表記は 5 個まで。候補の列は、選んだ回数の多い表記を前に寄せる。
  * 端末の中のファイル (filesDir/learned.json) にだけ保存する。
@@ -26,6 +26,11 @@ class Learning(private val file: File) {
     private var learned = LinkedHashMap<String, LinkedHashMap<String, Int>>()
     private val days = HashMap<String, Int>()   // 読み -> 最後に選んだ日 (1970-01-01 からの日数。M5 の「使う人の印」の時期に使う)
     private val contexts = HashMap<String, LinkedHashMap<String, LinkedHashMap<String, Int>>>()   // 読み -> 左の文脈 -> 表記 -> 回数 (古い文脈が前)
+    // 読み -> 表記 -> 品詞の左 ID (最後に選んだときの文の中での品詞。PC 版の @p と同じ。2026-11-09)
+    private val pos = HashMap<String, LinkedHashMap<String, Int>>()
+
+    /** 記録に品詞の無い (前の版の) 表記の品詞を決める関数 (読みと表記だけで網をたどる。PC 版 set_lid_resolver)。分からなければ -1 */
+    var lidResolver: ((String, String) -> Int)? = null
     private var dirty = false
 
     init {
@@ -37,11 +42,12 @@ class Learning(private val file: File) {
                     for (s in e.keys()) when (s) {
                         DAY -> days[r] = e.getInt(s)
                         CTX -> contexts[r] = readContexts(e.getJSONObject(s))
+                        POS -> pos[r] = LinkedHashMap<String, Int>().also { m -> val o2 = e.getJSONObject(s); for (k in o2.keys()) m[k] = o2.getInt(k) }
                         else -> put(s, e.getInt(s))
                     }
                 }
             }
-        }.onFailure { learned.clear(); days.clear(); contexts.clear(); keepBroken(file) }
+        }.onFailure { learned.clear(); days.clear(); contexts.clear(); pos.clear(); keepBroken(file) }
     }
 
     private fun readContexts(o: JSONObject) = LinkedHashMap<String, LinkedHashMap<String, Int>>().apply {
@@ -65,8 +71,11 @@ class Learning(private val file: File) {
 
     private var generation = 0
 
-    /** left = 語の左の文。分からなければ null (文脈の表には足さない) */
-    fun recordChoice(kana: String, candidate: String, left: String? = null): Undo? {
+    /**
+     * left = 語の左の文。分からなければ null (文脈の表には足さない)。
+     * lid = 選んだときの文の中での頭の語の品詞 (左 ID、-1 = 分からない)。品詞ごとに分けて数える (PC 版と同じ。2026-11-09)
+     */
+    fun recordChoice(kana: String, candidate: String, left: String? = null, lid: Int = -1): Undo? {
         // かなのままの表記も数える。数えないと、かなで打ち続けても 1 回選んだ漢字に勝てない (ユーザー 2026-10-31)
         if (kana.isEmpty() || candidate.isEmpty()) return null
         val key = left?.let { leftKey(it) }
@@ -84,6 +93,7 @@ class Learning(private val file: File) {
             evictedCount = w.value
             entry.remove(w.key)
             dropVotes(kana, w.key)
+            pos[kana]?.remove(w.key)
         }
         val undo = Undo(kana, candidate, count0, day0, key, emptyList(), evicted, evictedCount, generation)
         val count = (entry[candidate] ?: 0) + 1
@@ -92,6 +102,7 @@ class Learning(private val file: File) {
         dirty = true
         days[kana] = today()
         if (key != null) note(kana, key, candidate, 1)
+        if (lid >= 0) pos.getOrPut(kana) { LinkedHashMap() }[candidate] = lid   // 品詞は最後に選んだときのもの
         return undo
     }
 
@@ -110,20 +121,32 @@ class Learning(private val file: File) {
      * 文中の語の読みの表記を置き換える学習 (PC 版 Learning::top と同じ)。同じ左の文脈で選んだ回数から別の表記の票を引いて
      * SAME_CTX_MIN 以上、または ANY_CTX_MIN 回選んでいてこの文脈に別の表記の票が無い表記のうち、いちばん多く選んだもの
      */
-    fun top(kana: String, left: String): String? {
+    fun top(kana: String, left: String, lid: Int = -1): String? {
         val e = learned[kana] ?: return null
+        // 品詞 (PC 版と同じ。2026-11-09): 置き換える所の品詞の仲間 (want) と同じ仲間の表記は、その仲間の中の票だけでも「ほとんどこれ」と
+        // 言えれば置き換える (か を助詞で、化 を接尾で選んでいる読みでも、接尾の所は 化 に)。品詞の分からない表記はどの仲間にも入れる
+        val want = Pos.group(lid)
+        fun same(s: String): Boolean {
+            if (want == NO_GROUP) return true
+            val g = Pos.group(lidIn(kana, s))
+            return g == NO_GROUP || g == want
+        }
         val here = contexts[kana]?.get(leftKey(left))
         val all = here?.values?.sum() ?: 0
         // 文脈を問わずに置き換えるのは、その読みでほかの表記がほとんど選ばれていないときだけ (ほかの票が 1/4 以下。PC 版と同じ)。
         // 用途の違う表記を両方選ぶ短い読み (か/化・と/都) は同じ左の文脈で選んだときだけ置き換え、ほかはモデルに任せる (ユーザー 2026-11-06)
-        val total = e.values.filter { it > 0 }.sum()
+        // 品詞で絞る形 (仲間の違う表記は置き換えない) は、PC の入力ログを時刻順になぞると 直した 3・壊した 22 で悪かった
+        // (モデルの経路の品詞が違うから選び直している所まで止める)。仲間の中で数えるのは、置き換えてよい条件を足す側だけ
+        var total = 0
+        var totalAll = 0
+        for ((s, n) in e) if (n > 0) { totalAll += n; if (same(s)) total += n }
         var best: String? = null
         var most = 0
         for ((s, n) in e) {
             if (n <= most) continue
             val mine = here?.get(s) ?: 0
             val against = all - mine
-            val dominant = (total - n) * 4 <= n
+            val dominant = (totalAll - n) * 4 <= n || (want != NO_GROUP && same(s) && (total - n) * 4 <= n)
             if (mine - against >= SAME_CTX_MIN || (n >= ANY_CTX_MIN && against == 0 && dominant)) {
                 most = n
                 best = s
@@ -131,6 +154,9 @@ class Learning(private val file: File) {
         }
         return best
     }
+
+    /** 表記の品詞 (記録に無ければ lidResolver に聞く。PC 版 lid_in)。分からなければ -1 */
+    private fun lidIn(kana: String, surface: String): Int = pos[kana]?.get(surface) ?: lidResolver?.invoke(kana, surface) ?: -1
 
     /** 語ごとの記録と読み全体の記録をまとめて、1 回の取り消しで戻せる形に */
     fun undoOf(list: List<Undo>): Undo? = list.lastOrNull()?.let { Undo(it.kana, it.candidate, it.count, it.day, it.left, list.dropLast(1), it.evicted, it.evictedCount, it.generation, it.ctxAdd) }
@@ -160,7 +186,7 @@ class Learning(private val file: File) {
         } else {
             entry.remove(surface)
             dropVotes(kana, surface)
-            if (entry.isEmpty()) { learned.remove(kana); days.remove(kana); contexts.remove(kana) }
+            if (entry.isEmpty()) { learned.remove(kana); days.remove(kana); contexts.remove(kana); pos.remove(kana) }
         }
         dirty = true
         version++
@@ -172,32 +198,42 @@ class Learning(private val file: File) {
      * 後ろの同じかな (なにを → 何を の を) は外す。代表語はその語そのもの (辞書に無い語は入らない)
      */
     fun strongForms(): List<UserDict.Form> {
-        val found = ArrayList<Triple<Int, String, String>>()
+        val found = ArrayList<Triple<Int, String, Pair<String, Int>>>()
         for ((r, e) in learned) {
             if (r.length > MAX_NET_READING) continue
             // ほかの表記も選んでいる読み (ほかの票が 1/4 を超える: か/化・し/死) は入れない (PC 版と同じ。ユーザー 2026-11-06)
-            val total = e.values.filter { it > 0 }.sum()
+            // 品詞ごとに分ける (PC 版と同じ。2026-11-09): ほかの票は同じ品詞の仲間の表記だけで数える (か の助詞と 化 の接尾は取り合わない)
+            val lids = e.mapValues { (s, n) -> if (n > 0) lidIn(r, s) else -1 }
             for ((s, n) in e) {
-                if (n < 2 || (total - n) * 4 > n) continue
+                if (n < 2) continue
+                val lid = lids[s] ?: -1
+                val g = Pos.group(lid)
+                var total = 0
+                for ((s2, n2) in e) {
+                    val g2 = Pos.group(lids[s2] ?: -1)
+                    if (n2 > 0 && (g == NO_GROUP || g2 == NO_GROUP || g2 == g)) total += n2
+                }
+                if ((total - n) * 4 > n) continue
                 var k = 0
                 while (k < r.length && k < s.length && r[r.length - 1 - k] == s[s.length - 1 - k] && r[r.length - 1 - k] in 'ぁ'..'ゖ') k++
                 val rr = r.dropLast(k)
                 val ss = s.dropLast(k)
                 // 1 字の読み (し・か・と) は網に入れない: どの文脈でも安い 1 字の辺になり区切りまで変えた (していない -> し/ていない)。
-                // 同じ左の文脈で選んだときの置き換え (top) は残る (PC 版と同じ)
-                if (rr.length >= 2 && ss.isNotEmpty() && rr != ss) found.add(Triple(n, rr, ss))
+                // 同じ左の文脈で選んだときの置き換え (top) は残る (PC 版と同じ)。
+                // 品詞の分かる語は、その品詞の辺としてだけ置くので 1 字の読みも入れる (PC 版と同じ。2026-11-09)
+                if ((rr.length >= 2 || lid >= 0) && ss.isNotEmpty() && rr != ss) found.add(Triple(n, rr, ss to lid))
             }
         }
         // 上位を取ったあとは読みの順に (数の順のままだと、回数が 1 増えるたびに並びが変わって網を入れ直すことになる)
-        return found.sortedByDescending { it.first }.take(MAX_NET_WORDS).sortedWith(compareBy({ it.second }, { it.third }))
-            .map { UserDict.Form(it.second, it.third, it.second, it.third) }
+        return found.sortedByDescending { it.first }.take(MAX_NET_WORDS).sortedWith(compareBy({ it.second }, { it.third.first }))
+            .map { UserDict.Form(it.second, it.third.first, it.second, it.third.first, it.third.second) }
     }
 
     /** かなのまま Enter で確定した: この読みに学習があるときだけ数える (PC の confirm と同じ。全部数えると読みの枠を食う) */
     fun confirmKana(kana: String, left: String): Undo? = confirm(kana, kana, left)
 
     /** 選び直さずに確定した表記: この読みに学習があるときだけ数える (PC の confirm と同じ) */
-    fun confirm(kana: String, surface: String, left: String): Undo? = if (learned.containsKey(kana)) recordChoice(kana, surface, left) else null
+    fun confirm(kana: String, surface: String, left: String, lid: Int = -1): Undo? = if (learned.containsKey(kana)) recordChoice(kana, surface, left, lid) else null
 
     /** 確定の取り消し: 足す前の値に戻す */
     fun restore(u: Undo) {
@@ -217,6 +253,7 @@ class Learning(private val file: File) {
             learned.remove(u.kana)
             days.remove(u.kana)
             contexts.remove(u.kana)
+            pos.remove(u.kana)
         } else if (u.day != null) {
             days[u.kana] = u.day
         } else {
@@ -230,7 +267,7 @@ class Learning(private val file: File) {
         val entry = learned[kana] ?: return
         if (entry.remove(candidate) == null) return
         dropVotes(kana, candidate)
-        if (entry.isEmpty()) { learned.remove(kana); days.remove(kana); contexts.remove(kana) }
+        if (entry.isEmpty()) { learned.remove(kana); days.remove(kana); contexts.remove(kana); pos.remove(kana) }
         dirty = true
         version++
     }
@@ -250,6 +287,7 @@ class Learning(private val file: File) {
         learned.remove(weakest)
         days.remove(weakest)
         contexts.remove(weakest)
+        pos.remove(weakest)
     }
 
     /** 出来上がった候補の列のうち、選んだことのある表記を回数の多い順に前へ (他の並びはそのまま) */
@@ -297,6 +335,7 @@ class Learning(private val file: File) {
         learned.clear()
         days.clear()
         contexts.clear()
+        pos.clear()
         dirty = true
         version++
         generation++
@@ -309,6 +348,7 @@ class Learning(private val file: File) {
         for ((r, e) in learned) o.put(r, JSONObject().apply {
             for ((s, n) in e) put(s, n)
             days[r]?.let { put(DAY, it) }
+            pos[r]?.takeIf { it.isNotEmpty() }?.let { put(POS, JSONObject(it as Map<*, *>)) }
             contexts[r]?.let { t -> put(CTX, JSONObject().also { c -> for ((left, v) in t) c.put(left, JSONObject(v as Map<*, *>)) }) }
         })
         dirty = !writeAtomic(file, o.toString())   // 書けなければ次の機会にもう一度
@@ -330,6 +370,8 @@ class Learning(private val file: File) {
         private const val MAX_NET_WORDS = 500
         private const val DAY = "@day"
         private const val CTX = "@c"
+        private const val POS = "@p"
+        private const val NO_GROUP = '\u0000'   // 品詞の仲間が分からない (Pos.group)
         private const val SAME_CTX_MIN = 1      // 手で 1 度
         private const val ANY_CTX_MIN = 3       // 手で 3 度
         private const val CTX_CHARS = 2         // 文脈として覚える左の字数
