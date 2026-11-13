@@ -152,8 +152,17 @@ const char* model_file_name(const std::string& model) {
     if (model == "light") return "kkc_model_light.bin";
     if (model == "s2") return "kkc_model_s2.bin";   // 比較用の昔のモデル
     if (model == "m5") return "kkc_model_m5.bin";   // 正確 (M5、2026-11-11。英字の辺は mid2)
+    if (model == "pure") return "kkc_model_pure.bin";   // クリーン (PureXS + クリーン辞書、2026-11-12。英字の辺は mid2)
     // 高精度 (M4) は廃止: S7 (標準) の方が精度が上で、誤字も直せる (2026-10-14)。前に high を選んでいた人も標準を読む
     return "kkc_model.bin";
+}
+
+const char* lex_file_name(const std::string& model) {
+    return model == "pure" ? "kkc_lex_clean.bin" : "kkc_lex.bin";   // クリーン辞書 = Mozc + 教材の語・Wikidata (CC0) の固有名詞
+}
+
+const char* variants_file_name(const std::string& model) {
+    return model == "pure" ? "kkc_variants_clean.tsv" : "kkc_variants.tsv";
 }
 
 bool SettingsFile::refresh() {

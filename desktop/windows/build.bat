@@ -31,6 +31,10 @@ rem light / high conversion models (models\, fetched by tools\fetch_ai_assets.py
 if exist "%ROOT%\models\kkc_model_light.bin" xcopy /D /Y /Q "%ROOT%\models\kkc_model_light.bin" "%DIST%\" >nul
 if exist "%ROOT%\models\kkc_model_s2.bin" copy /Y "%ROOT%\models\kkc_model_s2.bin" "%DIST%\" >nul
 if exist "%ROOT%\models\kkc_model_m5.bin" copy /Y "%ROOT%\models\kkc_model_m5.bin" "%DIST%\" >nul
+rem clean set (PureXS + clean dictionary, 2026-11-12): model, dictionary and variants go together
+if exist "%ROOT%\models\kkc_model_pure.bin" xcopy /D /Y /Q "%ROOT%\models\kkc_model_pure.bin" "%DIST%\" >nul
+if exist "%ROOT%\models\kkc_lex_clean.bin" xcopy /D /Y /Q "%ROOT%\models\kkc_lex_clean.bin" "%DIST%\" >nul
+if exist "%ROOT%\models\kkc_variants_clean.tsv" xcopy /D /Y /Q "%ROOT%\models\kkc_variants_clean.tsv" "%DIST%\" >nul
 copy /Y "%HERE%install.ps1" "%DIST%\" >nul
 copy /Y "%HERE%install.bat" "%DIST%\" >nul
 copy /Y "%HERE%uninstall.bat" "%DIST%\" >nul

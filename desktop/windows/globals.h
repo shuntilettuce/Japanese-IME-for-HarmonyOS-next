@@ -60,6 +60,7 @@ private:
     size_t lex_size_ = 0;
     const void* model_ = nullptr;
     std::string model_file_;
+    std::string lex_file_;   // 今の辞書のファイル名 (クリーン版は別の辞書)
 };
 Core& core();
 

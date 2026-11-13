@@ -56,7 +56,6 @@ Core::Core()
     flow.load(user_dir() / L"flow.tsv");
     // 計測用: 別のフォルダの辞書とモデルを使う (同じ DLL のまま、モデルを替えて比べるため)
     if (const wchar_t* d = _wgetenv(L"SHUNTI_DATA_DIR"); d && *d) dir_ = d;
-    lex_ = map_file(dir_ / L"kkc_lex.bin", lex_size_);
     settings.refresh();
     use_model(settings.get().model);
     // エンジンの作業用のスレッドを持つので、プロセスが終わるまで DLL を外さない
@@ -66,26 +65,37 @@ Core::Core()
 }
 
 void Core::use_model(const std::string& name) {
-    if (!lex_) return;
     std::string file = model_file_name(name);
+    std::string lexf = lex_file_name(name), varf = variants_file_name(name);
     std::error_code ec;
-    if (!std::filesystem::exists(dir_ / file, ec)) file = model_file_name("standard");
-    if (file == model_file_) return;
-    size_t ms = 0;
+    // クリーン版はモデルと辞書が組。どちらかが無ければ標準に戻す
+    if (!std::filesystem::exists(dir_ / file, ec) || !std::filesystem::exists(dir_ / lexf, ec)) {
+        file = model_file_name("standard"); lexf = lex_file_name("standard"); varf = variants_file_name("standard");
+    }
+    if (file == model_file_ && lexf == lex_file_) return;
+    size_t ms = 0, ls = lex_size_;
+    const void* lex = lexf == lex_file_ ? lex_ : map_file(dir_ / std::filesystem::path(lexf), ls);
+    if (!lex) return;
     const void* model = map_file(dir_ / file, ms);
-    if (!model) return;
-    conv.set_latin_mid2(file == "kkc_model_m5.bin");   // M5 は網 mid2 で学んでいる
-    if (!conv.open(lex_, lex_size_, model, ms, 2)) {
+    if (!model) {
+        if (lex != lex_) UnmapViewOfFile(lex);
+        return;
+    }
+    conv.set_latin_mid2(file == "kkc_model_m5.bin" || file == "kkc_model_pure.bin");   // M5・PureXS は網 mid2 で学んでいる
+    if (!conv.open(lex, ls, model, ms, 2)) {
         UnmapViewOfFile(model);
+        if (lex != lex_) UnmapViewOfFile(lex);
         return;
     }
     if (model_) UnmapViewOfFile(model_);   // 前のモデル (エンジンは開き直したので、もう使っていない)
+    if (lex_ && lex != lex_) UnmapViewOfFile(lex_);   // 前の辞書も同じ
     model_ = model;
     model_file_ = file;
+    lex_ = lex; lex_size_ = ls; lex_file_ = lexf;
     // 書き方の対の表 (kkc_variants.tsv は辞書と同じフォルダ)。書き方の癖はどのモデルでも使う
     // (網に書き方の違う候補を足すのは、個人化を知っている M5 系のモデルのときだけ。engine.cpp の kkc_convert)
     std::string tsv;
-    if (read_file(dir_ / L"kkc_variants.tsv", tsv)) conv.set_variants(tsv);
+    if (read_file(dir_ / std::filesystem::path(varf), tsv)) conv.set_variants(tsv);
     // 書き方の癖: 文の種類 (丁寧・崩れ) の判定器 (kkc_register.bin も同じフォルダ。無ければ文の種類を見ずに数える)
     std::string reg;
     if (read_file(dir_ / L"kkc_register.bin", reg)) conv.set_register(reg);

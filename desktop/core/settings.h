@@ -111,6 +111,9 @@ struct Settings {
 
 // 変換モデルの設定の値 -> モデルのファイル名 (辞書と同じフォルダ)。知らない値は standard
 const char* model_file_name(const std::string& model);
+// モデルと組になる辞書・書き方の対の表 (クリーン版 pure だけ別の辞書。2026-11-12)
+const char* lex_file_name(const std::string& model);
+const char* variants_file_name(const std::string& model);
 
 // 読む (無い・壊れていれば既定のまま)。書く (一時ファイルから置き換える)
 bool load_settings(const std::filesystem::path& p, Settings& s);
