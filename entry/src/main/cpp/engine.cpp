@@ -573,6 +573,20 @@ constexpr int32_t LATIN_WORD_BONUS = 500;
 // (くらいあんと → client。網に入れると普通の外来語を乗っ取った)
 constexpr int32_t ENG_COST = 32000;
 constexpr int32_t ENG_LATIN_COST = 9000;   // 英カタカナ辞書の語を英字の辺に使うときのコスト (kkcnative2 と同じ)
+// 絵文字 (コスト 8000 台) と顔文字 (9300〜9399) の語か。変換の網には入れない: 文の途中の一語に選ばれて 1 位が「SP💦入力後」に
+// なった (ユーザー 2026-11-11「絵文字が第一候補に出るのは設計上おかしい」)。絵文字・顔文字は、読み全体に当たるときの決まった位置
+// (絵文字 4・5 位、顔文字 6 位)・提案・確定の後の帯でだけ出す (それぞれ辞書を直に引いているので、網から外しても出る)
+bool pict_word(const Lex& L, const Ent& en) {
+    if (en.cost < 8000 || en.cost > 9399 || (en.cost >= 9000 && en.cost < 9300)) return false;
+    const uint16_t* p = L.s_blob + en.soff;
+    bool pict = false;
+    for (int i = 0; i < int(en.slen); i++) {
+        const uint16_t c = p[i];
+        if ((c >= 0x3041 && c <= 0x30FF) || (c >= 0x4E00 && c <= 0x9FFF)) return false;   // かな・漢字を含む (普通の語)
+        if ((c >= 0xD800 && c <= 0xDBFF) || (c >= 0x2600 && c <= 0x27BF) || (c >= 0x2B00 && c <= 0x2BFF)) pict = true;
+    }
+    return en.cost >= 9300 || pict;   // 顔文字の帯は字を問わない
+}
 // 英字の辺 (K_LATIN) のコストに上乗せする値。かな・カタカナの語より英字の語を出にくくする (日本語寄りにする)
 constexpr int32_t LATIN_BIAS = 3000;
 // 辞書に無い英字の並び (打ったまま・大文字・頭だけ大文字) の語のコスト (学習の網 kkcnative2 と同じ)
@@ -1003,7 +1017,7 @@ void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& ba
                 if (!look(k2, s2, e2, a, b)) continue;
                 for (uint32_t j = a; j < b; j++) {
                     const Ent en = L.ent(j);
-                    if (en.cost >= ENG_COST) continue;
+                    if (en.cost >= ENG_COST || pict_word(L, en)) continue;
                     // 表記の文字列を作る前に、add と同じ基準 (下限・道のコスト) で捨てる (結果は変わらない)
                     const int32_t c0 = en.cost + TYPO_COST;
                     if (ctx.lmin[size_t(s + off)] + c0 + ctx.rmin[size_t(e + off)] - 2000 > ctx.best + TYPO_KEEP) continue;
@@ -1123,7 +1137,7 @@ std::vector<Edge> edges(const Lex& L, const ustr& r, const std::vector<UserWord>
             if (L.find(key.data(), int(key.size()), a, b)) {
                 for (uint32_t j = a; j < b; j++) {
                     const Ent en = L.ent(j);
-                    if (en.cost >= ENG_COST) continue;   // 英カタカナ辞書の語は網に入れない
+                    if (en.cost >= ENG_COST || pict_word(L, en)) continue;   // 英カタカナ辞書の語は網に入れない
                     ustr sf = from16(L.s_blob + en.soff, en.slen);
                     // 読みが「、」の手前で切れた作品名 (それは → それは、突然、嵐のように…・あした → 明日、キミと手をつなぐよ) は使わない。
                     // 辞書を作るときに題名の読みを途中までしか取れていなかった (約 1000 語。ユーザー 2026-10-17「固有名詞が強すぎる」)
@@ -1170,7 +1184,7 @@ std::vector<Edge> edges(const Lex& L, const ustr& r, const std::vector<UserWord>
             if (L.find(key.data(), int(key.size()), a, b))
                 for (uint32_t j = a; j < b; j++) {
                     const Ent en = L.ent(j);
-                    if (en.cost >= ENG_COST) continue;
+                    if (en.cost >= ENG_COST || pict_word(L, en)) continue;
                     out.push_back({s, e, from16(L.s_blob + en.soff, en.slen), en.lid, en.rid, en.cost, K_DICT});
                 }
         }
@@ -1637,7 +1651,7 @@ void latin_edges(const Lex& L, const std::vector<uint16_t>& keys, const std::vec
                     if (!L.find(key.data(), int(key.size()), a, b)) continue;
                     for (uint32_t j = a; j < b; j++) {
                         const Ent en = L.ent(j);
-                        if (en.cost >= ENG_COST) continue;
+                        if (en.cost >= ENG_COST || pict_word(L, en)) continue;
                         if (mid2) {
                             const ustr sf = from16(L.s_blob + en.soff, en.slen);
                             // 変体仮名・ゐゑゟ などの珍しい字の語はつながない (F𛀅・BrushTゐp)
