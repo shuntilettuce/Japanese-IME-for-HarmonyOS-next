@@ -31,7 +31,10 @@ public:
     explicit Learning(std::filesystem::path file) : file_(std::move(file)) {}
 
     // record の前の値 (確定の取り消し・時間を指定した消去で元に戻す)
-    struct Undo { u16 reading, surface; int count = 0, day = 0; bool hidden = false; u16 left; int add = 0; u16 evicted; int evicted_count = 0; };   // hidden: 消した操作を戻す。left・add: 文脈の表に足した分。evicted: 枠から押し出した表記
+    struct Undo { u16 reading, surface; int count = 0, day = 0; bool hidden = false; u16 left; int add = 0; u16 evicted; int evicted_count = 0;
+        // record の前の文脈の表と品詞の表 (snap のときだけ)。文脈の表は 8 個を超えると古い文脈を捨て、品詞は上書きするので、
+        // 引き算では戻らなかった (Muse 依頼 19: 取り消しで品詞の票が残る 90 件・古い文脈の票が消える 261 件。2026-11-13)
+        bool snap = false; std::vector<std::pair<u16, std::vector<std::pair<u16, int>>>> ctx; std::vector<std::pair<u16, int>> pos; };   // hidden: 消した操作を戻す。left・add: 文脈の表に足した分。evicted: 枠から押し出した表記
     // 手で選び直した表記を覚えて、すぐ保存する。2 回分に数える (実機の入力ログの時刻順の評価は MELTYPE_NOTES。ユーザー 2026-10-30)
     // left = 左の文脈 (語の学習を文脈ごとに数える。top が見る)
     // lid = 選んだときの文の中での頭の語の品詞 (左 ID、-1 = 分からない)。品詞ごとに分けて数える (2026-11-06)

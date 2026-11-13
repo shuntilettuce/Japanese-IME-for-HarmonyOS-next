@@ -364,9 +364,12 @@ Learning::Undo Learning::record(const u16& reading, const u16& surface, int add,
     undo.left = left_key(left);
     undo.add = add;
     Entry* e = find(reading);
+    undo.snap = true;   // 無かった読みは空の表が控え
     if (e) {
         undo.day = e->day;
         for (auto& c : e->counts) if (c.first == surface) undo.count = c.second;
+        undo.ctx = e->ctx;
+        undo.pos = e->pos;
     }
     u16 left_field = undo.left;   // 控えは 1 行 1 件。タブや改行があると行ごと捨てられる
     for (auto& ch : left_field) if (ch == u'\t' || ch == u'\n' || ch == u'\r') ch = u' ';
@@ -441,7 +444,8 @@ void Learning::restore(const std::vector<Undo>& us) {
         }
         if (!u.evicted.empty()) e->counts.push_back({u.evicted, u.evicted_count});
         e->day = u.day;
-        if (u.add != 0) note(*e, u.left, u.surface, -u.add);   // 負 = demote で引いた分を足し戻す
+        if (u.snap) { e->ctx = u.ctx; e->pos = u.pos; }                // record の前の表へ (押し出した文脈・上書きした品詞も戻る)
+        else if (u.add != 0) note(*e, u.left, u.surface, -u.add);   // 負 = demote で引いた分を足し戻す
         changed = true;
         if (e->counts.empty()) {
             entries_.erase(entries_.begin() + (e - entries_.data()));

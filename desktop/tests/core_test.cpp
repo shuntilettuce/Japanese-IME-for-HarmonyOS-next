@@ -995,6 +995,19 @@ int main(int argc, char** argv) {
         expect("context: saved", lc2.top(u"とった", u"写真を"), u"撮った");
         lc2.forget(u"とった", u"撮った");
         expect("context: forget", lc2.top(u"とった", u"写真を"), u16());
+        {   // 確定の取り消しで、押し出した古い文脈の票と上書きした品詞も戻る (Muse 依頼 19 の A・B。2026-11-13)
+            Learning lu(work / "learned_undo.json");
+            lu.clear();
+            const char16_t* lefts[] = {u"あい", u"かき", u"さし", u"たち", u"なに", u"はひ", u"まみ", u"やゆ"};
+            for (auto l : lefts) lu.record(u"きごう", u"記号", 2, l, 5);
+            auto slurp = [&] { std::ifstream f(work / "learned_undo.json", std::ios::binary); return std::string((std::istreambuf_iterator<char>(f)), {}); };
+            const std::string before = slurp();
+            auto u = lu.record(u"きごう", u"記号", 2, u"らり", 9);   // 9 個目の文脈で「あい」が押し出され、品詞は 9 に
+            expect("undo: pos overwritten", lu.lid_of(u"きごう", u"記号") == 9 ? u16(u"9") : u16(u"?"), u"9");
+            lu.restore({u});
+            expect("undo: pos back", lu.lid_of(u"きごう", u"記号") == 5 ? u16(u"5") : u16(u"?"), u"5");
+            expect("undo: file back (old context kept)", slurp() == before ? u16(u"same") : u16(u"differs"), u"same");
+        }
         {   // 用途の違う表記を両方選ぶ短い読み (か/化): 初めての文脈では取り合わずモデルに任せ、選んだ文脈ではそれぞれ (2026-11-06)
             Learning lk(work / "learned_ka.json");
             lk.clear();
