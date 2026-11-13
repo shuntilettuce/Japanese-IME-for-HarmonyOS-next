@@ -904,8 +904,10 @@ int main(int argc, char** argv) {
     expect("bs to empty", c.take_commit(), u"き");
 
     // ---- 英字・数字・記号
+    c.options.caps_alpha = true;   // 既定はオフ (2026-11-11)。オンの動きを確かめる
     keys(c, "Google{enter}");
     expect("uppercase run", c.take_commit(), u"Google");
+    c.options.caps_alpha = false;
     keys(c, "03-1234{enter}");
     expect("digits", c.take_commit(), u"03-1234");
     keys(c, "hai,sou.{enter}");
@@ -1399,6 +1401,7 @@ int main(int argc, char** argv) {
         Composer s(&conv, &learning, &dict);
         s.options.live_commit = false;
         s.options.private_mode = true;
+        s.options.caps_alpha = true;
         keys(s, "Kyou{enter}");
         expect("caps alpha on", s.take_commit(), u"Kyou");
         s.options.caps_alpha = false;

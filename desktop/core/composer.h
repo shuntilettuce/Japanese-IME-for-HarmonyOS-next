@@ -99,7 +99,7 @@ struct ComposerOptions {
     // 空白の幅は前後の字で決める (前後どちらかが半角の英数字なら半角、両側とも全角なら全角。settle_spaces)
     bool space_literal = false;
     bool punct_commit = false;  // 句読点で確定: 読みの終わりに 、。！？ を打ったら、句読点を添えて見えている形で確定する
-    bool caps_alpha = true;     // 大文字で打ち始めたら、そこから英字のまま (オフなら大文字の字だけ英字で、小文字はローマ字に戻る)
+    bool caps_alpha = false;    // 大文字で打ち始めたら、そこから英字のまま (オフ = 既定: 大文字の字だけ英字で、小文字はローマ字に戻る。英字は変換が判断する。2026-11-11)
     int punct = 0;                 // 句読点: 0 = 、。 1 = ，． 2 = 、． 3 = ，。
     bool digits_fullwidth = false; // 数字を全角で入れる
     u16 half_symbols;              // 半角で入れる記号 (詳細設定)

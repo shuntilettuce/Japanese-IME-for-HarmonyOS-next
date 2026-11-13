@@ -64,7 +64,7 @@ struct Settings {
     bool live_commit = true;         // リアルタイム確定
     bool live_display = false;       // ライブ変換: 入力中の文字を、空白を押す前から変換して見せる
     bool live_wait = false;          // ライブ変換を打つ手が止まってから行う
-    bool caps_alpha = true;          // 大文字で打ち始めたら英字のまま (ComposerOptions::caps_alpha)
+    bool caps_alpha = false;         // 大文字で打ち始めたら英字のまま (ComposerOptions::caps_alpha)。既定はオフ (2026-11-11)
     bool learn_log = false;          // 確定した文を手元に残す (設定の「学習を始める」で同意した人だけ)
     bool consent_asked = false;      // 同意を聞く画面を出した (更新の後に 1 度だけ出す)
     bool typed_strip = true;         // 入力中の字の上に読みの帯を出す
