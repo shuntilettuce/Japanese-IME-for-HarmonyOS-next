@@ -1,5 +1,7 @@
 import { InputHandler, InputMode } from '../ime/KeyboardController';
 import { kbTheme } from './Theme';
+import { MODE_KEY_FONT_SIZE, BACKSPACE_FONT_SIZE, ALPHA_CENTER_FONT_SIZE, ALPHA_CENTER_ACTIVE_FONT_SIZE, ALPHA_LANDSCAPE_FONT_SIZE, ALPHA_LANDSCAPE_ACTIVE_FONT_SIZE, ALPHA_HINT_FONT_SIZE, ALPHA_BUBBLE_FONT_SIZE, ALPHA_CARET_FONT_SIZE, ALPHA_SYMBOL_FONT_SIZE, ALPHA_CANCEL_FONT_SIZE, ALPHA_ENTER_FONT_SIZE, ALPHA_STATUS_FONT_SIZE, ALPHA_STATUS_IDLE_FONT_SIZE } from './ModeLabel';
+import { flickTriangleCommands, BUBBLE_VP } from './FlickFeedback';
 import { JP_FONT_FAMILY } from './JpFont';
 
 type FlickDir = 'center' | 'up' | 'right' | 'down' | 'left';
@@ -65,6 +67,10 @@ export struct AlphabetFlickKeyboardView {
   @State touchStartX: number = 0;
   @State touchStartY: number = 0;
   @State flickDir: FlickDir = 'center';
+  // キー 1 個の描画上の大きさ (vp)。onAreaChange で更新する (三角と浮き文字の位置に使う)。
+  @State keyAreaW: number = 0;
+  @State keyAreaH: number = 0;
+  @StorageLink('keyboardHeightVp') keyboardHeightVp: number = 260;
   // '' | 'right' | 'left' -- which one-handed hint popup is showing.
   @State oneHandHint: string = '';
 
@@ -139,7 +145,6 @@ export struct AlphabetFlickKeyboardView {
 
   private keyBg(row: number, col: number, key: FlickKeyDef): ResourceColor {
     if (key.special === 'case') { return kbTheme(this.isDark).specialBg; }
-    if (this.isActive(row, col)) { return kbTheme(this.isDark).accentSoft; }
     return this.keyChromeEnabled ? kbTheme(this.isDark).keyBg : 'transparent';
   }
 
@@ -152,11 +157,20 @@ export struct AlphabetFlickKeyboardView {
 
   private centerLabel(row: number, col: number, key: FlickKeyDef): string {
     if (key.special === 'case') { return this.caseLabel(); }
-    if (this.isActive(row, col)) { return getChar(key, this.flickDir); }
     return key.center;
   }
 
   private caseLabel(): string { return 'a/A'; }
+
+  // キーの実寸 (三角を描く範囲)。計測前は推定値を使う。
+  private keyW(): number {
+    return this.keyAreaW > 0 ? this.keyAreaW : this.flickKeyWidthVp;
+  }
+
+  private keyH(): number {
+    if (this.keyAreaH > 0) { return this.keyAreaH; }
+    return Math.max(0, (this.keyboardHeightVp - 24) / 4);
+  }
 
   private handleTouch(e: TouchEvent, row: number, col: number, key: FlickKeyDef): void {
     if (key.special === 'case') {
@@ -245,7 +259,7 @@ export struct AlphabetFlickKeyboardView {
     if (rowIdx === 0) {
       Text('取消')
         .fontFamily(JP_FONT_FAMILY)
-        .fontSize(14).textAlign(TextAlign.Center)
+        .fontSize(ALPHA_CANCEL_FONT_SIZE).textAlign(TextAlign.Center)
         .width(this.flickKeyWidthVp).height('100%')
         .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
         .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
@@ -257,7 +271,7 @@ export struct AlphabetFlickKeyboardView {
     } else if (rowIdx === 1) {
       Row() {
         SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(16)
+          .fontSize(ALPHA_CARET_FONT_SIZE)
           .fontColor([kbTheme(this.isDark).textPrimary])
       }
       .width(this.flickKeyWidthVp).height('100%')
@@ -265,22 +279,22 @@ export struct AlphabetFlickKeyboardView {
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).specialBg)
       .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) {
-            this.h().hapticTick();
-            this.lastChar = '';
-            this.startCurRepeat('left');
-          }
-          else if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.stopCurRepeat(); }
-        })
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) {
+          this.h().hapticTick();
+          this.lastChar = '';
+          this.startCurRepeat('left');
+        }
+        else if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.stopCurRepeat(); }
+      })
     } else if (rowIdx === 2) {
       Text('記号')
         .fontFamily(JP_FONT_FAMILY)
-        .fontSize(14).textAlign(TextAlign.Center)
+        .fontSize(ALPHA_SYMBOL_FONT_SIZE).textAlign(TextAlign.Center)
         .width(this.flickKeyWidthVp).height('100%')
         .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
         .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-        // Long-press to reveal the 左手モード hint, then flick up to switch.
+      // Long-press to reveal the 左手モード hint, then flick up to switch.
         .bindPopup(this.oneHandHint === 'left', {
           builder: this.OneHandHintPopup,
           placement: Placement.Top,
@@ -310,17 +324,21 @@ export struct AlphabetFlickKeyboardView {
           AppStorage.setOrCreate('keyboardSubMode', 'symbol');
         })
     } else {
-      Text(this.numericPadEnabled ? 'A1あ' : 'あA')
-        .fontFamily(JP_FONT_FAMILY)
-        .fontSize(12).textAlign(TextAlign.Center)
-        .width(this.flickKeyWidthVp).height('100%')
-        .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
-        .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-        .onClick(() => {
-          this.h().hapticTick();
-          this.h().cycleInputMode();   // 入力中の文字は確定しない (数字パッドで続けて打てるように)
-          this.lastChar = '';
-        })
+      Text() {
+        Span('あ').fontColor(kbTheme(this.isDark).textSecondary)
+        Span('a').fontColor(kbTheme(this.isDark).textPrimary)
+        Span(this.numericPadEnabled ? '1' : '').fontColor(kbTheme(this.isDark).textSecondary)
+      }
+      .fontFamily(JP_FONT_FAMILY)
+      .fontSize(MODE_KEY_FONT_SIZE).textAlign(TextAlign.Center)
+      .width(this.flickKeyWidthVp).height('100%')
+      .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
+      .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
+      .onClick(() => {
+        this.h().hapticTick();
+        this.h().cycleInputMode();   // 入力中の文字は確定しない (数字パッドで続けて打てるように)
+        this.lastChar = '';
+      })
     }
   }
 
@@ -328,7 +346,7 @@ export struct AlphabetFlickKeyboardView {
     if (rowIdx === 0) {
       Row() {
         SymbolGlyph($r('sys.symbol.delete_left'))
-          .fontSize(16)
+          .fontSize(BACKSPACE_FONT_SIZE)
           .fontColor([kbTheme(this.isDark).textPrimary])
       }
       .width(this.flickKeyWidthVp).height('100%')
@@ -336,19 +354,19 @@ export struct AlphabetFlickKeyboardView {
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).specialBg)
       .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) {
-            this.h().hapticTick();
-            this.lastChar = '';
-            this.startBsRepeat();
-          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-            this.stopBsRepeat();
-          }
-        })
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) {
+          this.h().hapticTick();
+          this.lastChar = '';
+          this.startBsRepeat();
+        } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+          this.stopBsRepeat();
+        }
+      })
     } else if (rowIdx === 1) {
       Row() {
         SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(16)
+          .fontSize(ALPHA_CARET_FONT_SIZE)
           .fontColor([kbTheme(this.isDark).textPrimary])
       }
       .width(this.flickKeyWidthVp).height('100%')
@@ -356,23 +374,23 @@ export struct AlphabetFlickKeyboardView {
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).specialBg)
       .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) {
-            this.h().hapticTick();
-            this.lastChar = '';
-            this.startCurRepeat('right');
-          }
-          else if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.stopCurRepeat(); }
-        })
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) {
+          this.h().hapticTick();
+          this.lastChar = '';
+          this.startCurRepeat('right');
+        }
+        else if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.stopCurRepeat(); }
+      })
     } else if (rowIdx === 2) {
       Text(this.inputState === 'COMPOSING' ? '文節' : this.inputState === 'BUNSETSU' ? '変換' : '空白')
         .fontFamily(JP_FONT_FAMILY)
-        .fontSize(this.inputState === 'IDLE' ? 12 : 14)
+        .fontSize(this.inputState === 'IDLE' ? ALPHA_STATUS_IDLE_FONT_SIZE : ALPHA_STATUS_FONT_SIZE)
         .textAlign(TextAlign.Center)
         .width(this.flickKeyWidthVp).height('100%')
         .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
         .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-        // Long-press to reveal the 右手モード hint, then flick up to switch.
+      // Long-press to reveal the 右手モード hint, then flick up to switch.
         .bindPopup(this.oneHandHint === 'right', {
           builder: this.OneHandHintPopup,
           placement: Placement.Top,
@@ -410,7 +428,7 @@ export struct AlphabetFlickKeyboardView {
     } else {
       Row() {
         SymbolGlyph($r('sys.symbol.arrow_right'))
-          .fontSize(16)
+          .fontSize(ALPHA_ENTER_FONT_SIZE)
           .fontColor([kbTheme(this.isDark).onAccent])
       }
       .width(this.flickKeyWidthVp).height('100%')
@@ -418,103 +436,140 @@ export struct AlphabetFlickKeyboardView {
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).accent)
       .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-        // 長押しは、アプリの指定 (送信など) に関係なく改行
-        .gesture(LongPressGesture({ duration: 400 }).onAction(() => {
-          this.h().hapticTick();
-          this.h().handleEnterLongPress();
-          this.lastChar = '';
-        }))
-        .onClick(() => {
-          this.h().hapticTick();
-          const st = AppStorage.get<string>('inputState') ?? 'IDLE';
-          if (st === 'BUNSETSU') {
-            this.h().commitBunsetsu();
-          } else if (st === 'SELECTING') {
-            this.h().commitTopCandidate();
-          } else if (st === 'COMPOSING') {
-            this.h().commitRaw();
-          } else {
-            this.h().handleEnterKey();
-          }
-          this.lastChar = '';
-        })
+      // 長押しは、アプリの指定 (送信など) に関係なく改行
+      .gesture(LongPressGesture({ duration: 400 }).onAction(() => {
+        this.h().hapticTick();
+        this.h().handleEnterLongPress();
+        this.lastChar = '';
+      }))
+      .onClick(() => {
+        this.h().hapticTick();
+        const st = AppStorage.get<string>('inputState') ?? 'IDLE';
+        if (st === 'BUNSETSU') {
+          this.h().commitBunsetsu();
+        } else if (st === 'SELECTING') {
+          this.h().commitTopCandidate();
+        } else if (st === 'COMPOSING') {
+          this.h().commitRaw();
+        } else {
+          this.h().handleEnterKey();
+        }
+        this.lastChar = '';
+      })
     }
   }
 
   @Builder KeyCell(rowIdx: number, colIdx: number, key: FlickKeyDef) {
-    if (this.isLandscape) {
-      Text(this.centerLabel(rowIdx, colIdx, key))
-        .fontFamily(JP_FONT_FAMILY)
-        .fontSize(this.isActive(rowIdx, colIdx) ? 18 : 14)
-        .fontColor(key.special === 'case' ? kbTheme(this.isDark).onAccent : kbTheme(this.isDark).textPrimary)
-        .fontWeight(FontWeight.Medium)
-        .textAlign(TextAlign.Center)
-        .width(this.flickKeyWidthVp)
+    Stack() {
+      if (this.isLandscape) {
+        Text(this.centerLabel(rowIdx, colIdx, key))
+          .fontFamily(JP_FONT_FAMILY)
+          .fontSize(this.isActive(rowIdx, colIdx) ? ALPHA_LANDSCAPE_ACTIVE_FONT_SIZE : ALPHA_LANDSCAPE_FONT_SIZE)
+          .fontColor(key.special === 'case' ? kbTheme(this.isDark).onAccent : kbTheme(this.isDark).textPrimary)
+          .fontWeight(FontWeight.Medium)
+          .textAlign(TextAlign.Center)
+          .width('100%')
+          .height('100%')
+          .backgroundColor(this.keyBg(rowIdx, colIdx, key))
+          .borderRadius(CELL_RADIUS)
+          .shadow(this.keyShadow(rowIdx, colIdx, key))
+      } else {
+        // 上・中・下の3帯。各帯は必ず中央揃えのコンテナで包む
+        // (FlickKeyboardView.KeyCell と同じ理由 ── Text に height だけ与えると
+        //  帯の中で上寄りになり、文字がずれて見える)。
+        Column({ space: 0 }) {
+          Row() {
+            Text(key.up !== undefined ? key.up : ' ')
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(ALPHA_HINT_FONT_SIZE)
+              .fontColor(this.hintColor(rowIdx, colIdx, 'up'))
+              .textAlign(TextAlign.Center)
+          }
+          .width('100%').height('26%')
+          .justifyContent(FlexAlign.Center)
+          .alignItems(VerticalAlign.Center)
+
+          Row({ space: 0 }) {
+            Text(key.left !== undefined ? key.left : ' ')
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(ALPHA_HINT_FONT_SIZE)
+              .fontColor(this.hintColor(rowIdx, colIdx, 'left'))
+              .width('25%').textAlign(TextAlign.Center)
+
+            Text(this.centerLabel(rowIdx, colIdx, key))
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(this.isActive(rowIdx, colIdx) ? ALPHA_CENTER_ACTIVE_FONT_SIZE : ALPHA_CENTER_FONT_SIZE)
+              .fontColor(key.special === 'case' ? kbTheme(this.isDark).onAccent : kbTheme(this.isDark).textPrimary)
+              .fontWeight(FontWeight.Medium)
+              .width('50%').textAlign(TextAlign.Center)
+
+            Text(key.right !== undefined ? key.right : ' ')
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(ALPHA_HINT_FONT_SIZE)
+              .fontColor(this.hintColor(rowIdx, colIdx, 'right'))
+              .width('25%').textAlign(TextAlign.Center)
+          }
+          .width('100%').height('44%')
+          .alignItems(VerticalAlign.Center)
+
+          Row() {
+            Text(key.down !== undefined ? key.down : ' ')
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(ALPHA_HINT_FONT_SIZE)
+              .fontColor(this.hintColor(rowIdx, colIdx, 'down'))
+              .textAlign(TextAlign.Center)
+          }
+          .width('100%').height('30%')
+          .justifyContent(FlexAlign.Center)
+          .alignItems(VerticalAlign.Center)
+        }
+        .width('100%')
         .height('100%')
         .backgroundColor(this.keyBg(rowIdx, colIdx, key))
         .borderRadius(CELL_RADIUS)
         .shadow(this.keyShadow(rowIdx, colIdx, key))
-        .onTouch((e: TouchEvent) => {
-          this.handleTouch(e, rowIdx, colIdx, key);
-        })
-    } else {
-      // 上・中・下の3帯。各帯は必ず中央揃えのコンテナで包む
-      // (FlickKeyboardView.KeyCell と同じ理由 ── Text に height だけ与えると
-      //  帯の中で上寄りになり、文字がずれて見える)。
-      Column({ space: 0 }) {
-        Row() {
-          Text(key.up !== undefined ? key.up : ' ')
-            .fontFamily(JP_FONT_FAMILY)
-            .fontSize(10)
-            .fontColor(this.hintColor(rowIdx, colIdx, 'up'))
-            .textAlign(TextAlign.Center)
-        }
-        .width('100%').height('26%')
-        .justifyContent(FlexAlign.Center)
-        .alignItems(VerticalAlign.Center)
-
-        Row({ space: 0 }) {
-          Text(key.left !== undefined ? key.left : ' ')
-            .fontFamily(JP_FONT_FAMILY)
-            .fontSize(10)
-            .fontColor(this.hintColor(rowIdx, colIdx, 'left'))
-            .width('25%').textAlign(TextAlign.Center)
-
-          Text(this.centerLabel(rowIdx, colIdx, key))
-            .fontFamily(JP_FONT_FAMILY)
-            .fontSize(this.isActive(rowIdx, colIdx) ? 22 : 18)
-            .fontColor(key.special === 'case' ? kbTheme(this.isDark).onAccent : kbTheme(this.isDark).textPrimary)
-            .fontWeight(FontWeight.Medium)
-            .width('50%').textAlign(TextAlign.Center)
-
-          Text(key.right !== undefined ? key.right : ' ')
-            .fontFamily(JP_FONT_FAMILY)
-            .fontSize(10)
-            .fontColor(this.hintColor(rowIdx, colIdx, 'right'))
-            .width('25%').textAlign(TextAlign.Center)
-        }
-        .width('100%').height('44%')
-        .alignItems(VerticalAlign.Center)
-
-        Row() {
-          Text(key.down !== undefined ? key.down : ' ')
-            .fontFamily(JP_FONT_FAMILY)
-            .fontSize(10)
-            .fontColor(this.hintColor(rowIdx, colIdx, 'down'))
-            .textAlign(TextAlign.Center)
-        }
-        .width('100%').height('30%')
-        .justifyContent(FlexAlign.Center)
-        .alignItems(VerticalAlign.Center)
       }
-      .width(this.flickKeyWidthVp)
-      .height('100%')
-      .backgroundColor(this.keyBg(rowIdx, colIdx, key))
-      .borderRadius(CELL_RADIUS)
-      .shadow(this.keyShadow(rowIdx, colIdx, key))
-      .onTouch((e: TouchEvent) => {
-        this.handleTouch(e, rowIdx, colIdx, key);
-      })
+
+      // 打っている方向の辺に出す三角 (中央・「a/A」キーには出さない)
+      if (this.isActive(rowIdx, colIdx) && this.flickDir !== 'center' && key.special !== 'case') {
+        Path()
+          .commands(flickTriangleCommands(this.flickDir, this.keyW(), this.keyH(), CELL_RADIUS))
+          .width(this.keyW())
+          .height(this.keyH())
+          .fill(kbTheme(this.isDark).accent)
+          .opacity(0.55)
+      }
+
+      // 打とうとしている文字を、キーの真上の中央に丸く表示する (薄い黒の枠付き)
+      if (this.isActive(rowIdx, colIdx) && key.special !== 'case') {
+        Column() {
+          Text(getChar(key, this.flickDir))
+            .fontFamily(JP_FONT_FAMILY)
+            .fontSize(ALPHA_BUBBLE_FONT_SIZE)
+            .fontColor(kbTheme(this.isDark).textPrimary)
+            .fontWeight(FontWeight.Medium)
+            .textAlign(TextAlign.Center)
+            .maxLines(1)
+        }
+        .width(BUBBLE_VP)
+        .height(BUBBLE_VP)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .borderRadius(BUBBLE_VP / 2)
+        .backgroundColor(kbTheme(this.isDark).keyBg)
+        .border({ width: 1, color: '#33000000' })
+        .align(Alignment.Top)
+        .translate({ y: -(BUBBLE_VP + 6) })
+      }
     }
+    .width(this.flickKeyWidthVp)
+    .height('100%')
+    .onAreaChange((_oldArea: ESObject, newArea: ESObject) => {
+      this.keyAreaW = Number(newArea.width);
+      this.keyAreaH = Number(newArea.height);
+    })
+    .onTouch((e: TouchEvent) => {
+      this.handleTouch(e, rowIdx, colIdx, key);
+    })
   }
 }

@@ -1,5 +1,7 @@
 import { InputHandler, InputMode } from '../ime/KeyboardController';
 import { kbTheme } from './Theme';
+import { MODE_KEY_FONT_SIZE, flickGlyphSize, NUM_CENTER_FONT_SIZE, NUM_CENTER_ACTIVE_FONT_SIZE, NUM_CENTER_LANDSCAPE_FONT_SIZE, BACKSPACE_FONT_SIZE } from './ModeLabel';
+import { flickTriangleCommands, BUBBLE_VP } from './FlickFeedback';
 import { JP_FONT_FAMILY } from './JpFont';
 
 type FlickDir = 'center' | 'up' | 'right' | 'down' | 'left';
@@ -59,6 +61,7 @@ const NUM_FLICK_GRID: FlickKeyDef[][] = [
 @Component
 export struct NumericPadView {
   @StorageLink('flickKeyWidthVp') flickKeyWidthVp: number = 72;
+  @StorageLink('keyboardHeightVp') keyboardHeightVp: number = 260;
   @StorageLink('isDark') isDark: boolean = false;
   @StorageLink('keyChromeEnabled') keyChromeEnabled: boolean = true;
   // 数字パッドが有効だと「あA」キーは 日本語→アルファベット→数字 の3段階に
@@ -73,6 +76,9 @@ export struct NumericPadView {
   @State touchStartX: number = 0;
   @State touchStartY: number = 0;
   @State flickDir: FlickDir = 'center';
+  // キー 1 個の描画上の大きさ (vp)。onAreaChange で更新する (三角と浮き文字の位置に使う)。
+  @State keyAreaW: number = 0;
+  @State keyAreaH: number = 0;
 
   private readonly THRESHOLD: number = 20;
 
@@ -145,14 +151,23 @@ export struct NumericPadView {
     return kbTheme(this.isDark).textSecondary;
   }
 
+  // 中央の数字は、フリック中でも常に自分の数字を出す (フリック先は浮き文字に出す)
   private centerLabel(row: number, col: number, key: FlickKeyDef): string {
-    if (this.isActive(row, col)) { return getCharByDir(key, this.flickDir); }
     return key.center;
   }
 
   private keyBg(row: number, col: number): ResourceColor {
-    if (this.isActive(row, col)) { return kbTheme(this.isDark).accentSoft; }
     return this.keyChromeEnabled ? kbTheme(this.isDark).keyBg : 'transparent';
+  }
+
+  // キーの実寸 (三角を描く範囲)。計測前は推定値を使う。
+  private keyW(): number {
+    return this.keyAreaW > 0 ? this.keyAreaW : this.flickKeyWidthVp;
+  }
+
+  private keyH(): number {
+    if (this.keyAreaH > 0) { return this.keyAreaH; }
+    return Math.max(0, (this.keyboardHeightVp - 24) / 4);
   }
 
   private keyShadow(row: number, col: number): ShadowOptions {
@@ -209,77 +224,112 @@ export struct NumericPadView {
   }
 
   @Builder KeyCell(rowIdx: number, colIdx: number, key: FlickKeyDef) {
-    if (this.isLandscape) {
-      // Landscape rows are short on height; drop the flick-direction hints and
-      // just show the center glyph, same simplification FlickKeyboardView
-      // uses. Flicking itself still works -- dirFrom() reads the touch
-      // gesture, not this label.
-      Text(this.centerLabel(rowIdx, colIdx, key))
-        .fontFamily(JP_FONT_FAMILY)
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .textAlign(TextAlign.Center)
-        .fontColor(kbTheme(this.isDark).textPrimary)
-        .width(this.flickKeyWidthVp).height('100%')
-        .backgroundColor(this.keyBg(rowIdx, colIdx))
-        .borderRadius(8).shadow(this.keyShadow(rowIdx, colIdx))
-        .onTouch((e: TouchEvent) => { this.handleTouch(e, rowIdx, colIdx, key); })
-    } else {
-      // 上・中・下の3帯。各帯は必ず中央揃えのコンテナで包む
-      // (FlickKeyboardView.KeyCell と同じ理由)。
-      Column({ space: 0 }) {
-        Row() {
-          Text(key.up ?? ' ')
-            .fontFamily(JP_FONT_FAMILY)
-            .fontSize(10)
-            .fontColor(this.hintColor(rowIdx, colIdx, 'up'))
-            .textAlign(TextAlign.Center)
+    Stack() {
+      if (this.isLandscape) {
+        // 横向きは行が低いので方向のヒントを出さず、中央の文字だけ。
+        Text(this.centerLabel(rowIdx, colIdx, key))
+          .fontFamily(JP_FONT_FAMILY)
+          .fontSize(NUM_CENTER_LANDSCAPE_FONT_SIZE)
+          .fontWeight(FontWeight.Medium)
+          .textAlign(TextAlign.Center)
+          .fontColor(kbTheme(this.isDark).textPrimary)
+          .width('100%').height('100%')
+          .backgroundColor(this.keyBg(rowIdx, colIdx))
+          .borderRadius(8).shadow(this.keyShadow(rowIdx, colIdx))
+      } else {
+        // 上・中・下の3帯。各帯は必ず中央揃えのコンテナで包む。
+        Column({ space: 0 }) {
+          Row() {
+            Text(key.up ?? ' ')
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(10)
+              .fontColor(this.hintColor(rowIdx, colIdx, 'up'))
+              .textAlign(TextAlign.Center)
+          }
+          .width('100%').height('26%')
+          .justifyContent(FlexAlign.Center)
+          .alignItems(VerticalAlign.Center)
+
+          Row({ space: 0 }) {
+            Text(key.left ?? ' ')
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(10)
+              .fontColor(this.hintColor(rowIdx, colIdx, 'left'))
+              .width('25%').textAlign(TextAlign.Center)
+
+            Text(this.centerLabel(rowIdx, colIdx, key))
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(this.isActive(rowIdx, colIdx) ? NUM_CENTER_ACTIVE_FONT_SIZE : NUM_CENTER_FONT_SIZE)
+              .fontColor(kbTheme(this.isDark).textPrimary)
+              .fontWeight(FontWeight.Medium)
+              .width('50%').textAlign(TextAlign.Center)
+
+            Text(key.right ?? ' ')
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(10)
+              .fontColor(this.hintColor(rowIdx, colIdx, 'right'))
+              .width('25%').textAlign(TextAlign.Center)
+          }
+          .width('100%').height('44%')
+          .alignItems(VerticalAlign.Center)
+
+          Row() {
+            Text(key.down ?? ' ')
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(10)
+              .fontColor(this.hintColor(rowIdx, colIdx, 'down'))
+              .textAlign(TextAlign.Center)
+          }
+          .width('100%').height('30%')
+          .justifyContent(FlexAlign.Center)
+          .alignItems(VerticalAlign.Center)
         }
-        .width('100%').height('26%')
-        .justifyContent(FlexAlign.Center)
-        .alignItems(VerticalAlign.Center)
+        .width('100%')
+        .height('100%')
+        .backgroundColor(this.keyBg(rowIdx, colIdx))
+        .borderRadius(8)
+        .shadow(this.keyShadow(rowIdx, colIdx))
+      }
 
-        Row({ space: 0 }) {
-          Text(key.left ?? ' ')
-            .fontFamily(JP_FONT_FAMILY)
-            .fontSize(10)
-            .fontColor(this.hintColor(rowIdx, colIdx, 'left'))
-            .width('25%').textAlign(TextAlign.Center)
+      // 打っている方向の辺に出す三角 (中央なら出さない)
+      if (this.isActive(rowIdx, colIdx) && this.flickDir !== 'center') {
+        Path()
+          .commands(flickTriangleCommands(this.flickDir, this.keyW(), this.keyH(), 8))
+          .width(this.keyW())
+          .height(this.keyH())
+          .fill(kbTheme(this.isDark).accent)
+          .opacity(0.55)
+      }
 
-          Text(this.centerLabel(rowIdx, colIdx, key))
+      // 打とうとしている文字を、キーの真上の中央に丸く表示する (薄い黒の枠付き)
+      if (this.isActive(rowIdx, colIdx)) {
+        Column() {
+          Text(getCharByDir(key, this.flickDir))
             .fontFamily(JP_FONT_FAMILY)
-            .fontSize(this.isActive(rowIdx, colIdx) ? 22 : 20)
+            .fontSize(Math.round(flickGlyphSize(this.flickKeyWidthVp, this.keyboardHeightVp) * 1.4))
             .fontColor(kbTheme(this.isDark).textPrimary)
             .fontWeight(FontWeight.Medium)
-            .width('50%').textAlign(TextAlign.Center)
-
-          Text(key.right ?? ' ')
-            .fontFamily(JP_FONT_FAMILY)
-            .fontSize(10)
-            .fontColor(this.hintColor(rowIdx, colIdx, 'right'))
-            .width('25%').textAlign(TextAlign.Center)
-        }
-        .width('100%').height('44%')
-        .alignItems(VerticalAlign.Center)
-
-        Row() {
-          Text(key.down ?? ' ')
-            .fontFamily(JP_FONT_FAMILY)
-            .fontSize(10)
-            .fontColor(this.hintColor(rowIdx, colIdx, 'down'))
             .textAlign(TextAlign.Center)
+            .maxLines(1)
         }
-        .width('100%').height('30%')
+        .width(BUBBLE_VP)
+        .height(BUBBLE_VP)
         .justifyContent(FlexAlign.Center)
-        .alignItems(VerticalAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .borderRadius(BUBBLE_VP / 2)
+        .backgroundColor(kbTheme(this.isDark).keyBg)
+        .border({ width: 1, color: '#33000000' })
+        .align(Alignment.Top)
+        .translate({ y: -(BUBBLE_VP + 6) })
       }
-      .width(this.flickKeyWidthVp)
-      .height('100%')
-      .backgroundColor(this.keyBg(rowIdx, colIdx))
-      .borderRadius(8)
-      .shadow(this.keyShadow(rowIdx, colIdx))
-      .onTouch((e: TouchEvent) => { this.handleTouch(e, rowIdx, colIdx, key); })
     }
+    .width(this.flickKeyWidthVp)
+    .height('100%')
+    .onAreaChange((_oldArea: ESObject, newArea: ESObject) => {
+      this.keyAreaW = Number(newArea.width);
+      this.keyAreaH = Number(newArea.height);
+    })
+    .onTouch((e: TouchEvent) => { this.handleTouch(e, rowIdx, colIdx, key); })
   }
 
   @Builder LeftKey(rowIdx: number) {
@@ -306,10 +356,10 @@ export struct NumericPadView {
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).specialBg)
       .borderRadius(8).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) { this.startCurRepeat('left'); }
-          else if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.stopCurRepeat(); }
-        })
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) { this.startCurRepeat('left'); }
+        else if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.stopCurRepeat(); }
+      })
     } else if (rowIdx === 2) {
       Text('記号')
         .fontFamily(JP_FONT_FAMILY)
@@ -323,16 +373,20 @@ export struct NumericPadView {
       // 「あA」キーに差し替える(数字パッドへは「あA」キーのサイクルからのみ入る
       // ため、抜けるときは常に日本語(ひらがな)へ戻す -- 入る前のinputModeが何で
       // あってもループが一貫した状態に着地するようにする)。
-      Text(this.numericPadEnabled ? '1あA' : 'あA')
-        .fontFamily(JP_FONT_FAMILY)
-        .fontSize(14).textAlign(TextAlign.Center)
-        .width(this.flickKeyWidthVp).height('100%')
-        .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
-        .borderRadius(8).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-        .onClick(() => {
-          AppStorage.setOrCreate('inputMode', InputMode.HIRAGANA);
-          AppStorage.setOrCreate('keyboardSubMode', 'kana');
-        })
+      Text() {
+        Span('あ').fontColor(this.numericPadEnabled ? kbTheme(this.isDark).textSecondary : kbTheme(this.isDark).textPrimary)
+        Span('a').fontColor(kbTheme(this.isDark).textSecondary)
+        Span(this.numericPadEnabled ? '1' : '').fontColor(kbTheme(this.isDark).textPrimary)
+      }
+      .fontFamily(JP_FONT_FAMILY)
+      .fontSize(MODE_KEY_FONT_SIZE).textAlign(TextAlign.Center)
+      .width(this.flickKeyWidthVp).height('100%')
+      .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
+      .borderRadius(8).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
+      .onClick(() => {
+        AppStorage.setOrCreate('inputMode', InputMode.HIRAGANA);
+        AppStorage.setOrCreate('keyboardSubMode', 'kana');
+      })
     }
   }
 
@@ -340,7 +394,7 @@ export struct NumericPadView {
     if (rowIdx === 0) {
       Row() {
         SymbolGlyph($r('sys.symbol.delete_left'))
-          .fontSize(16)
+          .fontSize(BACKSPACE_FONT_SIZE)
           .fontColor([kbTheme(this.isDark).textPrimary])
       }
       .width(this.flickKeyWidthVp).height('100%')
@@ -348,13 +402,13 @@ export struct NumericPadView {
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).specialBg)
       .borderRadius(8).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) {
-            this.startBsRepeat();
-          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-            this.stopBsRepeat();
-          }
-        })
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) {
+          this.startBsRepeat();
+        } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+          this.stopBsRepeat();
+        }
+      })
     } else if (rowIdx === 1) {
       Row() {
         SymbolGlyph($r('sys.symbol.chevron_right'))
@@ -366,10 +420,10 @@ export struct NumericPadView {
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).specialBg)
       .borderRadius(8).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-        .onTouch((event: TouchEvent) => {
-          if (event.type === TouchType.Down) { this.startCurRepeat('right'); }
-          else if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.stopCurRepeat(); }
-        })
+      .onTouch((event: TouchEvent) => {
+        if (event.type === TouchType.Down) { this.startCurRepeat('right'); }
+        else if (event.type === TouchType.Up || event.type === TouchType.Cancel) { this.stopCurRepeat(); }
+      })
     } else if (rowIdx === 2) {
       Text('space')
         .fontFamily(JP_FONT_FAMILY)
@@ -389,9 +443,9 @@ export struct NumericPadView {
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).accent)
       .borderRadius(8).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-        // 長押しは、アプリの指定 (送信など) に関係なく改行
-        .gesture(LongPressGesture({ duration: 400 }).onAction(() => { this.h().handleEnterLongPress(); }))
-        .onClick(() => { this.h().handleEnterKey(); })
+      // 長押しは、アプリの指定 (送信など) に関係なく改行
+      .gesture(LongPressGesture({ duration: 400 }).onAction(() => { this.h().handleEnterLongPress(); }))
+      .onClick(() => { this.h().handleEnterKey(); })
     }
   }
 }

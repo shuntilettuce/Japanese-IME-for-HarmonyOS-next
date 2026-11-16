@@ -313,36 +313,36 @@ export struct SettingsBar {
       Scroll(this.menuScroller) {
         Column() {
           ForEach(CATEGORIES, (cat: CategoryDef) => {
-              Column() {
-                Text(cat.label)
-                  .fontFamily(JP_FONT_FAMILY)
-                  .fontSize(16)
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor(kbTheme(this.isDark).textPrimary)
-                  .width('100%')
-                  .padding({ top: 8, bottom: 10 })
-                if (cat.id === 'clipboard') {
-                  this.ClipboardSection()
-                } else if (cat.id === 'dict') {
-                  this.DictSection()
-                } else if (cat.id === 'input') {
-                  this.InputSection()
-                } else if (cat.id === 'visual') {
-                  this.VisualSection()
-                } else if (cat.id === 'repair') {
-                  this.RepairSection()
-                  if (DEBUG_INPUT_LOG) {
-                    this.InputLogSection()
-                  }
-                } else if (cat.id === 'other') {
-                  this.OtherSection()
-                } else {
-                  this.SupportSection()
+            Column() {
+              Text(cat.label)
+                .fontFamily(JP_FONT_FAMILY)
+                .fontSize(16)
+                .fontWeight(FontWeight.Bold)
+                .fontColor(kbTheme(this.isDark).textPrimary)
+                .width('100%')
+                .padding({ top: 8, bottom: 10 })
+              if (cat.id === 'clipboard') {
+                this.ClipboardSection()
+              } else if (cat.id === 'dict') {
+                this.DictSection()
+              } else if (cat.id === 'input') {
+                this.InputSection()
+              } else if (cat.id === 'visual') {
+                this.VisualSection()
+              } else if (cat.id === 'repair') {
+                this.RepairSection()
+                if (DEBUG_INPUT_LOG) {
+                  this.InputLogSection()
                 }
+              } else if (cat.id === 'other') {
+                this.OtherSection()
+              } else {
+                this.SupportSection()
               }
-              .width('100%')
-              .padding({ bottom: 20 })
-              .onAreaChange((_o: Area, n: Area) => { this.sectionTop.set(cat.id, Number(n.position.y)); })
+            }
+            .width('100%')
+            .padding({ bottom: 20 })
+            .onAreaChange((_o: Area, n: Area) => { this.sectionTop.set(cat.id, Number(n.position.y)); })
           }, (cat: CategoryDef) => cat.id)
         }
         .padding(16)
@@ -352,6 +352,13 @@ export struct SettingsBar {
       .align(Alignment.Top)
       .scrollBar(BarState.Auto)
       .onDidScroll(() => {
+        // 一番下まで送ったら、最後の項目 (開発を応援) を選ぶ。
+        // 下端では最後の見出しが上端まで届かないので、上端基準の判定だけでは選ばれない。
+        if (this.menuScroller.isAtEnd()) {
+          const last: string = CATEGORIES[CATEGORIES.length - 1].id;
+          if (last !== this.selectedCategory) { this.selectedCategory = last; }
+          return;
+        }
         const y = this.menuScroller.currentOffset().yOffset + 24;
         let cur = CATEGORIES[0].id;
         for (const c of CATEGORIES) {
@@ -1335,7 +1342,7 @@ export struct SettingsBar {
             .fontColor(kbTheme(this.isDark).onAccent)
             .backgroundColor(kbTheme(this.isDark).accentStrong)
             .borderRadius(8).padding({ left: 14, right: 14, top: 8, bottom: 8 })
-                        .onClick(() => { this.pasteItem(c); })
+            .onClick(() => { this.pasteItem(c); })
           if (c.kind === 'text') {
             Text('固定')
               .fontFamily(JP_FONT_FAMILY).fontSize(13)

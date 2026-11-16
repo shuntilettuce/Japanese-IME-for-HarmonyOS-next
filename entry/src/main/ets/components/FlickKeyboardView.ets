@@ -1,6 +1,8 @@
 import { InputHandler, InputMode, InputState } from '../ime/KeyboardController';
 import { toKatakana } from '../ime/JapaneseConverter';
 import { kbTheme } from './Theme';
+import { modeGlyph, modeIsActive, MODE_KEY_FONT_SIZE, flickGlyphSize, BACKSPACE_FONT_SIZE } from './ModeLabel';
+import { flickTriangleCommands, BUBBLE_VP } from './FlickFeedback';
 import { JP_FONT_FAMILY } from './JpFont';
 
 type FlickDir = 'center' | 'up' | 'right' | 'down' | 'left';
@@ -23,6 +25,7 @@ function getKanaByDir(key: FlickKeyDef, dir: FlickDir): string {
 }
 
 // 3 center kana columns (displayed in cols 1-3 of the 5-col layout)
+
 const FLICK_GRID: FlickKeyDef[][] = [
   [
     { center: 'あ', up: 'う', right: 'え', down: 'お', left: 'い' },
@@ -119,6 +122,29 @@ export struct FlickKeyboardView {
     return Math.max(0.5, Math.min(1.15, this.keyboardHeightVp / 260));
   }
 
+  // キーの中の実寸 (padding を引いたあと)。三角を描く範囲に使う。
+  // 実際に描画された大きさ (onAreaChange で計測) を優先し、計測前だけ推定値を使う。
+  private keyContentW(): number {
+    if (this.keyAreaW > 0) { return Math.max(0, this.keyAreaW - 2 * FLICK_H_INSET); }
+    return Math.max(0, this.flickKeyWidthVp - 2 * FLICK_H_INSET);
+  }
+
+  private keyContentH(): number {
+    if (this.keyAreaH > 0) { return Math.max(0, this.keyAreaH - 2 * FLICK_V_INSET); }
+    const rowH: number = Math.max(0, (this.keyboardHeightVp - 24) / 4);
+    return Math.max(0, rowH - 2 * FLICK_V_INSET);
+  }
+
+  // キー中央の文字の大きさ (ヒント ON/OFF・押下中/通常で共通)。
+  // ボタンの小さい方の辺 (横幅 flickKeyWidthVp と行の高さ) の三分の一。
+  // 行の高さは キーボード全体高さ から上下の余白 (padding 4+8) と行間 (space 4 x 3) を引き、4 行で割った値。
+  private glyphFontSize(): number {
+    return flickGlyphSize(this.flickKeyWidthVp, this.keyboardHeightVp);
+  }
+
+  // キー 1 個の描画上の大きさ (vp)。onAreaChange で更新する。
+  @State keyAreaW: number = 0;
+  @State keyAreaH: number = 0;
   @State activeRow: number = -1;
   @State activeCol: number = -1;
   @State touchStartX: number = 0;
@@ -203,19 +229,17 @@ export struct FlickKeyboardView {
     return kbTheme(this.isDark).textSecondary;
   }
 
+  // 中央のキーは、フリック中でも常に自分の文字を出す (フリック先の文字は浮き文字に出す)
   private centerLabel(row: number, col: number, key: FlickKeyDef): string {
     if (key.special === 'dakuten') { return key.center; }
     if (key.special === 'punct') {
-      const raw = this.isActive(row, col) ? getKanaByDir(key, this.flickDir) : key.center;
-      return this.inputMode === InputMode.ALPHANUMERIC ? this.jpToAsciiPunct(raw) : raw;
+      return this.inputMode === InputMode.ALPHANUMERIC ? this.jpToAsciiPunct(key.center) : key.center;
     }
-    if (this.isActive(row, col)) { return this.toMode(getKanaByDir(key, this.flickDir)); }
     return this.toMode(key.center);
   }
 
   private keyBg(row: number, col: number, key: FlickKeyDef): ResourceColor {
     if (key.special === 'dakuten') { return kbTheme(this.isDark).specialBg; }
-    if (this.isActive(row, col)) { return kbTheme(this.isDark).accentSoft; }
     return this.keyChromeEnabled ? kbTheme(this.isDark).keyBg : 'transparent';
   }
 
@@ -443,45 +467,47 @@ export struct FlickKeyboardView {
       }
       .width(this.flickSideKeyWidthVp).height('100%')
       .padding({ left: FLICK_H_INSET, right: FLICK_H_INSET, top: FLICK_V_INSET, bottom: FLICK_V_INSET })
-        // Long-press to reveal the 左手モード hint, then flick up to switch.
-        .bindPopup(this.oneHandHint === 'left', {
-          builder: this.OneHandHintPopup,
-          placement: Placement.Top,
-          enableArrow: true,
-          popupColor: kbTheme(this.isDark).specialBg,
-          backgroundBlurStyle: BlurStyle.NONE,
-          radius: 20,
-          mask: false,
-        })
-        .gesture(
-          GestureGroup(GestureMode.Sequence,
-            LongPressGesture({ duration: 300 })
-              .onAction(() => {
-                this.oneHandHint = 'left';
-                this.ohHintTimer = setTimeout(() => { this.oneHandHint = ''; }, 1500);
-              }),
-            PanGesture({ direction: PanDirection.Up, distance: 20 })
-              .onActionStart(() => {
-                this.h().toggleOneHanded('left');
-                clearTimeout(this.ohHintTimer);
-                this.oneHandHint = '';
-              })
-          )
+      // Long-press to reveal the 左手モード hint, then flick up to switch.
+      .bindPopup(this.oneHandHint === 'left', {
+        builder: this.OneHandHintPopup,
+        placement: Placement.Top,
+        enableArrow: true,
+        popupColor: kbTheme(this.isDark).specialBg,
+        backgroundBlurStyle: BlurStyle.NONE,
+        radius: 20,
+        mask: false,
+      })
+      .gesture(
+        GestureGroup(GestureMode.Sequence,
+          LongPressGesture({ duration: 300 })
+            .onAction(() => {
+              this.oneHandHint = 'left';
+              this.ohHintTimer = setTimeout(() => { this.oneHandHint = ''; }, 1500);
+            }),
+          PanGesture({ direction: PanDirection.Up, distance: 20 })
+            .onActionStart(() => {
+              this.h().toggleOneHanded('left');
+              clearTimeout(this.ohHintTimer);
+              this.oneHandHint = '';
+            })
         )
-        .onClick(() => {
-          this.h().hapticTick();
-          AppStorage.setOrCreate('keyboardSubMode', 'symbol');
-        })
+      )
+      .onClick(() => {
+        this.h().hapticTick();
+        AppStorage.setOrCreate('keyboardSubMode', 'symbol');
+      })
     } else {
       Row() {
-        Text(this.numericPadEnabled
-          ? (this.inputMode === InputMode.HIRAGANA ? 'あA1' : 'A1あ')
-          : (this.inputMode === InputMode.HIRAGANA ? 'あA' : 'Aあ'))
-          .fontFamily(JP_FONT_FAMILY)
-          .fontSize(12).textAlign(TextAlign.Center)
-          .width('100%').height('100%')
-          .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
-          .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
+        Text() {
+          Span(this.modeGlyphAt(0)).fontColor(this.modeToneAt(0))
+          Span(this.modeGlyphAt(1)).fontColor(this.modeToneAt(1))
+          Span(this.modeGlyphAt(2)).fontColor(this.modeToneAt(2))
+        }
+        .fontFamily(JP_FONT_FAMILY)
+        .fontSize(MODE_KEY_FONT_SIZE).textAlign(TextAlign.Center)
+        .width('100%').height('100%')
+        .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
+        .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
       }
       .width(this.flickSideKeyWidthVp).height('100%')
       .padding({ left: FLICK_H_INSET, right: FLICK_H_INSET, top: FLICK_V_INSET, bottom: FLICK_V_INSET })
@@ -499,7 +525,7 @@ export struct FlickKeyboardView {
       Row() {
         Row() {
           SymbolGlyph($r('sys.symbol.delete_left'))
-            .fontSize(16)
+            .fontSize(BACKSPACE_FONT_SIZE)
             .fontColor([kbTheme(this.isDark).textPrimary])
         }
         .width('100%').height('100%')
@@ -552,42 +578,42 @@ export struct FlickKeyboardView {
       }
       .width(this.flickSideKeyWidthVp).height('100%')
       .padding({ left: FLICK_H_INSET, right: FLICK_H_INSET, top: FLICK_V_INSET, bottom: FLICK_V_INSET })
-        // Long-press the space key to reveal the 右手モード hint, then flick up
-        // while it shows to switch. Gating on the long-press stops a stray flick
-        // from misfiring. A plain tap still inserts a space via onClick.
-        .bindPopup(this.oneHandHint === 'right', {
-          builder: this.OneHandHintPopup,
-          placement: Placement.Top,
-          enableArrow: true,
-          popupColor: kbTheme(this.isDark).specialBg,
-          backgroundBlurStyle: BlurStyle.NONE,
-          radius: 20,
-          mask: false,
-        })
-        .gesture(
-          GestureGroup(GestureMode.Sequence,
-            LongPressGesture({ duration: 300 })
-              .onAction(() => {
-                this.oneHandHint = 'right';
-                this.ohHintTimer = setTimeout(() => { this.oneHandHint = ''; }, 1500);
-              }),
-            PanGesture({ direction: PanDirection.Up, distance: 20 })
-              .onActionStart(() => {
-                this.h().toggleOneHanded('right');
-                clearTimeout(this.ohHintTimer);
-                this.oneHandHint = '';
-              })
-          )
+      // Long-press the space key to reveal the 右手モード hint, then flick up
+      // while it shows to switch. Gating on the long-press stops a stray flick
+      // from misfiring. A plain tap still inserts a space via onClick.
+      .bindPopup(this.oneHandHint === 'right', {
+        builder: this.OneHandHintPopup,
+        placement: Placement.Top,
+        enableArrow: true,
+        popupColor: kbTheme(this.isDark).specialBg,
+        backgroundBlurStyle: BlurStyle.NONE,
+        radius: 20,
+        mask: false,
+      })
+      .gesture(
+        GestureGroup(GestureMode.Sequence,
+          LongPressGesture({ duration: 300 })
+            .onAction(() => {
+              this.oneHandHint = 'right';
+              this.ohHintTimer = setTimeout(() => { this.oneHandHint = ''; }, 1500);
+            }),
+          PanGesture({ direction: PanDirection.Up, distance: 20 })
+            .onActionStart(() => {
+              this.h().toggleOneHanded('right');
+              clearTimeout(this.ohHintTimer);
+              this.oneHandHint = '';
+            })
         )
-        .onClick(() => {
-          this.h().hapticTick();
-          const st = AppStorage.get<string>('inputState') ?? 'IDLE';
-          if (st === 'COMPOSING') {
-            this.h().handleBunsetsu();
-          } else {
-            this.h().handleSpaceKey();
-          }
-        })
+      )
+      .onClick(() => {
+        this.h().hapticTick();
+        const st = AppStorage.get<string>('inputState') ?? 'IDLE';
+        if (st === 'COMPOSING') {
+          this.h().handleBunsetsu();
+        } else {
+          this.h().handleSpaceKey();
+        }
+      })
     } else {
       Row() {
         Row() {
@@ -620,21 +646,32 @@ export struct FlickKeyboardView {
         } else {
           this.h().handleEnterKey();
         }
-        })
+      })
     }
   }
 
+  // フリック中の見た目 (2026-11-16): キー全体は光らせず、打っている方向の辺に三角を出す。
+  // 打とうとしている文字は、キーの上に丸く浮かせて表示する。
+  // あA1 キーの文字: 今の入力モードの文字を濃く、他は薄く
+  private modeGlyphAt(i: number): string {
+    return modeGlyph(this.inputMode, this.numericPadEnabled, i);
+  }
+
+  private modeToneAt(i: number): ResourceColor {
+    return modeIsActive(this.inputMode, this.numericPadEnabled, i)
+      ? kbTheme(this.isDark).textPrimary
+      : kbTheme(this.isDark).textSecondary;
+  }
+
   @Builder KeyCell(rowIdx: number, colIdx: number, key: FlickKeyDef) {
-    if (this.isLandscape || !this.flickHintsEnabled) {
-      // Landscape rows are short on height; drop the flick-direction hints and
-      // just show the center glyph. Flicking itself is unaffected — dirFrom()
-      // reads the touch gesture, not this label.
-      Row() {
+    Stack() {
+      if (this.isLandscape || !this.flickHintsEnabled) {
+        // Landscape rows are short on height; drop the flick-direction hints and
+        // just show the center glyph. Flicking itself is unaffected — dirFrom()
+        // reads the touch gesture, not this label.
         Text(this.centerLabel(rowIdx, colIdx, key))
           .fontFamily(JP_FONT_FAMILY)
-          .fontSize(this.isActive(rowIdx, colIdx)
-            ? Math.max(11, Math.round(17 * this.hintScale()))
-            : Math.max(9, Math.round(14 * this.hintScale())))
+          .fontSize(this.glyphFontSize())
           .fontColor(key.special === 'dakuten' ? kbTheme(this.isDark).onAccent : kbTheme(this.isDark).textPrimary)
           .fontWeight(FontWeight.Medium)
           .textAlign(TextAlign.Center)
@@ -643,18 +680,10 @@ export struct FlickKeyboardView {
           .backgroundColor(this.keyBg(rowIdx, colIdx, key))
           .borderRadius(CELL_RADIUS)
           .shadow(this.keyShadow(rowIdx, colIdx, key))
-      }
-      .width(this.flickKeyWidthVp)
-      .height('100%')
-      .padding({ left: FLICK_H_INSET, right: FLICK_H_INSET, top: FLICK_V_INSET, bottom: FLICK_V_INSET })
-      .onTouch((e: TouchEvent) => {
-        this.handleTouch(e, rowIdx, colIdx, key);
-      })
-    } else {
-      // 上・中・下の3帯。各帯は必ず中央揃えのコンテナで包む。
-      // Text に height だけ与えると帯の中で上寄りに描かれ、中心文字との間隔が
-      // 上下で食い違って「文字がずれている」ように見える。
-      Row() {
+      } else {
+        // 上・中・下の3帯。各帯は必ず中央揃えのコンテナで包む。
+        // Text に height だけ与えると帯の中で上寄りに描かれ、中心文字との間隔が
+        // 上下で食い違って「文字がずれている」ように見える。
         Column({ space: 0 }) {
           Row() {
             Text(key.up !== undefined ? this.toMode(key.up) : ' ')
@@ -672,22 +701,20 @@ export struct FlickKeyboardView {
               .fontFamily(JP_FONT_FAMILY)
               .fontSize(Math.max(7, Math.round(11 * this.hintScale())))
               .fontColor(this.hintColor(rowIdx, colIdx, 'left'))
-              .width('25%').textAlign(TextAlign.Center)
+              .width('33.33%').textAlign(TextAlign.Center)
 
             Text(this.centerLabel(rowIdx, colIdx, key))
               .fontFamily(JP_FONT_FAMILY)
-              .fontSize(this.isActive(rowIdx, colIdx)
-                ? Math.max(14, Math.round(22 * this.hintScale()))
-                : Math.max(12, Math.round(18 * this.hintScale())))
+              .fontSize(this.glyphFontSize())
               .fontColor(key.special === 'dakuten' ? kbTheme(this.isDark).onAccent : kbTheme(this.isDark).textPrimary)
               .fontWeight(FontWeight.Medium)
-              .width('50%').textAlign(TextAlign.Center)
+              .width('33.34%').textAlign(TextAlign.Center)
 
             Text(key.right !== undefined ? this.toMode(key.right) : ' ')
               .fontFamily(JP_FONT_FAMILY)
               .fontSize(Math.max(7, Math.round(11 * this.hintScale())))
               .fontColor(this.hintColor(rowIdx, colIdx, 'right'))
-              .width('25%').textAlign(TextAlign.Center)
+              .width('33.33%').textAlign(TextAlign.Center)
           }
           .width('100%').height('44%')
           .alignItems(VerticalAlign.Center)
@@ -709,12 +736,57 @@ export struct FlickKeyboardView {
         .borderRadius(CELL_RADIUS)
         .shadow(this.keyShadow(rowIdx, colIdx, key))
       }
-      .width(this.flickKeyWidthVp)
-      .height('100%')
-      .padding({ left: FLICK_H_INSET, right: FLICK_H_INSET, top: FLICK_V_INSET, bottom: FLICK_V_INSET })
-      .onTouch((e: TouchEvent) => {
-        this.handleTouch(e, rowIdx, colIdx, key);
-      })
+
+      // 打っている方向の辺に出す三角 (中央なら出さない)
+      if (this.isActive(rowIdx, colIdx) && this.flickDir !== 'center') {
+        Path()
+          .commands(flickTriangleCommands(this.flickDir, this.keyContentW(), this.keyContentH(), CELL_RADIUS))
+          .width(this.keyContentW())
+          .height(this.keyContentH())
+          .fill(kbTheme(this.isDark).accent)
+          .opacity(0.55)
+      }
+
+      // 打とうとしている文字を、キーの上に丸く表示する
+      // 打とうとしている文字を、キーの真上の中央に丸く表示する
+      // 打とうとしている文字を、キーの真上に丸く表示する (薄い黒の枠付き)。
+      if (this.isActive(rowIdx, colIdx)) {
+        Stack() {
+
+          // 文字の本体 (枠の中央に上下左右均等)
+          Column() {
+            Text(this.toMode(getKanaByDir(key, this.flickDir)))
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(Math.round(this.glyphFontSize() * 1.4))
+              .fontColor(kbTheme(this.isDark).textPrimary)
+              .fontWeight(FontWeight.Medium)
+              .textAlign(TextAlign.Center)
+              .maxLines(1)
+          }
+          .width(BUBBLE_VP)
+          .height(BUBBLE_VP)
+          .justifyContent(FlexAlign.Center)
+          .alignItems(HorizontalAlign.Center)
+          .borderRadius(BUBBLE_VP / 2)
+          .backgroundColor(kbTheme(this.isDark).keyBg)
+          .border({ width: 1, color: '#33000000' })   // 薄い黒の枠 (透明度 20%)
+        }
+        .width(BUBBLE_VP)
+        .height(BUBBLE_VP)
+        .align(Alignment.Top)
+        .translate({ y: -(BUBBLE_VP + 6) })
+      }
     }
+    .width(this.flickKeyWidthVp)
+    .height('100%')
+    .padding({ left: FLICK_H_INSET, right: FLICK_H_INSET, top: FLICK_V_INSET, bottom: FLICK_V_INSET })
+    .onAreaChange((_oldArea: ESObject, newArea: ESObject) => {
+      // 行の高さはレイアウトで決まるので、実際に描かれた大きさを読んで三角を合わせる
+      this.keyAreaW = Number(newArea.width);
+      this.keyAreaH = Number(newArea.height);
+    })
+    .onTouch((e: TouchEvent) => {
+      this.handleTouch(e, rowIdx, colIdx, key);
+    })
   }
 }
