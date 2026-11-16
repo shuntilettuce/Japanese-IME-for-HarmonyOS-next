@@ -11,7 +11,7 @@ Windows・Linux・Android・HarmonyOS で動く日本語 IME です。漢字変�
 ---
 ## zenz 不使用の変換 AI
 
-AI で変換する日本語 IME の多くは、azooKey の zenz のラッパーソフトです。shunti IME の AI は、zenz の重みも、zenz の蒸留も使っていない完全な別系統です。（調べの限り日本唯一）。
+AI で変換する日本語 IME の多くは、azooKey の zenz のラッパーソフトです。shunti IME の AI は、zenz の重みも、zenz の蒸留も使っていない完全な別系統です。
 
 - 約 640 万(6.3M)パラメータのごく小さな Transformer。重みは **8.2MB**（int8）で、スマホの CPU だけで動きます
 - 辞書で読みから表記の候補の網を作り、AI が左右の文を読んで道を選びます
