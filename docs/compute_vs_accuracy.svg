@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 700" width="860" height="700" font-family="'Noto Sans JP','Hiragino Sans','Yu Gothic',Meiryo,sans-serif">
+<rect width="860" height="700" fill="#ffffff"/>
+<text x="70" y="28" font-size="17" font-weight="bold" fill="#1f2328">CPU の使用量と変換の精度</text>
+<line x1="70.0" y1="56" x2="70.0" y2="626" stroke="#e1e4e8"/>
+<text x="70.0" y="646" font-size="12" fill="#59636e" text-anchor="middle">2</text>
+<line x1="170.8" y1="56" x2="170.8" y2="626" stroke="#e1e4e8"/>
+<text x="170.8" y="646" font-size="12" fill="#59636e" text-anchor="middle">5</text>
+<line x1="247.1" y1="56" x2="247.1" y2="626" stroke="#e1e4e8"/>
+<text x="247.1" y="646" font-size="12" fill="#59636e" text-anchor="middle">10</text>
+<line x1="323.3" y1="56" x2="323.3" y2="626" stroke="#e1e4e8"/>
+<text x="323.3" y="646" font-size="12" fill="#59636e" text-anchor="middle">20</text>
+<line x1="424.1" y1="56" x2="424.1" y2="626" stroke="#e1e4e8"/>
+<text x="424.1" y="646" font-size="12" fill="#59636e" text-anchor="middle">50</text>
+<line x1="500.4" y1="56" x2="500.4" y2="626" stroke="#e1e4e8"/>
+<text x="500.4" y="646" font-size="12" fill="#59636e" text-anchor="middle">100</text>
+<line x1="576.7" y1="56" x2="576.7" y2="626" stroke="#e1e4e8"/>
+<text x="576.7" y="646" font-size="12" fill="#59636e" text-anchor="middle">200</text>
+<line x1="677.5" y1="56" x2="677.5" y2="626" stroke="#e1e4e8"/>
+<text x="677.5" y="646" font-size="12" fill="#59636e" text-anchor="middle">500</text>
+<line x1="753.7" y1="56" x2="753.7" y2="626" stroke="#e1e4e8"/>
+<text x="753.7" y="646" font-size="12" fill="#59636e" text-anchor="middle">1000</text>
+<line x1="830.0" y1="56" x2="830.0" y2="626" stroke="#e1e4e8"/>
+<text x="830.0" y="646" font-size="12" fill="#59636e" text-anchor="middle">2000</text>
+<line x1="70" y1="626.0" x2="830" y2="626.0" stroke="#e1e4e8"/>
+<text x="62" y="630.0" font-size="12" fill="#59636e" text-anchor="end">62%</text>
+<line x1="70" y1="585.3" x2="830" y2="585.3" stroke="#e1e4e8"/>
+<text x="62" y="589.3" font-size="12" fill="#59636e" text-anchor="end">64%</text>
+<line x1="70" y1="544.6" x2="830" y2="544.6" stroke="#e1e4e8"/>
+<text x="62" y="548.6" font-size="12" fill="#59636e" text-anchor="end">66%</text>
+<line x1="70" y1="503.9" x2="830" y2="503.9" stroke="#e1e4e8"/>
+<text x="62" y="507.9" font-size="12" fill="#59636e" text-anchor="end">68%</text>
+<line x1="70" y1="463.1" x2="830" y2="463.1" stroke="#e1e4e8"/>
+<text x="62" y="467.1" font-size="12" fill="#59636e" text-anchor="end">70%</text>
+<line x1="70" y1="422.4" x2="830" y2="422.4" stroke="#e1e4e8"/>
+<text x="62" y="426.4" font-size="12" fill="#59636e" text-anchor="end">72%</text>
+<line x1="70" y1="381.7" x2="830" y2="381.7" stroke="#e1e4e8"/>
+<text x="62" y="385.7" font-size="12" fill="#59636e" text-anchor="end">74%</text>
+<line x1="70" y1="341.0" x2="830" y2="341.0" stroke="#e1e4e8"/>
+<text x="62" y="345.0" font-size="12" fill="#59636e" text-anchor="end">76%</text>
+<line x1="70" y1="300.3" x2="830" y2="300.3" stroke="#e1e4e8"/>
+<text x="62" y="304.3" font-size="12" fill="#59636e" text-anchor="end">78%</text>
+<line x1="70" y1="259.6" x2="830" y2="259.6" stroke="#e1e4e8"/>
+<text x="62" y="263.6" font-size="12" fill="#59636e" text-anchor="end">80%</text>
+<line x1="70" y1="218.9" x2="830" y2="218.9" stroke="#e1e4e8"/>
+<text x="62" y="222.9" font-size="12" fill="#59636e" text-anchor="end">82%</text>
+<line x1="70" y1="178.1" x2="830" y2="178.1" stroke="#e1e4e8"/>
+<text x="62" y="182.1" font-size="12" fill="#59636e" text-anchor="end">84%</text>
+<line x1="70" y1="137.4" x2="830" y2="137.4" stroke="#e1e4e8"/>
+<text x="62" y="141.4" font-size="12" fill="#59636e" text-anchor="end">86%</text>
+<line x1="70" y1="96.7" x2="830" y2="96.7" stroke="#e1e4e8"/>
+<text x="62" y="100.7" font-size="12" fill="#59636e" text-anchor="end">88%</text>
+<line x1="70" y1="56.0" x2="830" y2="56.0" stroke="#e1e4e8"/>
+<text x="62" y="60.0" font-size="12" fill="#59636e" text-anchor="end">90%</text>
+<line x1="70" y1="626" x2="830" y2="626" stroke="#59636e"/>
+<text x="450" y="674" font-size="13" fill="#1f2328" text-anchor="middle">1 打鍵あたりの CPU (百万サイクル・対数目盛)</text>
+<text transform="translate(20,341) rotate(-90)" font-size="13" fill="#1f2328" text-anchor="middle">1 位の正解率 (1052 問)</text>
+<polyline fill="none" stroke="#4a6fa5" stroke-width="2" stroke-linejoin="round" points="490.4,284.0 626.3,143.5 755.9,127.2"/>
+<polyline fill="none" stroke="#2a9d8f" stroke-width="2" stroke-linejoin="round" points="492.7,192.4 605.0,131.3"/>
+<polyline fill="none" stroke="#d1495b" stroke-width="2" stroke-linejoin="round" points="366.5,216.8 408.3,145.6 469.1,125.2"/>
+<circle cx="366.5" cy="216.8" r="5.5" fill="#d1495b" stroke="#ffffff" stroke-width="2"/>
+<text x="356.5" y="220.8" font-size="12.5" fill="#1f2328" text-anchor="end" stroke="#ffffff" stroke-width="4" paint-order="stroke">XS5（軽量） 82.1%</text>
+<circle cx="408.3" cy="145.6" r="5.5" fill="#d1495b" stroke="#ffffff" stroke-width="2"/>
+<text x="398.3" y="137.6" font-size="12.5" fill="#1f2328" text-anchor="end" stroke="#ffffff" stroke-width="4" paint-order="stroke" font-weight="bold">S9（標準） 85.6%</text>
+<circle cx="469.1" cy="125.2" r="5.5" fill="#d1495b" stroke="#ffffff" stroke-width="2"/>
+<text x="463.1" y="109.2" font-size="12.5" fill="#1f2328" text-anchor="end" stroke="#ffffff" stroke-width="4" paint-order="stroke">M5（高精度） 86.6%</text>
+<circle cx="490.4" cy="284.0" r="5.5" fill="#4a6fa5" stroke="#ffffff" stroke-width="2"/>
+<text x="480.4" y="289.0" font-size="12.5" fill="#1f2328" text-anchor="end" stroke="#ffffff" stroke-width="4" paint-order="stroke">zenz-v3.1-xsmall 78.8%</text>
+<circle cx="626.3" cy="143.5" r="5.5" fill="#4a6fa5" stroke="#ffffff" stroke-width="2"/>
+<text x="634.3" y="161.5" font-size="12.5" fill="#1f2328" text-anchor="start" stroke="#ffffff" stroke-width="4" paint-order="stroke">zenz-v3.1-small 85.7%</text>
+<circle cx="755.9" cy="127.2" r="5.5" fill="#4a6fa5" stroke="#ffffff" stroke-width="2"/>
+<text x="755.9" y="101.2" font-size="12.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="4" paint-order="stroke">zenz-v2.5-medium 86.5%</text>
+<circle cx="488.6" cy="245.3" r="4.5" fill="#ffffff" stroke="#2a9d8f" stroke-width="2"/>
+<text x="478.6" y="250.3" font-size="12.5" fill="#1f2328" text-anchor="end" stroke="#ffffff" stroke-width="4" paint-order="stroke">jinen v1-xsmall 80.7%</text>
+<circle cx="492.7" cy="192.4" r="5.5" fill="#2a9d8f" stroke="#ffffff" stroke-width="2"/>
+<text x="502.7" y="197.4" font-size="12.5" fill="#1f2328" text-anchor="start" stroke="#ffffff" stroke-width="4" paint-order="stroke">jinen v2-xsmall 83.3%</text>
+<circle cx="605.0" cy="131.3" r="5.5" fill="#2a9d8f" stroke="#ffffff" stroke-width="2"/>
+<text x="605.0" y="117.3" font-size="12.5" fill="#1f2328" text-anchor="middle" stroke="#ffffff" stroke-width="4" paint-order="stroke">jinen v2-small 86.3%</text>
+<rect x="149.7" y="533.5" width="10" height="10" fill="#6e7781" stroke="#ffffff" stroke-width="1.5" transform="rotate(45 154.7 538.5)"/>
+<text x="164.7" y="543.5" font-size="12.5" fill="#1f2328" text-anchor="start" stroke="#ffffff" stroke-width="4" paint-order="stroke">Microsoft IME 66.3%</text>
+<rect x="361.5" y="472.4" width="10" height="10" fill="#6e7781" stroke="#ffffff" stroke-width="1.5" transform="rotate(45 366.5 477.4)"/>
+<text x="376.5" y="482.4" font-size="12.5" fill="#1f2328" text-anchor="start" stroke="#ffffff" stroke-width="4" paint-order="stroke">Google 日本語入力 69.3%</text>
+<line x1="540" y1="361.35714285714283" x2="562" y2="361.35714285714283" stroke="#d1495b" stroke-width="2"/><circle cx="551" cy="361.35714285714283" r="4.5" fill="#d1495b" stroke="#ffffff" stroke-width="1.5"/>
+<text x="570" y="365.35714285714283" font-size="12" fill="#1f2328">shunti IME（変換エンジン）</text>
+<line x1="540" y1="379.35714285714283" x2="562" y2="379.35714285714283" stroke="#4a6fa5" stroke-width="2"/><circle cx="551" cy="379.35714285714283" r="4.5" fill="#4a6fa5" stroke="#ffffff" stroke-width="1.5"/>
+<text x="570" y="383.35714285714283" font-size="12" fill="#1f2328">zenz（llama.cpp）</text>
+<line x1="540" y1="397.35714285714283" x2="562" y2="397.35714285714283" stroke="#2a9d8f" stroke-width="2"/><circle cx="551" cy="397.35714285714283" r="4.5" fill="#2a9d8f" stroke="#ffffff" stroke-width="1.5"/>
+<text x="570" y="401.35714285714283" font-size="12" fill="#1f2328">jinen（llama.cpp）</text>
+<rect x="546" y="410.35714285714283" width="10" height="10" fill="#6e7781" transform="rotate(45 551 415.35714285714283)"/><text x="570" y="419.35714285714283" font-size="12" fill="#1f2328">他社 IME（TSF で打鍵・左の文脈なし）</text>
+<text x="540" y="437.35714285714283" font-size="11" fill="#59636e">白抜き = 前の世代</text>
+</svg>

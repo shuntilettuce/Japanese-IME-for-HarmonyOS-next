@@ -2,7 +2,7 @@
 
 Windows・Linux・Android・HarmonyOS で動く日本語 IME です。漢字変換は、モデルの設計・学習・推論エンジンまでゼロから作った小さな AI（**shuntelligence**）が、端末の中だけで行います。個人開発のオープンソースです。
 
-**入手**: [Windows 版](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/windows-v0.7.9) ・ [Linux 版 (.deb)](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/linux-v0.7.7) ・ [Android 版](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/android-v1.3.4) ・ HarmonyOS 版（AppGallery で「shunti Japanese IME」）
+**入手**: [Windows 版](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/windows-v0.8.1) ・ [Linux 版 (.deb)](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/linux-v0.7.7) ・ [Android 版](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/tag/android-v1.3.4) ・ HarmonyOS 版（AppGallery で「shunti Japanese IME」）
 
 > **開発者**: shuntilettuce
 > **貢献者**: [端島](https://github.com/Bakunetsuuuuu),[HiSubway](https://github.com/HiSubway)
@@ -13,7 +13,7 @@ Windows・Linux・Android・HarmonyOS で動く日本語 IME です。漢字変�
 
 AI で変換する日本語 IME の多くは、azooKey の zenz のラッパーソフトです。shunti IME の AI は、zenz の重みも、zenz の蒸留も使っていない完全な別系統です。
 
-- 約 640 万(6.3M)パラメータのごく小さな Transformer。重みは **8.2MB**（int8）で、スマホの CPU だけで動きます
+- 約 640 万(6.3M)パラメータのごく小さな Transformer。重みは **8.3MB**（int8）で、スマホの CPU だけで動きます
 - 辞書で読みから表記の候補の網を作り、AI が左右の文を読んで道を選びます
 - 推論エンジンは C++ で自作し、4 つの OS で同じものが動きます
 
@@ -24,7 +24,7 @@ zenz-v3.1-xsmall の約1/3のサイズで v3.1-small と同等のスコアを叩
 
 | 1 位の正解率 | サイズ | AJIMEE-Bench | 日常の文 | dev |
 |---|---|---|---|---|
-| **shunti IME（S8）** | **6.3M** | 81.3% | **94.3%** | **85.6%** |
+| **shunti IME（S9）** | **6.3M** | 78.6% | **94.3%** | **86.4%** |
 | Google 日本語入力 | | 53.8% | 81.0% | 70.9% |
 | Microsoft IME | | 54.4% | 78.1% | 71.7% |
 | Copilot Keyboard（Microsoft） | | 54.9% | 88.6% | 68.8% |
@@ -32,6 +32,10 @@ zenz-v3.1-xsmall の約1/3のサイズで v3.1-small と同等のスコアを叩
 | zenz-v3.1-small（azooKey） | 90.5M | **88.5%** | **94.3%** | 85.5% |
 
 難しい変換を集めた [AJIMEE-Bench](https://github.com/azooKey/AJIMEE-Bench)（azooKey 作、CC BY-SA 3.0。ローマ字で打てない字を含む 18 問を除いた 182 問）では、より重いモデルの zenz-v3.1-small に及びませんが、日常の文では並びます。日常の文（105 文）は普通の会話で出るような文を集めた自作のベンチです。2026 年 10〜11 月、作者調べ。
+
+![CPU の使用量と変換の精度](docs/compute_vs_accuracy.svg)
+
+横軸は、1 打鍵ごとに変換し直すときの CPU の使用量（1 打鍵あたりのサイクル数、同じ PC・2 スレッド）、縦軸は 1 位の正解率です。shunti・zenz・jinen は同じ問題（dev・AJIMEE-Bench・日常の文を合わせた 1052 問、左の文脈 20 字）を変換エンジンに直接渡して測りました（zenz・jinen は llama.cpp・CPU・Q5_K_M）。他社の IME は TSF 越しに実際に打鍵して測ったもので、左の文脈が届いていない条件です。CPU は IME なしで同じ打鍵をしたときの分を差し引いています。同じ作り手のモデルを線で結んでいます。
 
 ### 完全ローカル
 
@@ -93,16 +97,16 @@ Android 向けのシンプルな日本語キーボードです（Android 8.0 以
 
 ## Windows 版（shunti IME）
 
-大手の IME を超える変換精度を、約 640 万パラメータの小さな AI（shuntelligence S8）で提供します。Windows 10 / 11（64 ビット版）で動く日本語入力です。[GitHub の Releases](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases) から zip を入手し、展開して `install.bat` を実行します（署名していないため「Windows によって PC が保護されました」と出る場合がありますが「詳細情報」→「実行」）。
+大手の IME を超える変換精度を、約 640 万パラメータの小さな AI（shuntelligence S9）で提供します。Windows 10 / 11（64 ビット版）で動く日本語入力です。[GitHub の Releases](https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases) から zip を入手し、展開して `install.bat` を実行します（署名していないため「Windows によって PC が保護されました」と出る場合がありますが「詳細情報」→「実行」）。
 
 | 1 位の正解率 | AJIMEE-Bench（182 問） | 日常の文（105 文） |
 |---|---|---|
 | Google 日本語入力 | 53.8% | 81.0% |
 | Microsoft IME | 54.4% | 78.1% |
-| **shunti IME（S8）** | **81.3%** | **94.3%** |
+| **shunti IME（S9）** | **78.6%** | **94.3%** |
 (日常の文=オリジナルベンチマーク。普通の会話で出るような文を大量に用意しています)
 
-どの IME にも同じ打鍵（ローマ字で打つ → スペースで変換 → Enter で確定）を TSF 越しに流し込み、確定した文を採点した（前の文脈つき、2026 年 10 月、Windows 11。S8 は 11 月に測り直した。shunti IME は同じ問題を変換エンジンに直接渡して測った）。AJIMEE-Bench（azooKey、CC BY-SA 3.0）は、ローマ字で打てない字を含む 18 問を除いた 182 問。全角・半角の違いは問わない。
+どの IME にも同じ打鍵（ローマ字で打つ → スペースで変換 → Enter で確定）を TSF 越しに流し込み、確定した文を採点した（前の文脈つき、2026 年 10 月、Windows 11。S9 は 11 月に測った。shunti IME は同じ問題を変換エンジンに直接渡して測った）。AJIMEE-Bench（azooKey、CC BY-SA 3.0）は、ローマ字で打てない字を含む 18 問を除いた 182 問。全角・半角の違いは問わない。
 
 - 変換はパソコンの中だけで行い、**通信する機能を持ちません**。
 - 変換位置調整（Shift + ← → で伸び縮み）、F6〜F10、無変換キーでカタカナ・半角カタカナ
@@ -166,6 +170,45 @@ sudo apt install ./fcitx5-shunti_0.7.7_amd64.deb
 ## 開発
 
 ビルド・試験・プロジェクト構成・開発版の入力ログ収集は [docs/DEVELOPMENT.md](./docs/DEVELOPMENT.md) にまとめています。Issue・Pull Request 歓迎です。
+
+### リポジトリの構成
+
+4 つの OS の版は、かな漢字変換のエンジン（C++）を共有しています。OS ごとに違うのは、キーボードや候補の窓などの画面と、OS とのつなぎの部分です。
+
+```
+Japanese-IME-for-HarmonyOS-next/
+|-- entry/                                  HarmonyOS 版（ArkTS）
+|   `-- src/main/
+|       |-- cpp/
+|       |   |-- engine.cpp                  変換エンジン本体（4 つの OS で共通）
+|       |   |-- engine_avx2.cpp             PC 向けの AVX2 の計算
+|       |   `-- napi_kkc.cpp                ArkTS からエンジンを呼ぶつなぎ
+|       |-- ets/
+|       |   |-- ime/                        入力の制御・変換の呼び出し・ユーザー辞書・学習・予測
+|       |   |-- components/                 キーボード（フリック・QWERTY・記号・絵文字）と候補の帯
+|       |   `-- pages/                      本体アプリの画面（設定・ライセンス・プライバシーポリシー）
+|       `-- resources/rawfile/              辞書とモデル（kkc_lex.bin・kkc_model.bin は git に入れず取得する）
+|-- android/                                Android 版（Kotlin）
+|   `-- app/src/main/
+|       |-- cpp/jni.cpp                     Kotlin からエンジンを呼ぶつなぎ
+|       `-- java/com/shunti/japaneseime/    キーボード・入力の制御・設定
+|-- desktop/                                PC 版
+|   |-- core/                               OS に依らない部分（打鍵から変換まで・キー配列・ユーザー辞書・設定）
+|   |-- windows/                            Windows 版（TSF の IME・候補の窓・設定アプリ・声の入力・インストーラ）
+|   |-- linux/                              Linux 版（Fcitx5 のアドオン）
+|   |-- layouts/                            キー配列の表（AZIK・ACT・かな配列・親指シフトなど 32 種）
+|   |-- tests/                              試験（build_test.bat）
+|   `-- tools/                              表やアイコンを作るスクリプト
+|-- tools/
+|   |-- ai_assets.json                      辞書とモデルの取得先（Releases の shuntelligence-vN）と sha256
+|   |-- fetch_ai_assets.py                  辞書とモデルを取得する
+|   `-- dict_src/ vocab_packs/ mozc_data/ ime-eval/ blind-eval/
+|                                           旧エンジン（1.6.1 まで）の辞書・語彙パック・評価。今のアプリでは使っていない
+|-- docs/                                   開発の手順・プライバシーポリシー・README の図
+`-- AppScope/                               HarmonyOS のアプリ全体の設定（版の番号など）
+```
+
+モデルの学習のコードと教材は、このリポジトリには入っていません（重みと推論のコードだけを公開しています）。
 
 ---
 
