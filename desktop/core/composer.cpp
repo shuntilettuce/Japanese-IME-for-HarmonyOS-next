@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "typo_alts.h"
 
 #include <algorithm>
 #include <chrono>
@@ -8,8 +9,10 @@
 #include "tables.h"
 #include "pos_classes.h"
 #include <memory>
+#include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <set>
 #include <unordered_map>
 
 namespace shunti {
@@ -254,6 +257,7 @@ void Composer::insert(const u16& t) {
     caret_ += t.size();
 }
 
+
 void Composer::type_kana(const u16& s) {
     if (s.empty()) return;
     last_commit_ = {};
@@ -268,39 +272,9 @@ void Composer::type_kana(const u16& s) {
     }
     flush_romaji();
     raw_valid_ = false;
-    static const char16_t* const DAKU_FROM = u"かきくけこさしすせそたちつてとはひふへほうカキクケコサシスセソタチツテトハヒフヘホウ";
-    static const char16_t* const DAKU_TO = u"がぎぐげござじずぜぞだぢづでどばびぶべぼゔガギグゲゴザジズゼゾダヂヅデドバビブベボヴ";
-    static const char16_t* const HAN_FROM = u"はひふへほハヒフヘホ";
-    static const char16_t* const HAN_TO = u"ぱぴぷぺぽパピプペポ";
-    static const u16 SMALL_FROM = u"あいうえおやゆよつわかけアイウエオヤユヨツワカケ";
-    static const u16 SMALL_TO = u"ぁぃぅぇぉゃゅょっゎゕゖァィゥェォャュョッヮヵヶ";
     for (char16_t c : s) {
-        if ((c == u'\uE000' || c == u'\uE001') && caret_ > 0) {   // 拗 (小さく) / 修 (濁音 → 半濁音 → 元、または 小さく → 元)
-            char16_t& prev = kana_[caret_ - 1];
-            const u16 dfrom = DAKU_FROM, dto = DAKU_TO, hfrom = HAN_FROM, hto = HAN_TO;
-            size_t at;
-            if (c == u'\uE000') {
-                if ((at = SMALL_FROM.find(prev)) != u16::npos) prev = SMALL_TO[at];
-                else if ((at = SMALL_TO.find(prev)) != u16::npos) prev = SMALL_FROM[at];
-            } else if ((at = dfrom.find(prev)) != u16::npos) prev = dto[at];                 // か -> が
-            else if ((at = dto.find(prev)) != u16::npos) {                                   // が -> か、ば -> ぱ
-                const char16_t plain = dfrom[at];
-                const size_t h = hfrom.find(plain);
-                prev = h != u16::npos ? hto[h] : plain;
-            } else if ((at = hto.find(prev)) != u16::npos) prev = hfrom[at];                 // ぱ -> は
-            else if ((at = SMALL_FROM.find(prev)) != u16::npos) prev = SMALL_TO[at];          // や -> ゃ
-            else if ((at = SMALL_TO.find(prev)) != u16::npos) prev = SMALL_FROM[at];
-            continue;
-        }
-        if ((c == u'゛' || c == u'゜') && caret_ > 0) {
-            const char16_t prev = kana_[caret_ - 1];
-            const u16 from = c == u'゛' ? DAKU_FROM : HAN_FROM, to = c == u'゛' ? DAKU_TO : HAN_TO;
-            const size_t at = from.find(prev);
-            if (at != u16::npos) {
-                kana_[caret_ - 1] = to[at];
-                continue;
-            }
-        }
+        const bool mod = c == u'\uE000' || c == u'\uE001' || c == u'゛' || c == u'゜';   // 拗・修・濁点・半濁点: 前の字に付ける (kana_modify)
+        if (mod && caret_ > 0 && kana_modify(kana_[caret_ - 1], c)) continue;
         if (c == u'\uE000' || c == u'\uE001') continue;   // 前の字が無い
         insert(u16(1, c));
     }
@@ -1090,9 +1064,7 @@ void Composer::update_live() {
     if (dict_ && raw_valid_ && !raw_.empty() && frozen_.empty()) {
         const u16 k = latin_key(raw_);
         u16 hit;
-        if (k.size() >= 2)
-            for (auto& [key, word] : dict_->latin_words())
-                if (key == k) { hit = word; break; }
+        if (k.size() >= 2) hit = dict_->latin_find(k);
         // 辞書の英字の語も、2 字目以降に大文字があり小文字も混ざる書き方 (OpenAI・YouTube・iPhone) なら同じく 2 番目に。
         // 全部小文字 (same)・頭だけ大文字 (Radon)・全部大文字 (ZETTON・AKASHI) は日本語の読みとぶつかって誤爆した (camel)
         if (hit.empty() && k.size() >= 2 && conv_) {
@@ -1207,6 +1179,12 @@ bool Composer::tail_after_freeze(Conversion& c) const {
 
 // 文節の読みを学習で覚えた表記に置き換える (空白で変換するときの convert_phrases と同じ決まり)。
 // 置き換えた文を 1 位に、元の 1 位は 2 位に残す。c.paths は置き換える前の経路のまま
+// 学習の記録の表記が、その読みから書けるか (網に経路がある、または読みの半角カナ)。読みと表記のずれた記録
+// (予測の補いを選んだ ひだり → 左側・崩れた 打ち分怪我) を当てない・網に入れないため (ユーザー 2026-11-15)
+bool Composer::writable(const u16& reading, const u16& surface) const {
+    return conv_ && (!conv_->path_pos(reading, surface).empty() || surface == to_halfwidth_kana(reading));
+}
+
 void Composer::apply_learned_words(Conversion& c, const u16& ctx) {
     if (!learning_ || c.cands.empty() || c.words.empty()) return;
     std::vector<Word> out;
@@ -1217,7 +1195,8 @@ void Composer::apply_learned_words(Conversion& c, const u16& ctx) {
         const size_t first = i;
         for (size_t r = 0; r < p.reading.size(); r += c.words[i++].reading.size()) {}
         const u16 t = learning_->top(p.reading, left, c.words[first].lid);
-        if (!t.empty() && t != p.surface) {
+        // 読みから書けない表記の記録 (読みと表記のずれ) は当てない (ユーザー 2026-11-15)
+        if (!t.empty() && t != p.surface && writable(p.reading, t)) {
             Word w = c.words[first];
             w.reading = p.reading;
             w.surface = t;
@@ -1294,26 +1273,29 @@ static bool camel(const u16& w) {
 bool Composer::has_latin_word(const u16& raw) const {
     u16 low;
     for (char16_t c : raw) low += c >= u'A' && c <= u'Z' ? char16_t(c + 32) : c;
-    std::vector<std::pair<u16, u16>> user = dict_ ? dict_->latin_words() : std::vector<std::pair<u16, u16>>();
     for (size_t i = 0; i < low.size(); i++)
         for (size_t n = 4; i + n <= low.size() && n <= 24; n++) {
             const u16 k = low.substr(i, n);
             if (std::any_of(k.begin(), k.end(), [](char16_t c) { return !((c >= u'a' && c <= u'z') || (c >= u'0' && c <= u'9')); })) break;
-            for (auto& u : user) if (u.first == k) return true;
+            if (dict_ && !dict_->latin_find(k).empty()) return true;
             if (camel(conv_ ? conv_->latin_word(k) : u16())) return true;
         }
     return false;
 }
 
 void Composer::prime_keys(const u16& reading) {
+    prime_alts(reading);
     if (!conv_ || !raw_valid_ || raw_.empty() || reading.empty()) return;
     // 読みに英字が残っているときだけ (学習も英字まじりの例と、ローマ字の打ち間違いの例でだけキーの並びを見せている。
     // かなだけの読みに渡すと、neko -> neko のように打ったままの英字を選んでしまった)
     // 読みが全部かなでも、打ったキーの中に、大文字の混ざる辞書の英字の語・ユーザー辞書の英字の語の綴りがあれば渡す
     // (openai の → おぺないの でも OpenAI の辺を網に入れる。2026-10-23)
-    // l・x を打ったときも (日本語のローマ字では小さい字にしか使わない。lettuce -> ぇっつせ。2026-11-05)
+    // l・x を打ったときも (日本語のローマ字では小さい字にしか使わない。lettuce -> ぇっつせ。2026-11-05)。
+    // 拡張ローマ字 (AZIK) では l・x をふつうに使い (kl = こん・xa = しゃ)、打ったキーも英字の綴りとは別物なので、
+    // 読みに英字が残ったときだけ渡す
+    const bool ext = romaji_.extended();
     if (std::none_of(reading.begin(), reading.end(), [](char16_t ch) { return ch < 0x80 && ((ch | 0x20) >= u'a' && (ch | 0x20) <= u'z'); }) &&
-        !has_latin_word(raw_) && raw_.find_first_of(u"lx") == u16::npos)
+        (ext || (!has_latin_word(raw_) && raw_.find_first_of(u"lx") == u16::npos)))
         return;
     u16 sim;
     std::vector<int32_t> span;
@@ -1334,7 +1316,7 @@ void replay(const u16& keys, u16& kana, Romaji& rom) {
     rom.reset();
     for (char16_t key : keys) {
         const char16_t lk = key >= u'A' && key <= u'Z' ? char16_t(key + 32) : key;
-        if ((lk >= u'a' && lk <= u'z') || lk == u'-' || lk == u'\'') {
+        if ((lk >= u'a' && lk <= u'z') || lk == u'-' || lk == u'\'' || rom.is_prefix(u16(1, lk))) {   // ; : は AZIK の綴り
             if (key != lk) { kana += rom.flush(); kana += key; continue; }   // 大文字は英字のまま (caps_alpha の続きは合わないので下で弾く)
             kana += rom.process(lk).committed;
         } else {
@@ -1344,6 +1326,35 @@ void replay(const u16& keys, u16& kana, Romaji& rom) {
     }
 }
 }  // namespace
+
+// 物理キーの打ち間違いの直し: 打鍵の単位の打ち直しを読みに直し、打ったとおりの読みとの違いを今の読みに当てはめて変換に渡す
+// (typo_alts.h の alt_readings)。キー配列は呼ぶ側 (layout_typo) が単位を返す。配列を使っていないとき (lt.qwerty・呼ぶ側なし) は、
+// 打ったキーの並び (raw_) を QWERTY のローマ字の単位にする (2026-11-15: 測ってローマ字の打ち直しより直る数が多く、誤爆が増えない)
+void Composer::prime_alts(const u16& reading) {
+    if (!conv_ || reading.empty()) return;
+    LayoutTypo lt;
+    bool use_keys = !layout_typo;
+    if (layout_typo) {
+        if (!layout_typo(lt)) return;
+        use_keys = lt.qwerty;
+    }
+    if (use_keys) {
+        std::vector<std::string> units;
+        if (!options.typo_keys || !raw_valid_ || !units_from_keys(raw_, units)) return;
+        const Layout& Q = qwerty_layout();
+        lt.letters = true;
+        lt.orig.clear();
+        for (auto& u : units) lt.orig.push_back(Q.unit_text(u));
+        lt.alts = Q.typo_variants(units);
+    }
+    const u16 all = frozen_reading() + kana_;
+    const size_t n = all.size();
+    if (n < reading.size() || all.compare(n - reading.size(), reading.size(), reading) != 0) return;
+    Romaji rom = romaji_;
+    std::vector<u16> out;
+    if (!alt_readings(lt.orig, lt.alts, lt.letters, rom, all, n - reading.size(), out)) return;
+    conv_->set_alt_readings(out, reading.size());
+}
 
 bool Composer::undo_last_key() {
     if (!raw_valid_ || raw_.empty()) return false;
@@ -1405,7 +1416,7 @@ void Composer::simulate_raw(u16& sim, std::vector<int32_t>& span) const {
     auto emit = [&](const u16& out, int end) { for (char16_t ch : out) { sim.push_back(ch); span.push_back(end); } };
     for (char16_t key : raw_) {
         const char16_t lk = key >= u'A' && key <= u'Z' ? char16_t(key + 32) : key;
-        const bool romaji_key = (lk >= u'a' && lk <= u'z') || lk == u'-' || lk == u'\'';
+        const bool romaji_key = (lk >= u'a' && lk <= u'z') || lk == u'-' || lk == u'\'' || rom.is_prefix(u16(1, lk));   // ; : は AZIK の綴り
         if (!romaji_key) {
             emit(rom.flush(), k);
             k++;
@@ -1456,6 +1467,9 @@ void Composer::sync_user_dict() {
     const uint64_t lv = learning_ && !options.private_mode ? learning_->version() : 0;
     if (dict_->version() != dict_version_ || lv != learn_version_) {
         std::vector<UserDict::Form> forms = dict_->engine_forms();
+        // 学習の語は、読みから書ける表記のものだけ入れる (確かめる網はユーザー辞書の語まで)。読みと表記のずれた記録
+        // (ひだり → 左側。いつできたかは不明) が網に入って、ひだり がいつも 左側 になっていた (ユーザー 2026-11-15)
+        if (lv) conv_->set_user_words(forms);
         // 2 回以上選び直した語を、変換の網に候補として入れる (ライブ変換・文全体の変換でも AI が文脈で選べるように。
         // 今までの学習は文節の候補を並べ替えるだけで、AI の 1 位には届かなかった: なに → 何 がいつまでも ひらがな、
         // ブログの報告 2026-10-21)。重みは変えない。選んだ回数だけ少し安くする (どこで使うかは AI が決める)。
@@ -1468,6 +1482,7 @@ void Composer::sync_user_dict() {
                     s.pop_back();
                 }
                 if (r.empty() || s.empty() || r == s) continue;
+                if (!writable(st.reading, st.surface)) continue;
                 // 1 字の読み (し・か・と) は網に入れない: どの文脈でも安い 1 字の辺になり、区切りまで変えた (していない ->
                 // し/ていない。ユーザー 2026-11-06)。手帳 311 読みで測った: 入力ログ 2728 件で 89.0 -> 89.2 (直した 66 -> 61・
                 // 壊した 26 -> 15)、ベンチ 1190 問で壊した 7 -> 2。安くする量を 200 に減らす形は 89.0 (壊した 23) で及ばなかった。
@@ -1512,7 +1527,7 @@ std::vector<Composer::Seg> Composer::convert_phrases(const u16& ctx, const u16& 
         // 自分で選び直したことのある文節の読みは、そのとき選んだ表記にする
         if (learning_) {
             u16 t = learning_->top(p.reading, left, plid);
-            if (!t.empty()) s.surface = t;
+            if (!t.empty() && t != s.surface && writable(p.reading, t)) s.surface = t;   // 読みから書けない記録は当てない
         }
         left += s.surface;
         out.push_back(std::move(s));

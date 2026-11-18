@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <system_error>
+#include <unordered_set>
 
 #include "json.h"
 
@@ -707,7 +708,7 @@ bool UserDict::refresh() {
     if (!json::Parser(s).parse(v) || v.type != json::Value::Array) { keep_broken(file_); return true; }
     for (auto& o : v.arr) {
         if (o.type != json::Value::Object) continue;
-        Entry e{from_utf8(o.get_str("r")), from_utf8(o.get_str("w")), o.get_str("p", "noun"), o.get_str("g")};
+        Entry e{from_utf8(o.get_str("r")), from_utf8(o.get_str("w")), o.get_str("p", "noun"), o.get_str("g"), o.get_str("k")};
         if (!e.reading.empty() && !e.word.empty()) entries_.push_back(std::move(e));
     }
     return true;
@@ -741,27 +742,123 @@ std::pair<std::string, std::string> UserDict::pos_from_label(const u16& label) {
     return {"noun", ""};
 }
 
+// MS-IME の品詞名 (CSV も同じ名前で書く)
+static u16 ms_label(const UserDict::Entry& e) {
+    if (e.pos == "person") return u"人名";
+    if (e.pos == "place") return u"地名その他";
+    if (e.pos == "org") return u"固有名詞";
+    if (e.pos == "abbrev") return u"短縮よみ";
+    if (e.pos == "kaomoji") return u"顔文字";
+    if (e.pos == "verb") return e.group == "ichidan" ? u"動詞一段" : u"動詞五段";
+    if (e.pos == "adjective") return u"形容詞";
+    if (e.pos == "adverb") return u"副詞";
+    if (e.pos == "interjection") return u"感動詞";
+    return u"名詞";
+}
+
+// Google 日本語入力 / Mozc の品詞名。五段の動詞は行まで (最後のかなで決まる)
+static u16 mozc_label(const UserDict::Entry& e) {
+    if (e.pos == "place") return u"地名";
+    if (e.pos == "org") return u"組織";
+    if (e.pos == "verb") {
+        if (e.group == "ichidan") return u"動詞一段";
+        static const char16_t* ROW[][2] = {{u"う", u"ワ"}, {u"く", u"カ"}, {u"ぐ", u"ガ"}, {u"す", u"サ"}, {u"つ", u"タ"},
+                                           {u"ぬ", u"ナ"}, {u"ぶ", u"バ"}, {u"む", u"マ"}, {u"る", u"ラ"}};
+        for (auto& r : ROW)
+            if (!e.reading.empty() && e.reading.back() == r[0][0]) return u"動詞" + u16(r[1]) + u"行五段";
+        return u"動詞ラ行五段";
+    }
+    return ms_label(e);
+}
+
 u16 UserDict::export_text() const {
-    auto label = [](const Entry& e) -> const char16_t* {
-        if (e.pos == "person") return u"人名";
-        if (e.pos == "place") return u"地名その他";
-        if (e.pos == "org") return u"固有名詞";
-        if (e.pos == "abbrev") return u"短縮よみ";
-        if (e.pos == "kaomoji") return u"顔文字";
-        if (e.pos == "verb") return e.group == "ichidan" ? u"動詞一段" : u"動詞五段";
-        if (e.pos == "adjective") return u"形容詞";
-        if (e.pos == "adverb") return u"副詞";
-        if (e.pos == "interjection") return u"感動詞";
-        return u"名詞";
-    };
     u16 o = u"!Microsoft IME Dictionary Tool\r\n!shunti IME から書き出し\r\n";
-    for (auto& e : entries_) o += e.reading + u"\t" + e.word + u"\t" + label(e) + u"\r\n";
+    for (auto& e : entries_) o += e.reading + u"\t" + e.word + u"\t" + ms_label(e) + u"\r\n";
     return o;
+}
+
+std::string UserDict::export_bytes(Format f, const std::string* pack, int* n) const {
+    int count = 0;
+    auto want = [&](const Entry& e) { return !pack || e.pack == *pack; };
+    if (f == Format::MsIme) {   // MS-IME と同じ UTF-16 (BOM つき)。この IME の読み込みにも使える
+        u16 o = u"!Microsoft IME Dictionary Tool\r\n!shunti IME から書き出し\r\n";
+        if (pack && !pack->empty()) o += u"!パック: " + from_utf8(*pack) + u"\r\n";
+        for (auto& e : entries_) if (want(e)) { o += e.reading + u"\t" + e.word + u"\t" + ms_label(e) + u"\r\n"; count++; }
+        std::string b = "\xFF\xFE";
+        for (char16_t c : o) { b += char(c & 0xFF); b += char(c >> 8); }
+        if (n) *n = count;
+        return b;
+    }
+    // CSV: 読み,語句,品詞 (表計算ソフトで開けるよう BOM つきの UTF-8)。, や " を含む欄は "" で囲む
+    // Mozc: 読み<TAB>単語<TAB>品詞<TAB>コメント (Google 日本語入力の「エクスポート」と同じ)
+    auto csv = [](const u16& s) {
+        std::string t = to_utf8(s);
+        if (t.find_first_of(",\"\r\n") == std::string::npos) return t;
+        std::string q = "\"";
+        for (char c : t) { if (c == '"') q += '"'; q += c; }
+        return q + "\"";
+    };
+    std::string o = f == Format::Csv ? "\xEF\xBB\xBF" : "";
+    for (auto& e : entries_) {
+        if (!want(e)) continue;
+        if (f == Format::Csv) o += csv(e.reading) + "," + csv(e.word) + "," + to_utf8(ms_label(e)) + "\r\n";
+        else o += to_utf8(e.reading) + "\t" + to_utf8(e.word) + "\t" + to_utf8(mozc_label(e)) + "\t\n";
+        count++;
+    }
+    if (n) *n = count;
+    return o;
+}
+
+std::vector<std::string> UserDict::packs() const {
+    std::vector<std::string> out;
+    std::unordered_set<std::string> seen;
+    for (auto& e : entries_)
+        if (!e.pack.empty() && seen.insert(e.pack).second) out.push_back(e.pack);
+    return out;
+}
+
+// (読み, 表記) を 1 つの鍵に (表の検索用。読みにも表記にも 0 の字は入らない)
+static u16 pair_key(const u16& r, const u16& w) { return r + u16(1, u'\0') + w; }
+
+int UserDict::move_to_pack(const std::vector<std::pair<u16, u16>>& items, const std::string& pack) {
+    refresh();
+    std::unordered_set<u16> want;
+    for (auto& it : items) want.insert(pair_key(it.first, it.second));
+    int n = 0;
+    for (auto& e : entries_)
+        if (e.pack != pack && want.count(pair_key(e.reading, e.word))) { e.pack = pack; n++; }
+    if (n) save();
+    return n;
+}
+
+void UserDict::rename_pack(const std::string& from, const std::string& to) {
+    refresh();
+    if (from.empty() || to.empty() || from == to) return;
+    bool any = false;
+    for (auto& e : entries_) if (e.pack == from) { e.pack = to; any = true; }
+    if (any) save();
+}
+
+int UserDict::remove_pack(const std::string& name, bool with_words) {
+    refresh();
+    if (name.empty()) return 0;
+    int n = 0;
+    for (auto& e : entries_) if (e.pack == name) n++;
+    if (!n) return 0;
+    if (with_words) entries_.erase(std::remove_if(entries_.begin(), entries_.end(), [&](const Entry& e) { return e.pack == name; }), entries_.end());
+    else for (auto& e : entries_) if (e.pack == name) e.pack.clear();
+    save();
+    return n;
 }
 
 // まとめて登録: MS-IME の「一覧の出力」(読み<TAB>語句<TAB>品詞、! で始まる行は説明) や、読み,語句,品詞 の CSV。
 // 返り値: (登録できた数, 登録できなかった行の説明)
-std::pair<int, std::vector<std::string>> UserDict::import_text(const u16& text) {
+std::pair<int, std::vector<std::string>> UserDict::import_text(const u16& text, const std::string& pack) {
+    // 読み直し・重なりの確かめ・保存はまとめて 1 回 (1 語ごとにファイル全体を書き直していて、8000 語で 2 分止まった。2026-11-18)
+    refresh();
+    std::unordered_set<u16> have;
+    have.reserve(entries_.size() * 2 + 1024);
+    for (auto& e : entries_) have.insert(pair_key(e.reading, e.word));
     int ok = 0, line_no = 0;
     std::vector<std::string> bad;
     size_t i = 0;
@@ -776,19 +873,42 @@ std::pair<int, std::vector<std::string>> UserDict::import_text(const u16& text) 
         if (line.empty() || line[0] == u'!' || line[0] == u'#') continue;
         const char16_t sep = line.find(u'\t') != u16::npos ? u'\t' : u',';
         std::vector<u16> f;
-        size_t a = 0;
-        while (true) {
-            size_t b = line.find(sep, a);
-            f.push_back(line.substr(a, b == u16::npos ? u16::npos : b - a));
-            if (b == u16::npos) break;
-            a = b + 1;
+        if (sep == u',') {   // CSV: "" で囲んだ欄 (中の , と "" を含む) も読む (書き出しの CSV と同じ)
+            u16 cur;
+            bool q = false;
+            for (size_t k = 0; k < line.size(); k++) {
+                const char16_t c = line[k];
+                if (q) {
+                    if (c == u'"' && k + 1 < line.size() && line[k + 1] == u'"') { cur += c; k++; }
+                    else if (c == u'"') q = false;
+                    else cur += c;
+                } else if (c == u'"' && cur.empty()) q = true;
+                else if (c == u',') { f.push_back(cur); cur.clear(); }
+                else cur += c;
+            }
+            f.push_back(cur);
+        } else {
+            size_t a = 0;
+            while (true) {
+                size_t b = line.find(sep, a);
+                f.push_back(line.substr(a, b == u16::npos ? u16::npos : b - a));
+                if (b == u16::npos) break;
+                a = b + 1;
+            }
         }
         if (f.size() < 2) { bad.push_back(std::to_string(line_no) + " 行目: 読みと語句がありません"); continue; }
         auto pg = pos_from_label(f.size() >= 3 ? f[2] : u16());
-        std::string err = add(f[0], f[1], pg.first, pg.second);
-        if (err.empty()) ok++;
-        else if (err != "もう登録してあります") bad.push_back(std::to_string(line_no) + " 行目 (" + to_utf8(f[0]) + "): " + err);
+        Entry en;
+        std::string err = make_entry(f[0], f[1], pg.first, pg.second, pack, en);
+        if (err.empty()) {
+            if (!have.insert(pair_key(en.reading, en.word)).second) continue;   // もう登録してある
+            entries_.push_back(std::move(en));
+            ok++;
+        } else if (bad.size() < 1000) {   // 説明は多すぎても読めないので 1000 行まで
+            bad.push_back(std::to_string(line_no) + " 行目 (" + to_utf8(f[0]) + "): " + err);
+        }
     }
+    if (ok) save();
     return {ok, bad};
 }
 
@@ -898,17 +1018,43 @@ u16 latin_key(const u16& w) {
     return k;
 }
 
-std::vector<std::pair<u16, u16>> UserDict::latin_words() const {
-    std::vector<std::pair<u16, u16>> out;
+void UserDict::build_latin() const {
+    if (latin_ok_ && latin_ver_ == version_) return;
+    latin_.clear();
+    latin_map_.clear();
     for (auto& e : entries_) {
         u16 k = latin_key(e.word);
-        if (k.size() >= 2) out.push_back({k, e.word});
+        if (k.size() < 2) continue;
+        latin_map_.emplace(k, e.word);   // 同じ綴りが 2 つあれば先の語 (前の探し方と同じ)
+        latin_.push_back({std::move(k), e.word});
     }
-    return out;
+    latin_ver_ = version_;
+    latin_ok_ = true;
 }
 
-std::string UserDict::add(const u16& reading0, const u16& word0, const std::string& pos, const std::string& group) {
+const std::vector<std::pair<u16, u16>>& UserDict::latin_words() const {
+    build_latin();
+    return latin_;
+}
+
+u16 UserDict::latin_find(const u16& key) const {
+    build_latin();
+    auto f = latin_map_.find(key);
+    return f == latin_map_.end() ? u16() : f->second;
+}
+
+std::string UserDict::add(const u16& reading, const u16& word, const std::string& pos, const std::string& group, const std::string& pack) {
     refresh();
+    Entry en;
+    std::string err = make_entry(reading, word, pos, group, pack, en);
+    if (!err.empty()) return err;
+    for (auto& e : entries_) if (e.reading == en.reading && e.word == en.word) return "もう登録してあります";
+    entries_.push_back(std::move(en));
+    save();
+    return "";
+}
+
+std::string UserDict::make_entry(const u16& reading0, const u16& word0, const std::string& pos, const std::string& group, const std::string& pack, Entry& out) const {
     auto trim = [](u16 s) {
         while (!s.empty() && (s.back() == u' ' || s.back() == 0x3000)) s.pop_back();
         size_t i = 0;
@@ -939,10 +1085,20 @@ std::string UserDict::add(const u16& reading0, const u16& word0, const std::stri
     } else if (pos == "adjective") {
         if (!ends_with(r, u"い") || !ends_with(w, u"い")) return "形容詞は「い」で終わる形で入れてください (例: えもい / エモい)";
     }
-    for (auto& e : entries_) if (e.reading == r && e.word == w) return "もう登録してあります";
-    entries_.push_back({r, w, p, p == "verb" ? group : ""});
-    save();
+    out = Entry{r, w, p, p == "verb" ? group : "", pack};
     return "";
+}
+
+int UserDict::remove_many(const std::vector<std::pair<u16, u16>>& items) {
+    refresh();
+    std::unordered_set<u16> want;
+    for (auto& it : items) want.insert(pair_key(it.first, it.second));
+    const size_t before = entries_.size();
+    entries_.erase(std::remove_if(entries_.begin(), entries_.end(), [&](const Entry& e) { return want.count(pair_key(e.reading, e.word)) > 0; }),
+                   entries_.end());
+    const int n = int(before - entries_.size());
+    if (n) save();
+    return n;
 }
 
 void UserDict::remove(const u16& reading, const u16& word) {
@@ -958,11 +1114,13 @@ void UserDict::save() {
     version_++;
     // 1 語 1 行 (手で読み書きしやすく。1 行に全部つなげていて見にくかった。ブログの報告 2026-10-18)
     std::string o = "[\n";
+    o.reserve(entries_.size() * 96 + 16);
     for (size_t i = 0; i < entries_.size(); i++) {
         auto& e = entries_[i];
         if (i) o += ",\n";
         o += "  {\"r\":" + json::quote(to_utf8(e.reading)) + ",\"w\":" + json::quote(to_utf8(e.word)) +
-             ",\"p\":" + json::quote(e.pos) + ",\"g\":" + json::quote(e.group) + "}";
+             ",\"p\":" + json::quote(e.pos) + ",\"g\":" + json::quote(e.group) +
+             (e.pack.empty() ? std::string() : ",\"k\":" + json::quote(e.pack)) + "}";
     }
     o += entries_.empty() ? "]\n" : "\n]\n";
     if (write_file_atomic(file_, o)) stamp_of(file_, stamp_);

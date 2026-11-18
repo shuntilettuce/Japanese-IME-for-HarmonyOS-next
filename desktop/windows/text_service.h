@@ -76,6 +76,7 @@ public:
     void sync_app_open();
     u16 reconvert_reading(ITfContext* ctx, bool romaji = false, u16* selected = nullptr);
     std::filesystem::file_time_type romaji_stamp_{};   // romaji.tsv を読んだときの更新時刻
+    bool romaji_layout_dirty_ = false;   // 配列を替えた: ローマ字の表を作り直す (AZIK など kind romaji の配列は表に綴りを足す)
     // 候補の窓をマウスで選んだ
     void on_candidate_clicked(int index);
     void on_suggestion_clicked(int index);
@@ -92,6 +93,10 @@ private:
     std::string layout_key(LPARAM lp);   // スキャンコードから物理キーの名前 (親指キーの割り当てで読み替え)
     void layout_load(const std::string& name);
     void layout_apply(ITfContext* ctx, const std::vector<shunti::Layout::Out>& outs);
+    // 配列で打った打鍵の単位 (Layout::Out::unit) の記録。打ち間違いの直しに使う (入力を始めたら空に、Backspace で 1 つ戻す)
+    std::vector<std::string> layout_units_;
+    bool layout_units_ok_ = false;
+    bool layout_typo(shunti::Composer::LayoutTypo& lt);
     void layout_arm_timer();
     static void CALLBACK layout_timer_proc(HWND, UINT, UINT_PTR, DWORD);
     Microsoft::WRL::ComPtr<ITfContext> live_ctx_;     // 手が止まったら変換する入力欄

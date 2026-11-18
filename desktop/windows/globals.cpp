@@ -81,7 +81,8 @@ void Core::use_model(const std::string& name) {
         if (lex != lex_) UnmapViewOfFile(lex);
         return;
     }
-    conv.set_latin_mid2(file == "kkc_model_m5.bin" || file == "kkc_model_pure.bin");   // M5・PureXS は網 mid2 で学んでいる
+    // M5・PureXS・S9 (標準、0.8.1 から) は網 mid2 で学んでいる
+    conv.set_latin_mid2(file == "kkc_model.bin" || file == "kkc_model_m5.bin" || file == "kkc_model_pure.bin");
     if (!conv.open(lex, ls, model, ms, 2)) {
         UnmapViewOfFile(model);
         if (lex != lex_) UnmapViewOfFile(lex);

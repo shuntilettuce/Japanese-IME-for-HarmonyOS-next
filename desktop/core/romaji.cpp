@@ -41,6 +41,7 @@ void Romaji::add_pair(const u16& key0, const u16& kana) {
     if (key.empty() || kana.empty()) return;
     table_[key] = kana;
     for (size_t i = 1; i <= key.size(); i++) prefixes_.insert(key.substr(0, i));
+    for (size_t i = 1; i < key.size(); i++) longer_.insert(key.substr(0, i));
     if (kana.size() > max_kana_) max_kana_ = kana.size();
 }
 
@@ -71,7 +72,7 @@ Romaji::Result Romaji::process(char16_t key) {
     buffer_.push_back(key);
     if (buffer_.size() >= 2) {
         char16_t c0 = buffer_[0];
-        if (c0 == buffer_[1] && c0 != u'n' && has(CONSONANTS, c0)) {
+        if (!bare_ && c0 == buffer_[1] && c0 != u'n' && has(CONSONANTS, c0) && !(extended_ && prefixes_.count(buffer_))) {
             buffer_ = buffer_.substr(1);
             Result sub = process_buffered();
             return {u"っ" + sub.committed, sub.pending};
@@ -82,19 +83,22 @@ Romaji::Result Romaji::process(char16_t key) {
 
 Romaji::Result Romaji::process_buffered() {
     if (buffer_.empty()) return {u"", u""};
-    if (buffer_ == u"n") return {u"", u"n"};
-    if (buffer_.size() >= 2 && buffer_[0] == u'n' && buffer_[1] == u'\'') {   // n' → ん
+    if (buffer_ == u"n" && !bare_) return {u"", u"n"};
+    // n' → ん (ACT・DvorakJP のように表に n' があるときは表のとおり: n' = ない)
+    if (!bare_ && buffer_.size() >= 2 && buffer_[0] == u'n' && buffer_[1] == u'\'' && !(extended_ && table_.count(u"n'"))) {
         buffer_ = buffer_.substr(2);
         Result sub = process_buffered();
         return {u"ん" + sub.committed, sub.pending};
     }
-    if (buffer_.size() >= 2 && buffer_[0] == u'n' && !has(u"aiueoyn", buffer_[1])) {
+    if (!bare_ && buffer_.size() >= 2 && buffer_[0] == u'n' && !has(u"aiueoyn", buffer_[1]) && !(extended_ && prefixes_.count(buffer_))) {
         buffer_ = buffer_.substr(1);
         Result sub = process_buffered();
         return {u"ん" + sub.committed, sub.pending};
     }
     auto it = table_.find(buffer_);
-    if (it != table_.end()) {
+    // 拡張ローマ字で、それだけで決まる綴りが長い綴りの頭も兼ねるとき (gACT10 の r = っ と rg = ぃ) は続きを待つ。
+    // 続かなかったら下の「頭のいちばん長い綴り」で出る
+    if (it != table_.end() && !(extended_ && longer_.count(buffer_))) {
         buffer_.clear();
         return {it->second, u""};
     }
@@ -119,7 +123,17 @@ Romaji::Result Romaji::process_buffered() {
 u16 Romaji::flush() {
     u16 p = buffer_;
     buffer_.clear();
-    if (p == u"n") return u"ん";
+    if (p == u"n" && !bare_) return u"ん";
+    if (extended_ && !p.empty()) {   // 続きを待っていた綴り (r = っ など) と、その後に残った分
+        auto it = table_.find(p);
+        if (it != table_.end()) return it->second;
+        for (size_t i = p.size() - 1; i >= 1; i--) {
+            auto hit = table_.find(p.substr(0, i));
+            if (hit == table_.end()) continue;
+            buffer_ = p.substr(i);
+            return hit->second + flush();
+        }
+    }
     return p;
 }
 

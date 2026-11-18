@@ -51,6 +51,8 @@ export struct AlphabetFlickKeyboardView {
   @Prop inputMode: string = InputMode.HIRAGANA;
   @Prop isLandscape: boolean = false;
   @StorageLink('flickKeyWidthVp') flickKeyWidthVp: number = 72;
+  // 左右の特殊キー列の幅 (かなのフリックと同じ。レイアウト調整の比率で中央の列と別に変わる。2026-11-13 数字だけ幅広だった)
+  @StorageLink('flickSideKeyWidthVp') flickSideKeyWidthVp: number = 72;
   @StorageLink('inputState') inputState: string = 'IDLE';
   @StorageLink('isDark') isDark: boolean = false;
   @StorageLink('keyChromeEnabled') keyChromeEnabled: boolean = true;
@@ -246,7 +248,7 @@ export struct AlphabetFlickKeyboardView {
       Text('取消')
         .fontFamily(JP_FONT_FAMILY)
         .fontSize(14).textAlign(TextAlign.Center)
-        .width(this.flickKeyWidthVp).height('100%')
+        .width(this.flickSideKeyWidthVp).height('100%')
         .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
         .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
         .onClick(() => {
@@ -260,7 +262,7 @@ export struct AlphabetFlickKeyboardView {
           .fontSize(16)
           .fontColor([kbTheme(this.isDark).textPrimary])
       }
-      .width(this.flickKeyWidthVp).height('100%')
+      .width(this.flickSideKeyWidthVp).height('100%')
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).specialBg)
@@ -277,7 +279,7 @@ export struct AlphabetFlickKeyboardView {
       Text('記号')
         .fontFamily(JP_FONT_FAMILY)
         .fontSize(14).textAlign(TextAlign.Center)
-        .width(this.flickKeyWidthVp).height('100%')
+        .width(this.flickSideKeyWidthVp).height('100%')
         .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
         .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
         // Long-press to reveal the 左手モード hint, then flick up to switch.
@@ -313,7 +315,7 @@ export struct AlphabetFlickKeyboardView {
       Text(this.numericPadEnabled ? 'A1あ' : 'あA')
         .fontFamily(JP_FONT_FAMILY)
         .fontSize(12).textAlign(TextAlign.Center)
-        .width(this.flickKeyWidthVp).height('100%')
+        .width(this.flickSideKeyWidthVp).height('100%')
         .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
         .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
         .onClick(() => {
@@ -331,7 +333,7 @@ export struct AlphabetFlickKeyboardView {
           .fontSize(16)
           .fontColor([kbTheme(this.isDark).textPrimary])
       }
-      .width(this.flickKeyWidthVp).height('100%')
+      .width(this.flickSideKeyWidthVp).height('100%')
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).specialBg)
@@ -351,7 +353,7 @@ export struct AlphabetFlickKeyboardView {
           .fontSize(16)
           .fontColor([kbTheme(this.isDark).textPrimary])
       }
-      .width(this.flickKeyWidthVp).height('100%')
+      .width(this.flickSideKeyWidthVp).height('100%')
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).specialBg)
@@ -369,7 +371,7 @@ export struct AlphabetFlickKeyboardView {
         .fontFamily(JP_FONT_FAMILY)
         .fontSize(this.inputState === 'IDLE' ? 12 : 14)
         .textAlign(TextAlign.Center)
-        .width(this.flickKeyWidthVp).height('100%')
+        .width(this.flickSideKeyWidthVp).height('100%')
         .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
         .borderRadius(CELL_RADIUS).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
         // Long-press to reveal the 右手モード hint, then flick up to switch.
@@ -413,7 +415,7 @@ export struct AlphabetFlickKeyboardView {
           .fontSize(16)
           .fontColor([kbTheme(this.isDark).onAccent])
       }
-      .width(this.flickKeyWidthVp).height('100%')
+      .width(this.flickSideKeyWidthVp).height('100%')
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).accent)

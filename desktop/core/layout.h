@@ -11,6 +11,10 @@
 //   space+a / lthumb+a / rthumb+a<TAB>出る字   シフト (押している間ずっと効く)
 //   d<TAB>{p1}  と  p1>e<TAB>出る字           前置シフト (月配列など: d を打ってから e で「ね」)
 // 出る字: letters は英字・記号 (そのままローマ字に流す)、kana と chord はかな・記号 (そのまま入れる)。
+// #! kind romaji は ローマ字の表に綴りを足す・上書きする (綴り<TAB>かな。AZIK など。2026-11-15)。
+//   キーはふつう読み替えないが、「#! keys」の行の後は letters と同じ形のキーの読み替え (Dvorak の上の ACT・DvorakJP、SKY)。
+//   読み替えた字はそのままローマ字に流すので、1 キーで複数の字 (SKY の ai) も書ける。
+//   「#! base empty」は元のローマ字の表を使わず、この表の綴りだけで打つ (gACT10)
 // {bs} {enter} {left} {right} は打鍵として返す (薙刀式の編集のキーなど)
 #pragma once
 #include <cstdint>
@@ -24,15 +28,20 @@ namespace shunti {
 
 class Layout {
 public:
-    enum class Kind { Letters, Kana, Chord };
+    enum class Kind { Letters, Kana, Chord, Romaji };
     // 判定の結果: 出す字 (text) か、打鍵 (key: "bs" など)
     struct Out {
         std::u16string text;
         std::string key;
+        std::string unit;   // text を出した打鍵の単位 (表の書き方: a・S-a・a+j・lthumb+a・p1>e)。打ち間違いの直しに使う
     };
 
     bool load(const std::string& tsv, std::string* err = nullptr);
-    bool loaded() const { return !single_.empty() || !chords_.empty(); }
+    bool loaded() const { return !single_.empty() || !chords_.empty() || !romaji_.empty(); }
+    // kind romaji: ローマ字の表に足す綴り (綴り, かな)。キーは読み替えない (handles は いつも false)
+    const std::vector<std::pair<std::u16string, std::u16string>>& romaji_pairs() const { return romaji_; }
+    // 「#! base empty」: 元のローマ字の表を空にして、この表の綴りだけで打つ (gACT10)
+    bool romaji_base_empty() const { return romaji_base_empty_; }
     Kind kind() const { return kind_; }
     const std::string& name() const { return name_; }
     const std::string& author() const { return author_; }
@@ -61,6 +70,16 @@ public:
     // 物理キーの名前を、親指キーの割り当てに合わせて読み替える (空なら この配列では受け持たない)
     std::string map_key(const std::string& k) const;
 
+    // ---- 配列の打ち間違いの直し (2026-11-15)。打鍵の単位 (Out::unit) の並びを 1 か所だけ直した並びを作る:
+    // 消す・隣の物理キー (同じ面)・同じキーの別の面 (Shift・親指・前置シフトの付け外し)・入れ替え・同時押しの組み直し
+    // (組みそこね・組みすぎ)・抜けた 1 打 (英字の配列だけ: 母音と抜けやすい子音を出すキー、前の打鍵の重ね)。
+    // 返すのは単位ごとの出す字の並び (呼ぶ側が同じ配列・同じローマ字の表で読みに直す)
+    std::u16string unit_text(const std::string& unit) const;
+    bool has_key_map() const { return !single_.empty() || !shifted_.empty(); }
+    std::vector<std::vector<std::u16string>> typo_variants(const std::vector<std::string>& units) const;
+    std::vector<std::string> unit_alts(const std::string& unit) const;   // 1 つの単位の言い換え (隣のキー・別の面)
+    std::vector<std::string> all_units() const;   // 表にある打鍵の単位の全部 (ベンチで読みを打鍵に直すのに使う)
+
 private:
     struct Pending { std::string key; bool shift; uint64_t t; };
     // 同時押しの配列で、まだ決まっていない打鍵 (押した順)
@@ -83,7 +102,7 @@ private:
     std::vector<Out> resolve(uint64_t now);
     Out lookup1(const std::string& key, bool shift) const;
     std::vector<Out> flush_pending();
-    std::vector<Out> emit(const std::u16string& s);   // {p1} は出さずに前置シフトにする
+    std::vector<Out> emit(const std::u16string& s, const std::string& unit = std::string());   // {p1} は出さずに前置シフトにする
     std::string shift_held() const;   // 押している間効くシフト (space・lthumb・rthumb) のうち押されているもの
 
     Kind kind_ = Kind::Letters;
@@ -95,6 +114,8 @@ private:
     std::vector<Pending> pending_;
     std::set<std::string> held_;                      // いま押されているキー
     bool shift_used_ = false;                         // シフトを押している間に、ほかのキーと組んだ (離したときに単打で出さない)
+    std::vector<std::pair<std::u16string, std::u16string>> romaji_;   // kind romaji の綴り
+    bool romaji_base_empty_ = false;
     std::map<std::string, std::u16string> prefixed_;   // 前置シフトの面: キーは "p1>e"
     std::string prefix_;                              // 打った前置 ("p1")。空 = なし
 };

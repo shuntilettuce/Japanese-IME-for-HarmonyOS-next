@@ -128,12 +128,15 @@ void StyleModel::set_counts(const std::unordered_map<u16, Count>& counts) {
 
 int StyleModel::pref(const u16& surface, const std::array<float, 2>& r) const {
     auto v = var_.find(surface);
-    if (v == var_.end()) return 0;
+    return v == var_.end() ? 0 : pref(v->second, r);
+}
+
+int StyleModel::pref(const Form& f, const std::array<float, 2>& r) const {
     auto eff = [&](const Count& c) { return c.w[0] * r[0] + c.w[1] * r[1] + LAM * float(c.n); };
     float a1 = 0, b1 = 0;
-    auto l = lem_.find(v->second.lemma);
+    auto l = lem_.find(f.lemma);
     if (l != lem_.end()) { a1 = eff(l->second[0]); b1 = eff(l->second[1]); }
-    const auto& ck = cls_[size_t(v->second.cls)];
+    const auto& ck = cls_[size_t(f.cls)];
     const float ak = eff(ck[0]), bk = eff(ck[1]);
     const float q = (ak + 1) / (ak + bk + 2);
     const float pk = (a1 + A * q) / (a1 + b1 + A);
@@ -146,23 +149,23 @@ bool StyleModel::restyle(const u16& ctx, Conversion& out) const {
     u16 text;
     std::vector<Word> words;
     bool changed = false;
-    // 網の語の区切りは書き方の対の表と合わないことがある (でき|ない と できない): 隣の語を 3 つまでつないで長い方から引く
+    // 網の語の区切りは書き方の対の表と合わないことがある (でき|ない と できない): 隣の語を 3 つまでつないで長い方から引く。
+    // 漢字の形は、語の読みが対のかなの形と同じものだけ (読みの違う 内 (ない) を うち に替えていた。ユーザー 2026-11-15)
     for (size_t i = 0; i < out.words.size();) {
         size_t len = 1;
-        u16 s = out.words[i].surface;
-        auto v = var_.end();
-        for (size_t L = std::min<size_t>(3, out.words.size() - i); L >= 1; L--) {
-            u16 t;
-            for (size_t k = 0; k < L; k++) t += out.words[i + k].surface;
-            if ((v = var_.find(t)) != var_.end()) { len = L; s = t; break; }
+        const Form* f = nullptr;
+        for (size_t L = std::min<size_t>(3, out.words.size() - i); L >= 1 && !f; L--) {
+            u16 t, rd;
+            for (size_t k = 0; k < L; k++) { t += out.words[i + k].surface; rd += out.words[i + k].reading; }
+            for (auto [a, b] = var_.equal_range(t); a != b; ++a)
+                if (!a->second.kanji || a->second.other == rd) { f = &a->second; len = L; break; }
         }
         Word w = out.words[i];
-        for (size_t k = 1; k < len; k++) { w.reading += out.words[i + k].reading; w.rid = out.words[i + k].rid; }
-        w.surface = s;
-        if (v != var_.end()) {
-            const int p = pref(s, r);
-            if (p != 0 && (p > 0) != v->second.kanji) {
-                w.surface = v->second.other;
+        for (size_t k = 1; k < len; k++) { w.reading += out.words[i + k].reading; w.surface += out.words[i + k].surface; w.rid = out.words[i + k].rid; }
+        if (f) {
+            const int p = pref(*f, r);
+            if (p != 0 && (p > 0) != f->kanji) {
+                w.surface = f->other;
                 changed = true;
             }
         }

@@ -33,6 +33,18 @@ void open_hand() {
     std::wstring exe = (module_dir() / L"shunti_hand.exe").wstring();
     ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNOACTIVATE);
 }
+
+// 声の入力の窓 (shunti_voice.exe)。録音も認識もこの PC の中だけ。窓はフォーカスを取らず、選んだ文を今の入力欄へ送る
+// 部品が揃っているときだけメニューに出す (声の部品は別に入れる。無い配布物ではメニューも出さない)
+bool voice_available() {
+    std::error_code ec;
+    return std::filesystem::exists(module_dir() / L"shunti_voice.exe", ec) && std::filesystem::exists(module_dir() / L"voice_trie.bin", ec) &&
+           std::filesystem::exists(module_dir() / L"voice_e1.bin", ec);
+}
+void open_voice() {
+    std::wstring exe = (module_dir() / L"shunti_voice.exe").wstring();
+    ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNOACTIVATE);
+}
 }  // namespace
 
 
@@ -95,6 +107,7 @@ STDMETHODIMP LangBarButton::OnClick(TfLBIClick click, POINT pt, const RECT*) {
     AppendMenuW(m, MF_STRING, 1, ts_ && ts_->is_open() ? T(58) : T(57));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, 3, T(202));
+    if (voice_available()) AppendMenuW(m, MF_STRING, 5, T(234));
     AppendMenuW(m, MF_STRING, 4, T(203));
     AppendMenuW(m, MF_STRING, 2, T(134));
     HWND owner = menu_owner();
@@ -105,11 +118,12 @@ STDMETHODIMP LangBarButton::OnClick(TfLBIClick click, POINT pt, const RECT*) {
     if (cmd == 1 && ts_) ts_->set_open(!ts_->is_open());
     if (cmd == 2) open_settings();
     if (cmd == 3) open_hand();
+    if (cmd == 5) open_voice();
     if (cmd == 4) open_clip_history();
     return S_OK;
 }
 // タスクバーのアイコンを右クリックすると、Windows がここで中身を頼んできて、Windows 自身がメニューを出す
-enum { MENU_TOGGLE = 1, MENU_SETTINGS = 2, MENU_HAND = 3, MENU_CLIP = 4 };
+enum { MENU_TOGGLE = 1, MENU_SETTINGS = 2, MENU_HAND = 3, MENU_CLIP = 4, MENU_VOICE = 5 };
 
 STDMETHODIMP LangBarButton::InitMenu(ITfMenu* menu) {
     if (!menu) return E_INVALIDARG;
@@ -118,6 +132,8 @@ STDMETHODIMP LangBarButton::InitMenu(ITfMenu* menu) {
     menu->AddMenuItem(UINT(-1), TF_LBMENUF_SEPARATOR, nullptr, nullptr, L"", 0, nullptr);
     const wchar_t* hand = T(202);
     menu->AddMenuItem(MENU_HAND, 0, nullptr, nullptr, hand, ULONG(wcslen(hand)), nullptr);
+    const wchar_t* voice = T(234);
+    if (voice_available()) menu->AddMenuItem(MENU_VOICE, 0, nullptr, nullptr, voice, ULONG(wcslen(voice)), nullptr);
     const wchar_t* clip = T(203);
     menu->AddMenuItem(MENU_CLIP, 0, nullptr, nullptr, clip, ULONG(wcslen(clip)), nullptr);
     const wchar_t* settings = T(134);
@@ -129,6 +145,7 @@ STDMETHODIMP LangBarButton::OnMenuSelect(UINT id) {
     if (id == MENU_TOGGLE && ts_) ts_->set_open(!ts_->is_open());
     if (id == MENU_SETTINGS) open_settings();
     if (id == MENU_HAND) open_hand();
+    if (id == MENU_VOICE) open_voice();
     if (id == MENU_CLIP) open_clip_history();
     return S_OK;
 }

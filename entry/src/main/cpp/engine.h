@@ -43,6 +43,14 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
 // keys = 打ったキー (英字・記号そのまま)。span_end[i] = 読みの i 文字目がキーの何文字目までで決まったか (単調増加)。
 // 直後の 1 回の kkc_convert にだけ効く (その変換の読みの長さが nk と合わなければ使わない)
 KKC_API void kkc_set_keys(kkc_engine* e, const uint16_t* keys, int nkeys, const int32_t* span_end, int nk);
+// 読みの打ち直し (PC のキー配列の打ち間違い)。buf に count 個の読みを続けて、lens[i] = i 個目の字数、nk = 打ったとおりの読みの字数。
+// 直後の 1 回の kkc_convert にだけ効き、打ち間違いの辺をローマ字の打ち直しの代わりにこれで作る (count = 0 でもローマ字の打ち直しを止める)
+KKC_API void kkc_set_alt_readings(kkc_engine* e, const uint16_t* buf, const int32_t* lens, int count, int nk);
+// 声の入力の言い換え (shunti_voice.exe)。full = 音響の 1 位の読み、buf に count 個の言い換えの読み (lens[i] 字)、costs[i] = その
+// 言い換えのコスト (打ち間違いの TYPO_COST の代わり)。打ち間違いの辺と同じ形で網に入る。count = 0 で消すまで効き続ける。
+// 打ち間違いの辺を知っているモデル (S7 から) と kkc_set_typo(on) が要る。プロセスで 1 つ (声の窓のように 1 スレッドで使う)
+KKC_API void kkc_set_voice_alts(kkc_engine* e, const uint16_t* full, int nfull, const uint16_t* buf, const int32_t* lens,
+                                const int32_t* costs, int count);
 // カーソルの後ろの文 (後ろの文脈、80 字ほど)。直後の 1 回の kkc_convert にだけ効く。後ろの文脈を学んだモデル (S8 から) だけが使う
 KKC_API void kkc_set_right_ctx(kkc_engine* e, const uint16_t* text, int n);
 // モデルが後ろの文脈を学んでいるか (S8 から 1)。使わないモデルでは後ろの文脈を作る手間を省ける

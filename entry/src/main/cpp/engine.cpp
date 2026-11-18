@@ -62,6 +62,17 @@ extern "C" void kkc_avx2_lin_q(const short* Xq, const float* xs, int T, int inp,
 #define KKC_X86 0
 #endif
 
+#ifdef KKC_OPCOUNT
+// 重さベンチ用: 計算の回数を数える。PC に依らない重さの物差し。アプリのビルドでは消える
+#include <atomic>
+enum { OP_MAC_F32, OP_MAC_Q, OP_MAC_ATT, OP_WBYTES, OP_ELEM, OP_TOK, OP_EDGE, OP_SPANQ, OP_WORDK, OP_PROW, OP_RELAX, OP_ENC, OP_N };
+static std::atomic<unsigned long long> g_ops[OP_N];
+extern "C" void kkc_ops_read(unsigned long long* o) { for (int i = 0; i < OP_N; i++) o[i] = g_ops[i].load(); }
+#define OPC(i, n) g_ops[i].fetch_add((unsigned long long)(n), std::memory_order_relaxed)
+#else
+#define OPC(i, n) ((void)0)
+#endif
+
 namespace {
 
 typedef std::u32string ustr;
@@ -88,6 +99,18 @@ thread_local std::vector<PathInfo> tl_paths;
 
 // ユーザー辞書の語 (読み・表記・品詞の左右 ID・コスト)。辞書の語と同じく網に入れ、モデルが文脈で採点する
 struct UserWord { ustr r, s; int32_t lid, rid, cost; bool whole = false; };   // whole = 読み全体が一致したときだけ (短縮よみ)
+// ユーザー辞書の語の並びと、読み → 語の番号の表。10 万語の辞書でも、変換のたびに全部の語の読みを探さないように (2026-11-18)
+struct UserList {
+    std::vector<UserWord> v;
+    std::unordered_map<ustr, std::vector<uint32_t>> by_r;
+    size_t maxlen = 0;
+    void clear() { v.clear(); by_r.clear(); maxlen = 0; }
+    void push_back(UserWord w) {
+        if (!w.r.empty()) { by_r[w.r].push_back(uint32_t(v.size())); maxlen = std::max(maxlen, w.r.size()); }
+        v.push_back(std::move(w));
+    }
+    UserWord& back() { return v.back(); }
+};
 
 inline bool is_kana(char32_t c) { return (c >= 0x3041 && c <= 0x3096) || c == 0x30FC || c == 0x3094; }
 inline char32_t kata(char32_t c) { return (c >= 0x3041 && c <= 0x3096) ? c + 0x60 : c; }
@@ -601,6 +624,10 @@ namespace typo {
 const int TYPO_COST = 3000, TYPO_MAX = 32, MAX_WORD_KANA = 8;
 // 打ったとおりの網の一番よい道より、直した辺を通る一番よい道がこれ以上悪ければ捨てる (TYPO_COST 込み)
 const int TYPO_KEEP = 2000;
+// 声の入力の言い換え (kkc_set_voice_alts)。声の窓 (shunti_voice.exe) だけが入れる。IME 本体では空のまま
+std::vector<ustr> g_voice_alts;
+std::vector<int32_t> g_voice_cost;   // 言い換えごとのコスト (TYPO_COST の代わり)
+ustr g_voice_full;                   // 言い換えの元の読み全体
 
 // 打ったとおりの網の、辺ごとの「頭からその辺まで」「その辺から終わりまで」の一番よいコスト (辞書のコスト + つながり)
 struct Ctx {
@@ -838,12 +865,15 @@ struct Head {
 
 // rom_in: 打ったキーの並び (PC、kkc_set_keys)。あれば読みからローマ字を作らずにこれを使う (読みに英字が残った打ち間違い
 // ありgsとう も、キーの並び arigstou から 1 打戻せば ありがとう になる)
+// seg_alts: 呼ぶ側 (PC のキー配列) が物理キーの打ち直しから作った、この区間の読みの打ち直し (kkc_set_alt_readings)。
+// あればローマ字の打ち直しの代わりにこれを使う (かなの単位の打ち直しはそのまま)
 void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& base, const Ctx& ctx, std::vector<Edge>& out,
-               const std::string* rom_in = nullptr) {
+               const std::string* rom_in = nullptr, const std::vector<ustr>* seg_alts = nullptr) {
     init();
     double t0 = now_ms();
     std::string rom;
-    if (rom_in) rom = *rom_in;
+    if (rom_in) rom = *rom_in;   // キーの並びと打ち直しの読みの両方があれば両方 (英字が残る所)
+    else if (seg_alts) {}
     else if (r.size() < 2 || !to_romaji(r, rom)) return;
     if (r.size() < 2) return;
     std::vector<std::string> vars;
@@ -884,6 +914,22 @@ void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& ba
             v.insert(i, 1, *m);
             kvars.push_back(v);
         }
+    // 声の入力 (shunti_voice.exe、kkc_set_voice_alts): 音響の語の網の上位の読み (読み全体の言い換え) のうち、変わった所がこの区間に
+    // 収まるものを、この区間の読みの言い換えとして足す。コストは TYPO_COST の代わりに音の点の差
+    std::unordered_map<ustr, int32_t> vextra;   // 声の言い換え -> TYPO_COST との差
+    if (!g_voice_alts.empty() && off + int(r.size()) <= int(g_voice_full.size())) {
+        const ustr& F = g_voice_full;
+        const int n = int(F.size()), w0 = off, w1 = off + int(r.size());
+        for (size_t ai = 0; ai < g_voice_alts.size(); ai++) {
+            const ustr& A = g_voice_alts[ai];
+            const int m = int(A.size());
+            int p = 0; while (p < n && p < m && F[size_t(p)] == A[size_t(p)]) p++;
+            int q = 0; while (q < n - p && q < m - p && F[size_t(n - 1 - q)] == A[size_t(m - 1 - q)]) q++;
+            if (p < w0 || n - q > w1 || w1 - w0 + m - n <= 0) continue;   // 変わった所が区間に収まらない
+            kvars.push_back(A.substr(size_t(w0), size_t(w1 - w0 + m - n)));
+            vextra[kvars.back()] = g_voice_cost[ai] - TYPO_COST;
+        }
+    }
     double t1 = now_ms(); T_[0] += t1 - t0;
     std::unordered_set<std::string> tried;
     std::unordered_set<ustr> base_keys;   // 打ったとおりの読みの網にある (区間, 表記)
@@ -970,6 +1016,9 @@ void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& ba
     std::vector<ustr> all;
     for (const std::string& v : vars)
         if (tried.insert(v).second && to_kana(v, k2) && k2 != r && seen_k.insert(k2).second) all.push_back(k2);
+    if (seg_alts)
+        for (auto& v : *seg_alts)
+            if (v != r && seen_k.insert(v).second) all.push_back(v);
     for (auto& v : kvars)
         if (seen_k.insert(v).second) all.push_back(v);
     double t2 = now_ms(); T_[1] += t2 - t1;
@@ -993,13 +1042,15 @@ void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& ba
     };
     for (const ustr& kv : all) {
         k2 = kv;
+        auto vxi = vextra.find(kv);
+        const int32_t TC = TYPO_COST + (vxi == vextra.end() ? 0 : vxi->second);   // 声の言い換えは音の点の差のコスト
         const int n2 = int(k2.size());
         int p = 0;
         while (p < n1 && p < n2 && r[size_t(p)] == k2[size_t(p)]) p++;
         int q = 0;
         while (q < n1 - p && q < n2 - p && r[size_t(n1 - 1 - q)] == k2[size_t(n2 - 1 - q)]) q++;
-        // 助詞だけを変える直し (の -> に、が -> を、の を足す・消す) は作らない (推敲であって打ち間違いではない)
-        if (particles_only(r.substr(size_t(p), size_t(n1 - q - p))) && particles_only(k2.substr(size_t(p), size_t(n2 - q - p)))) continue;
+        // 助詞だけを変える直し (の -> に、が -> を、の を足す・消す) は作らない (推敲であって打ち間違いではない)。声の言い換えは別 (は/わ の聞き分けも音から)
+        if (vxi == vextra.end() && particles_only(r.substr(size_t(p), size_t(n1 - q - p))) && particles_only(k2.substr(size_t(p), size_t(n2 - q - p)))) continue;
         bool single_hit = false;
         double ta = now_ms();
         // 直した読みで、変わった所 [p, n2 - q) を覆う語 (2 字以上)
@@ -1012,17 +1063,17 @@ void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& ba
                 const int s = s2, e = e2 - n2 + n1;   // 元の読みの区間 (変わった所より前は同じ、後ろは長さの差だけずれる)
                 if (e <= s || e > n1 || e < n1 - q) continue;
                 // 区間の下限 (語のコスト 0・つながり 0) で引く前に捨てる
-                if (ctx.lmin[size_t(s + off)] + TYPO_COST + ctx.rmin[size_t(e + off)] - 2000 > ctx.best + TYPO_KEEP) continue;
+                if (ctx.lmin[size_t(s + off)] + TC + ctx.rmin[size_t(e + off)] - 2000 > ctx.best + TYPO_KEEP) continue;
                 uint32_t a, b;
                 if (!look(k2, s2, e2, a, b)) continue;
                 for (uint32_t j = a; j < b; j++) {
                     const Ent en = L.ent(j);
                     if (en.cost >= ENG_COST || pict_word(L, en)) continue;
                     // 表記の文字列を作る前に、add と同じ基準 (下限・道のコスト) で捨てる (結果は変わらない)
-                    const int32_t c0 = en.cost + TYPO_COST;
+                    const int32_t c0 = en.cost + TC;
                     if (ctx.lmin[size_t(s + off)] + c0 + ctx.rmin[size_t(e + off)] - 2000 > ctx.best + TYPO_KEEP) continue;
                     if (thru(s + off, e + off, int32_t(en.lid), int32_t(en.rid), c0) > ctx.best + TYPO_KEEP) continue;
-                    if (add(s, e, from16(L.s_blob + en.soff, en.slen), int32_t(en.lid), int32_t(en.rid), en.cost + TYPO_COST))
+                    if (add(s, e, from16(L.s_blob + en.soff, en.slen), int32_t(en.lid), int32_t(en.rid), en.cost + TC))
                         single_hit = true;
                 }
             }
@@ -1046,7 +1097,7 @@ void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& ba
                     const int s = s2, e = e2 - n2 + n1;
                     if (e <= s || e > n1 || e < n1 - q) continue;
                     // 区間の下限 (前の語の一番安いコスト・つながり 0) で引く前に捨てる
-                    if (ctx.lmin[size_t(s + off)] + c1[0].cost + TYPO_COST + ctx.rmin[size_t(e + off)] - 2000 > ctx.best + TYPO_KEEP) continue;
+                    if (ctx.lmin[size_t(s + off)] + c1[0].cost + TC + ctx.rmin[size_t(e + off)] - 2000 > ctx.best + TYPO_KEEP) continue;
                     if (!look(k2, m, e2, a2, b2)) continue;
                     const std::vector<Ent>& c2 = cheapest_m(a2, b2);
                     if (c2.empty()) continue;
@@ -1057,12 +1108,12 @@ void add_edges(const Lex& L, const ustr& r, int off, const std::vector<Edge>& ba
                     // 後ろの れる につながらない品詞の組を選んでいた
                     struct Pair { double t; int32_t c; const Ent* x; const Ent* y; ustr sf; };
                     std::vector<Pair> ps;
-                    const double lr = ctx.lmin[size_t(s + off)] + ctx.rmin[size_t(e + off)] - 2000 + TYPO_COST;
+                    const double lr = ctx.lmin[size_t(s + off)] + ctx.rmin[size_t(e + off)] - 2000 + TC;
                     for (const Ent& x : c1) {
                         if (lr + x.cost + c2[0].cost > ctx.best + TYPO_KEEP) break;   // 安い順なので、以降も届かない
                         for (const Ent& y : c2) {
                             if (lr + x.cost + y.cost > ctx.best + TYPO_KEEP) break;
-                            const int32_t c = x.cost + y.cost + L.conn(x.rid, y.lid) + TYPO_COST;
+                            const int32_t c = x.cost + y.cost + L.conn(x.rid, y.lid) + TC;
                             const double t = thru(s + off, e + off, x.lid, y.rid, c);
                             if (t > ctx.best + TYPO_KEEP) continue;
                             ustr sf = from16(L.s_blob + x.soff, x.slen) + from16(L.s_blob + y.soff, y.slen);
@@ -1123,7 +1174,40 @@ bool symbol_word(const ustr& s) {
     return sym;
 }
 
-std::vector<Edge> edges(const Lex& L, const ustr& r, const std::vector<UserWord>* user = nullptr) {
+namespace typo {
+// 読み全体の打ち直し (kkc_set_alt_readings) のうち、窓 [w, we) の中だけが変わったものを窓の読みに切り出す
+struct AltReading { ustr a; int p, q; };   // p = 前の一致の字数、q = 後ろの一致の字数
+std::vector<AltReading> prep_alts(const ustr& r, const std::vector<ustr>& alts) {
+    std::vector<AltReading> out;
+    const int n = int(r.size());
+    for (const ustr& a : alts) {
+        const int m = int(a.size());
+        int p = 0;
+        while (p < n && p < m && a[size_t(p)] == r[size_t(p)]) p++;
+        int q = 0;
+        while (q < n - p && q < m - p && a[size_t(m - 1 - q)] == r[size_t(n - 1 - q)]) q++;
+        if (p == n && m == n) continue;
+        out.push_back({a, p, q});
+    }
+    return out;
+}
+std::vector<ustr> window_alts(const std::vector<AltReading>& alts, int n, int w, int we) {
+    std::vector<ustr> out;
+    for (const AltReading& x : alts) {
+        if (x.p < w || n - x.q > we) continue;
+        const int len = (we - w) + int(x.a.size()) - n;
+        if (len < 1) continue;
+        ustr s = x.a.substr(size_t(w), size_t(len));
+        bool ok = true;
+        for (char32_t c : s) if (!is_kana(c)) { ok = false; break; }
+        if (ok) out.push_back(std::move(s));
+    }
+    return out;
+}
+}  // namespace typo
+
+// alts: 読み全体の打ち直し (PC のキー配列、kkc_set_alt_readings)。あれば打ち間違いの辺はローマ字の打ち直しでなくこれで作る
+std::vector<Edge> edges(const Lex& L, const ustr& r, const UserList* user = nullptr, const std::vector<ustr>* alts = nullptr) {
     std::vector<Edge> out;
     int n = int(r.size());
     std::vector<uint16_t> key;
@@ -1191,17 +1275,26 @@ std::vector<Edge> edges(const Lex& L, const ustr& r, const std::vector<UserWord>
         s = e;
     }
     // ユーザー辞書: 読みが現れる所すべてに辞書の語として置く
-    if (user) {
-        for (const UserWord& w : *user) {
-            if (w.r.empty()) continue;
+    if (user && !user->by_r.empty()) {
+        // 読みの部分ごとに表を引く。置く順は前と同じ (語の登録順 → 位置の順)
+        std::vector<std::pair<uint32_t, int>> hits;
+        ustr sub;
+        for (int s = 0; s < n; s++)
+            for (int len = 1; len <= int(user->maxlen) && s + len <= n; len++) {
+                sub.assign(r, size_t(s), size_t(len));
+                auto f = user->by_r.find(sub);
+                if (f != user->by_r.end()) for (uint32_t k : f->second) hits.push_back({k, s});
+            }
+        std::sort(hits.begin(), hits.end());
+        for (auto& [k, s] : hits) {
+            const UserWord& w = user->v[k];
             // 短縮よみ (よ → よろしくお願いします) は、その読みだけを打ったときだけ。文の途中・打っている途中の変換に混ぜない
             // (MS-IME と同じ。ブログの報告 2026-10-21: 「よろこんで」が「よろしくお願いします。ろこんで」に)
             if (w.whole) {
-                if (r == w.r) out.push_back({0, n, w.s, w.lid, w.rid, w.cost, K_DICT});
+                if (s == 0 && int(w.r.size()) == n) out.push_back({0, n, w.s, w.lid, w.rid, w.cost, K_DICT});
                 continue;
             }
-            for (size_t i = r.find(w.r); i != ustr::npos; i = r.find(w.r, i + 1))
-                out.push_back({int(i), int(i + w.r.size()), w.s, w.lid, w.rid, w.cost, K_DICT});
+            out.push_back({s, s + int(w.r.size()), w.s, w.lid, w.rid, w.cost, K_DICT});
         }
     }
     // 数字のまま打った数 (数字パッドの 2000) にも、カンマ・漢数字・全角・単位まじりの辺 (2,000・二千・２０００・2万5000)。
@@ -1241,17 +1334,24 @@ std::vector<Edge> edges(const Lex& L, const ustr& r, const std::vector<UserWord>
         typo::Ctx ctx;
         typo::build_ctx(L, out, n, ctx);
         std::vector<Edge> ty;
+        std::vector<typo::AltReading> pa;
+        if (alts) pa = typo::prep_alts(r, *alts);
+        auto win = [&](int w, int we) {
+            if (!alts) { typo::add_edges(L, r.substr(size_t(w), size_t(we - w)), w, out, ctx, ty); return; }
+            const std::vector<ustr> sa = typo::window_alts(pa, n, w, we);
+            typo::add_edges(L, r.substr(size_t(w), size_t(we - w)), w, out, ctx, ty, nullptr, &sa);
+        };
         for (int s = 0; s < n;) {
             if (!is_kana(r[s])) { s++; continue; }
             int e = s;
             while (e < n && is_kana(r[e])) e++;
             // 長い区間は 12 字の窓 (6 字ずつ重ねる) に分ける (打ち直しの候補は字数の 2 乗で増えるので)
             const int W = 12, STEP = 6;
-            if (e - s <= W) typo::add_edges(L, r.substr(size_t(s), size_t(e - s)), s, out, ctx, ty);
+            if (e - s <= W) win(s, e);
             else
                 for (int w = s; w < e; w += STEP) {
                     const int we = std::min(e, w + W);
-                    typo::add_edges(L, r.substr(size_t(w), size_t(we - w)), w, out, ctx, ty);
+                    win(w, we);
                     if (we == e) break;
                 }
             s = e;
@@ -2092,6 +2192,7 @@ bool use_quant() {
 
 // 出力を 16 本単位でスレッドに分ける
 void linear(Pool* P, const float* X, int T, int in, const float* WT, int ldw, const float* B, int out, float* Y) {
+    OPC(OP_MAC_F32, (unsigned long long)T * in * out); OPC(OP_WBYTES, (unsigned long long)in * out * 4);
     const int nth = P ? P->n : 1;
     if (nth <= 1 || out < 64 || T * out < 4096) { lin_any(X, T, in, WT, ldw, B, Y, out, 0, out); return; }
     const int tiles = (out + 15) / 16, per = (tiles + nth - 1) / nth;
@@ -2104,6 +2205,7 @@ void linear(Pool* P, const float* X, int T, int in, const float* WT, int ldw, co
 // linear と同じ計算を整数で。入力は最初に 1 回だけ丸める (xq・xs は作業場所)
 void linear_q(Pool* P, const float* X, int T, const QW& q, const float* B, float* Y, std::vector<short>& xq, std::vector<float>& xs) {
 #if KKC_X86
+    OPC(OP_MAC_Q, (unsigned long long)T * q.in * q.out); OPC(OP_WBYTES, (unsigned long long)q.inp * q.out * sizeof(short));
     xq.resize(size_t(T) * q.inp);
     xs.resize(size_t(T));
     kkc_avx2_quant_rows(X, T, q.in, q.inp, xq.data(), xs.data());
@@ -2233,7 +2335,7 @@ struct kkc_engine {
     std::vector<SegInfo> last_segs;   // 直前の変換の 1 位の語の区切り
     std::vector<PathInfo> last_paths; // 直前の変換の上位の経路 (kkc_last_paths)
     double last_cost[2] = {0, 0};     // 直前の変換の 1 位・2 位 (表記が違う最初の 2 つ) の経路のコスト。2 位が無ければ大きな値
-    std::vector<UserWord> user;                   // ユーザー辞書の語 (kkc_user_add_like で足す)
+    UserList user;                                // ユーザー辞書の語 (kkc_user_add_like で足す)
     // M5 の個人化 (版 6 のモデル): 書き方の対の表 (kkc_set_variants)・表記ごとの使う人の印 (kkc_set_marks)・
     // 書き方の記録 (kkc_set_style: 語ごと・種類ごとの、漢字とかなで書いた回数)
     struct VarForm { ustr other; int lemma, cls; bool kanji; };
@@ -2245,6 +2347,9 @@ struct kkc_engine {
     // 打ったキーの並び (kkc_set_keys)。直後の 1 回の変換で英字の辺 (K_LATIN) を作るのに使う
     std::vector<uint16_t> keys;
     std::vector<int32_t> span_end;
+    // 読みの打ち直し (kkc_set_alt_readings)。直後の 1 回の変換で、打ち間違いの辺をローマ字の打ち直しでなくこれで作る
+    std::vector<ustr> alts;
+    int alts_n = -1;   // 渡された読みの長さ (-1 = 無し)
     // カーソルの後ろの文 (kkc_set_right_ctx)。直後の 1 回の変換で、後ろの文脈を学んだモデル (区分 4 つ) に渡す
     std::vector<uint16_t> rctx;
     // 整数に丸めた重み (層ごとに inw, outw, l1w, l2w)。空なら float のまま
@@ -2357,6 +2462,9 @@ void encode(kkc_engine* E, const std::vector<int>& tok, const std::vector<int>& 
         const float *a = M.emb.row(tok[t], ebuf.data()), *b = M.seg + size_t(seg[t]) * d, *c = M.pos + size_t(t) * d;
         for (int i = 0; i < d; i++) x[size_t(t) * d + i] = a[i] + b[i] + c[i];
     }
+    OPC(OP_ENC, 1); OPC(OP_TOK, T);
+    // 層ごと: 注意 (QK と PV) T·T·d ×2、要素ごとの処理 (正規化 2 回・残差 2 回・GELU・softmax)
+    OPC(OP_MAC_ATT, 2ull * T * T * d * M.layers); OPC(OP_ELEM, (4ull * T * d + 1ull * T * ff + 1ull * T * T * H) * M.layers + 1ull * T * d);
     std::vector<float> sc(size_t(T) + 8);   // AVX2 版は 8 本単位で使う
     const float scale = 1.0f / std::sqrt(float(dh));
     for (int li = 0; li < M.layers; li++) {
@@ -2434,6 +2542,7 @@ void scores(kkc_engine* E, int rstart, int n, const std::vector<Edge>& ed, std::
         int key = s * 4096 + e;
         auto it = span_id.find(key);
         if (it != span_id.end()) return it->second;
+        OPC(OP_SPANQ, 1); OPC(OP_ELEM, 2ull * d);
         const float inv = 1.0f / float(std::max(e - s, 1));
         for (int j = 0; j < d; j++)
             hid[j] = QA[size_t(s) * d + j] + QB[size_t(e) * d + j] + float(CQ[size_t(e) * d + j] - CQ[size_t(s) * d + j]) * inv + M.q1b[j];
@@ -2455,6 +2564,7 @@ void scores(kkc_engine* E, int rstart, int n, const std::vector<Edge>& ed, std::
         auto it = word_id.find(key);
         if (it != word_id.end()) return it->second;
         const int nc = int(e.surf.size());
+        OPC(OP_WORDK, 1); OPC(OP_ELEM, (nc + 7ull) * d);
         const float inv = 1.0f / float(std::max(nc, 1));
         const float* kk = M.Kkind + size_t(e.kind) * d;
         const float* kl = M.Klen + size_t(std::min(nc, 16)) * d;
@@ -2465,6 +2575,7 @@ void scores(kkc_engine* E, int rstart, int n, const std::vector<Edge>& ed, std::
                 auto& cache = E->prow[part];
                 auto it = cache.find(v);
                 if (it != cache.end()) return it->second.data();
+                OPC(OP_PROW, 1); OPC(OP_MAC_F32, (unsigned long long)d * d); OPC(OP_WBYTES, (unsigned long long)d * d * 4);
                 std::vector<float> out(size_t(d), 0.0f);
                 const float* er = M.emb.row(v, tbuf.data());
                 const float* W0 = M.kW + size_t(part) * d * d;
@@ -2511,6 +2622,8 @@ void scores(kkc_engine* E, int rstart, int n, const std::vector<Edge>& ed, std::
         return id;
     };
     u.resize(ed.size());
+    OPC(OP_EDGE, ed.size()); OPC(OP_MAC_F32, ed.size() * (unsigned long long)dk * (M.gw ? 2 : 1) + (E->ro.on ? ed.size() * (unsigned long long)dk * (E->ro.H + 1) : 0));
+    OPC(OP_ELEM, (unsigned long long)n * d);
     const float sc = 1.0f / std::sqrt(float(dk));
     // ダイヤル: 辺ごとに g = 2·sigmoid(gate(q)·k / √dk) (0〜2)。経路の語のコストを β·g·cost にするため、
     // nbest が足す β·cost との差 β·(g-1)·cost を u の側で引く (学習側の forward_u と同じ)。gate(q) は区間ごとに 1 回
@@ -2573,6 +2686,7 @@ int nbest(const Lex& L, const std::vector<Edge>& E, int n, const float* u, doubl
                 }
                 if (cands.empty()) continue;
             }
+            OPC(OP_RELAX, cands.size());
             // 上位 k だけを選ぶ (全部を並べ替えない)。同点は元の順 = 安定ソートして先頭 k 個と同じ結果
             const int nc = int(cands.size());
             if (nc > k) {
@@ -2753,6 +2867,40 @@ KKC_API void kkc_set_keys(kkc_engine* e, const uint16_t* keys, int nkeys, const 
         if (span_end[i] < (i ? span_end[i - 1] : 0) || span_end[i] > nkeys) { e->keys.clear(); e->span_end.clear(); return; }
     if (nkeys > 0) e->keys.assign(keys, keys + nkeys); else e->keys.clear();
     if (nk > 0) e->span_end.assign(span_end, span_end + nk); else e->span_end.clear();
+}
+
+// 読みの打ち直し (PC のキー配列の打ち間違い: 物理キーの 1 打の打ち直しを、同じ配列で読みに直したもの) を渡す。
+// buf に count 個の読みを続けて、lens[i] = i 個目の字数。nk = 打ったとおりの読みの字数。直後の 1 回の kkc_convert にだけ効き、
+// その変換では打ち間違いの辺をローマ字の打ち直しの代わりにこれで作る (count = 0 でも、ローマ字の打ち直しを止める)
+KKC_API void kkc_set_alt_readings(kkc_engine* e, const uint16_t* buf, const int32_t* lens, int count, int nk) {
+    if (!e) return;
+    e->alts.clear();
+    e->alts_n = -1;
+    if (count < 0 || nk <= 0) return;
+    size_t at = 0;
+    for (int i = 0; i < count; i++) {
+        if (lens[i] < 0) { e->alts.clear(); return; }
+        e->alts.push_back(from16(buf + at, size_t(lens[i])));
+        at += size_t(lens[i]);
+    }
+    e->alts_n = nk;
+}
+
+KKC_API void kkc_set_voice_alts(kkc_engine* e, const uint16_t* full, int nfull, const uint16_t* buf, const int32_t* lens,
+                                const int32_t* costs, int count) {
+    (void)e;
+    typo::g_voice_alts.clear();
+    typo::g_voice_cost.clear();
+    typo::g_voice_full.clear();
+    if (count <= 0 || nfull <= 0) return;
+    typo::g_voice_full = from16(full, size_t(nfull));
+    size_t at = 0;
+    for (int i = 0; i < count; i++) {
+        if (lens[i] < 0) break;
+        typo::g_voice_alts.push_back(from16(buf + at, size_t(lens[i])));
+        typo::g_voice_cost.push_back(costs[i]);
+        at += size_t(lens[i]);
+    }
 }
 
 // 段階式のしきい値 (読み 1 字あたりのコストの差)。dev・AJIMEE・日常・入力ログで測った (kkc/engine/cascade.cpp)。
@@ -3486,9 +3634,14 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
     }
     e->keys.clear();
     e->span_end.clear();
+    std::vector<ustr> alts;   // 読みの打ち直しも直後の 1 回だけ
+    const bool has_alts = e->alts_n == n;
+    if (has_alts) alts.swap(e->alts);
+    e->alts.clear();
+    e->alts_n = -1;
     std::vector<uint16_t> rctx;   // 後ろの文脈も直後の 1 回だけ
     rctx.swap(e->rctx);
-    std::vector<Edge> E = edges(e->lex, r, &e->user);
+    std::vector<Edge> E = edges(e->lex, r, &e->user, has_alts ? &alts : nullptr);
     kata_continuation_edges(e->lex, from16(ctx, size_t(nctx)), r, E);    // 確定済みのカタカナ語の続き (フリッ + く)
     kanji_continuation_edges(e->lex, from16(ctx, size_t(nctx)), r, E);   // 確定済みの漢字の語の続き (直滑 + こう)
     if (!keys.empty()) {
@@ -3517,7 +3670,14 @@ KKC_API int kkc_convert(kkc_engine* e, const uint16_t* ctx, int nctx, const uint
                     if ((c >= u'a' && c <= u'z') || c == u'-') rom.push_back(char(c));
                     else ok = false;   // 記号・数字の混じる所は見ない
                 }
-                if (ok) typo::add_edges(e->lex, r.substr(size_t(w), size_t(we - w)), w, E, tctx, ty, &rom);
+                if (has_alts) {
+                    // 物理キーの打ち直しの読みと、キーの並びの打ち直しの両方 (英字が残る所は組み立ての読みと打鍵の記録の形がずれやすく、
+                    // 打ち直しの読みが弾かれることがある: hnを → 本を は キーの並びで直る。2026-11-15 組み立てのベンチで)
+                    const std::vector<ustr> sa = typo::window_alts(typo::prep_alts(r, alts), n, w, we);
+                    if (we - w >= 2) typo::add_edges(e->lex, r.substr(size_t(w), size_t(we - w)), w, E, tctx, ty, ok ? &rom : nullptr, &sa);
+                } else if (ok) {
+                    typo::add_edges(e->lex, r.substr(size_t(w), size_t(we - w)), w, E, tctx, ty, &rom);
+                }
                 i = j;
             }
             for (auto& ed : ty) lat.push_back(std::move(ed));

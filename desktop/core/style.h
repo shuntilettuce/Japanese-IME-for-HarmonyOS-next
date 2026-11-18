@@ -37,7 +37,9 @@ public:
 
 private:
     struct Form { u16 other; int lemma = 0, cls = 0; bool kanji = false; };
-    std::unordered_map<u16, Form> var_;
+    int pref(const Form& f, const std::array<float, 2>& r) const;
+    // 同じ漢字に読みの違う対がある (内 = うち・ない、良い = いい・よい)。書き換えるときは語の読みで選ぶ (2026-11-15)
+    std::unordered_multimap<u16, Form> var_;
     std::vector<int8_t> w_;   // 判定器 (H 行 × 2)
     float scale_ = 0;
     uint32_t H_ = 0;
