@@ -37,8 +37,8 @@ static KKC_AVX2_FN inline float kkc_hsum8(__m256 a) {
 }
 
 // lin_part と同じ: Y[t][o] = Σ_i X[t][i] · WT[i][o] + B[o]。出力は [o0, o0 + 16·k) の 16 本単位の所だけ (残りは呼ぶ側)。
-// 行は 6 本ずつ (積み上げ 12 本 + 重み 2 本 + 入力 1 本 = 16 本のレジスタに収まる)。行が 1 本のとき (区間・語ごとの小さい掛け算) は
-// 入力を 2 つずつ進めて、積み上げを 2 組にする (足し算の待ちを減らす)
+// 行は 6 本ずつ (アキュムレータ 12 本 + 重み 2 本 + 入力 1 本 = 16 本のレジスタに収まる)。行が 1 本のとき (区間・語ごとの小さい掛け算) は
+// 入力を 2 つずつ進めて、アキュムレータを 2 組にする (足し算の待ちを減らす)
 static KKC_AVX2_FN void kkc_simd_lin(const float* X, int T, int in, const float* WT, int ldw, const float* B, float* Y, int ldy,
                                      int o0, int o1) {
     for (int o = o0; o + 16 <= o1; o += 16) {
@@ -209,7 +209,7 @@ static KKC_AVX2_FN void kkc_simd_gelu(float* v, size_t n) {
     }
 }
 
-// 1 つの頭の自己注意 (engine.cpp の encode の中の計算と同じ。dh は 8 の倍数)。sc は T 本 + 8 本の作業場所
+// 1 つのヘッドの自己注意 (engine.cpp の encode の中の計算と同じ。dh は 8 の倍数)。sc は T 本 + 8 本の作業領域
 static KKC_AVX2_FN void kkc_simd_attend(const float* qkv, int T, int d, int dh, int hh, float scale, float* sc, float* att) {
     const size_t ld = (size_t)3 * d;
     for (int t = 0; t < T; t++) {
