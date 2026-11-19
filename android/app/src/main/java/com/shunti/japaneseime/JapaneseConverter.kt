@@ -24,6 +24,14 @@ class JapaneseConverter(private val table: Map<String, String>) {
 
     fun pending() = buffer
 
+    /** s がローマ字の綴りの頭になっているか (続けて打てば、かなになる) */
+    fun isPrefix(s: String) = s in prefixes
+
+    /** 読みに英字のまま残った子音を、溜めている分の頭に戻す (続くキーとつなぐため。PC 版 Romaji::unread と同じ) */
+    fun unread(s: String) {
+        buffer = s + buffer
+    }
+
     fun flushPending(): String {
         val p = if (buffer == "n") "ん" else buffer   // PC と同じ。語末の n は ん
         buffer = ""

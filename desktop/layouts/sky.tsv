@@ -1,0 +1,43 @@
+#! name SKY 配列
+#! kind romaji
+#! author 白鳥嘉勇・小橋史彦
+#! url https://ja.wikipedia.org/wiki/SKY%E9%85%8D%E5%88%97
+# 白鳥・小橋 (1987) の基本配列。左手が子音、右手が母音・二重母音・撥音 (UN など 1 キー)
+# X (小書き)・V・F・ー・中点 は「ワープロ徹底操縦法」(木村泉 1991) の拡張の位置 (= ¥ [ ' ろ)
+# キーは読み替えた字をローマ字に流す (ai・unn など 1 キーで 2〜3 字)
+#! keys
+q	,
+w	w
+e	r
+r	m
+t	h
+y	uu
+u	ai
+i	ou
+o	.
+p	ei
+a	n
+s	t
+d	s
+f	k
+g	y
+h	u
+j	a
+k	o
+l	i
+;	e
+z	p
+x	d
+c	z
+v	g
+b	b
+n	unn
+m	ann
+,	onn
+.	inn
+/	enn
+=	x
+yen	v
+[	f
+'	-
+ro	・

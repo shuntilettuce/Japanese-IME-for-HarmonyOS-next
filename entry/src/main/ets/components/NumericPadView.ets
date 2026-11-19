@@ -339,7 +339,7 @@ export struct NumericPadView {
       Text('取消')
         .fontFamily(JP_FONT_FAMILY)
         .fontSize(14).textAlign(TextAlign.Center)
-        .width(this.flickKeyWidthVp).height('100%')
+        .width(this.flickSideKeyWidthVp).height('100%')
         .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
         .borderRadius(8).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
         .onClick(() => {
@@ -351,7 +351,7 @@ export struct NumericPadView {
           .fontSize(16)
           .fontColor([kbTheme(this.isDark).textPrimary])
       }
-      .width(this.flickKeyWidthVp).height('100%')
+      .width(this.flickSideKeyWidthVp).height('100%')
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).specialBg)
@@ -364,7 +364,7 @@ export struct NumericPadView {
       Text('記号')
         .fontFamily(JP_FONT_FAMILY)
         .fontSize(14).textAlign(TextAlign.Center)
-        .width(this.flickKeyWidthVp).height('100%')
+        .width(this.flickSideKeyWidthVp).height('100%')
         .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
         .borderRadius(8).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
         .onClick(() => { AppStorage.setOrCreate('keyboardSubMode', 'symbol'); })
@@ -397,7 +397,7 @@ export struct NumericPadView {
           .fontSize(BACKSPACE_FONT_SIZE)
           .fontColor([kbTheme(this.isDark).textPrimary])
       }
-      .width(this.flickKeyWidthVp).height('100%')
+      .width(this.flickSideKeyWidthVp).height('100%')
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).specialBg)
@@ -415,7 +415,7 @@ export struct NumericPadView {
           .fontSize(16)
           .fontColor([kbTheme(this.isDark).textPrimary])
       }
-      .width(this.flickKeyWidthVp).height('100%')
+      .width(this.flickSideKeyWidthVp).height('100%')
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).specialBg)
@@ -428,7 +428,7 @@ export struct NumericPadView {
       Text('space')
         .fontFamily(JP_FONT_FAMILY)
         .fontSize(12).textAlign(TextAlign.Center)
-        .width(this.flickKeyWidthVp).height('100%')
+        .width(this.flickSideKeyWidthVp).height('100%')
         .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
         .borderRadius(8).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
         .onClick(() => { this.h().handleSpaceKey(); })
@@ -438,7 +438,7 @@ export struct NumericPadView {
           .fontSize(16)
           .fontColor([kbTheme(this.isDark).onAccent])
       }
-      .width(this.flickKeyWidthVp).height('100%')
+      .width(this.flickSideKeyWidthVp).height('100%')
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
       .backgroundColor(kbTheme(this.isDark).accent)

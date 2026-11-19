@@ -162,6 +162,8 @@ void Core::use_model(const std::string& name) {
     size_t ms = 0;
     const void* model = map_file(dir_ / file, ms);
     if (!model) return;
+    // M5・PureXS・S9 (標準)・XS6 (軽量) は網 mid2 で学んでいる (Windows の globals.cpp と同じ)
+    conv.set_latin_mid2(file == "kkc_model.bin" || file == "kkc_model_m5.bin" || file == "kkc_model_pure.bin" || file == "kkc_model_light.bin");
     if (!conv.open(lex_, lex_size_, model, ms, 2)) {
         munmap(const_cast<void*>(model), ms);
         return;

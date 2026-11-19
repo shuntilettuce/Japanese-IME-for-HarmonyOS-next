@@ -67,24 +67,9 @@ HarmonyOS 版のソースを正本として、Android 版に取り込むもの:
 - `node tools/gen_android_tables.mjs` — キーの配置・QWERTY・ローマ字・記号・絵文字・顔文字・決まり文句・色・差別語の除外・ライセンス表記を `android/app/src/main/assets/` に書き出す（HarmonyOS 版の表を直したら流し直す）
 - `node tools/gen_android_golden.mjs` — NumberFormatter / DateTimePredictor / JapaneseConverter を Node でそのまま動かした正解を作る。Kotlin 版は `./gradlew testDebugUnitTest`（GoldenTest）で一致を確かめる
 
-### プロジェクト構成（抜粋）
+### プロジェクト構成
 
-```
-entry/src/main/ets/
-  ime/          変換エンジン本体・IME拡張のロジック
-    KanaKanjiConverter.ets   かな漢字変換のコア（辞書lookup・学習・3エンジンのブレンド）
-    KeyboardController.ets   InputMethodExtensionAbility側の入力制御・状態管理
-    JapaneseConverter.ets    ローマ字/フリック入力の変換・文字種処理
-    ConjugationEngine.ets    活用形の自動展開（ユーザー辞書登録時など）
-    InputLog.ets             デバッグ専用の入力ログ収集（下記参照）
-  components/    キーボードUI（フリック/QWERTY/記号/絵文字/設定画面 等）
-  pages/         本体アプリ側の画面（設定・ユーザー辞書・プライバシーポリシー）
-tools/
-  mozc_data/     mozc/JMdict/SudachiDictから統計データエンジンの辞書を構築するスクリプト群
-  ime-eval/      変換精度の回帰テスト（corpus_test*.js）
-  blind-eval/    Google日本語入力との変換結果比較用コーパス・スコアラー
-  check_debug_log.js   InputLog呼び出し箇所の棚卸し（リリース前チェック）
-```
+[README の「リポジトリの構成」](../README.md#リポジトリの構成) を見てください。
 
 IME本体は `InputMethodExtensionAbility` として別プロセス（`:inputMethod`）で動作するため、本体アプリとはサンドボックスが分離されています（ユーザー辞書やログの読み書きが両側で別経路になっているのはこのため）。
 

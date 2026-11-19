@@ -19,7 +19,7 @@ set(CORE ${ROOT}/desktop/core)
 
 add_library(shunti MODULE
   src/shunti.cpp
-  ${CORE}/text.cpp ${CORE}/romaji.cpp ${CORE}/store.cpp ${CORE}/settings.cpp ${CORE}/converter.cpp ${CORE}/style.cpp ${CORE}/release_info.cpp ${CORE}/composer.cpp ${CORE}/flow.cpp ${CORE}/datetime.cpp
+  ${CORE}/text.cpp ${CORE}/romaji.cpp ${CORE}/store.cpp ${CORE}/settings.cpp ${CORE}/converter.cpp ${CORE}/style.cpp ${CORE}/release_info.cpp ${CORE}/composer.cpp ${CORE}/flow.cpp ${CORE}/layout.cpp ${CORE}/typo_alts.cpp ${CORE}/datetime.cpp
   ${ROOT}/entry/src/main/cpp/engine.cpp)
 target_include_directories(shunti PRIVATE ${ROOT}/entry/src/main/cpp)
 target_link_libraries(shunti PRIVATE Fcitx5::Core Threads::Threads)

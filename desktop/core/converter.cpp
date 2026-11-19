@@ -554,6 +554,14 @@ void Converter::set_keys(const u16& keys, const std::vector<int32_t>& span_end, 
         kkc_set_keys(e_, p16(keys), int(keys.size()), span_end.data(), int(span_end.size()));
 }
 
+void Converter::set_alt_readings(const std::vector<u16>& alts, size_t reading_len) {
+    if (!e_ || reading_len == 0) return;
+    u16 buf;
+    std::vector<int32_t> lens;
+    for (auto& a : alts) { buf += a; lens.push_back(int32_t(a.size())); }
+    kkc_set_alt_readings(e_, p16(buf), lens.data(), int(lens.size()), int(reading_len));
+}
+
 bool Converter::has_right_ctx() const { return e_ && kkc_has_right_ctx(e_) != 0; }
 
 u16 Converter::latin_word(const u16& key) const {

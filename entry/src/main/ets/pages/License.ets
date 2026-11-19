@@ -30,8 +30,7 @@ struct License {
     '  https://github.com/WorksApplications/SudachiDict\n' +
     '詳細なライセンス全文は THIRD_PARTY_NOTICES.md を参照してください。\n\n' +
     '■ AI変換 (shuntelligence / shuntorge)\n' +
-    '・shuntelligence（変換モデル、shuntilettuce、CC BY 4.0）\n' +
-    '  https://creativecommons.org/licenses/by/4.0/\n' +
+    '・shuntelligence（変換モデル、shuntilettuce、MIT License）\n' +
     '・shuntorge（AI変換の辞書）: Wikipedia と JMdict 由来の語を含むため、辞書ファイル (kkc_lex.bin) 全体は CC BY-SA 4.0。独自部分は MIT。以下を含みます\n' +
     '  mozc（Google, BSD-3-Clause、IPAdic 由来の辞書データと沖縄辞書を含む）\n' +
     '  SudachiDict（Works Applications, Apache License 2.0、読みの一部）\n' +

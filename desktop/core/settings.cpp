@@ -46,6 +46,7 @@ bool load_settings(const fs::path& p, Settings& s) {
     boolean("caps_alpha", s.caps_alpha);
     boolean("ctrl_space", s.ctrl_space);
     str("model", s.model);
+    str("dict", s.dict);
     if (const json::Value* x = v.get("punct"); x && x->type == json::Value::Number) s.punct = int(x->num) & 3;
     str("half_symbols", s.half_symbols);
     if (const json::Value* x = v.get("typo_level"); x && x->type == json::Value::Number) s.typo_level = std::clamp(int(x->num), 0, 2);
@@ -121,6 +122,7 @@ bool save_settings(const fs::path& p, const Settings& s) {
     o += std::string("  \"typed_strip\": ") + b(s.typed_strip) + ",\n";
     o += std::string("  \"caps_alpha\": ") + b(s.caps_alpha) + ",\n";
     o += "  \"model\": " + json::quote(s.model) + ",\n";
+    o += "  \"dict\": " + json::quote(s.dict) + ",\n";
     o += "  \"half_symbols\": " + json::quote(s.half_symbols) + ",\n";
     o += "  \"numpad\": " + std::to_string(s.numpad) + ",\n";
     o += "  \"typo_level\": " + std::to_string(s.typo_level) + ",\n";
@@ -152,8 +154,17 @@ const char* model_file_name(const std::string& model) {
     if (model == "light") return "kkc_model_light.bin";
     if (model == "s2") return "kkc_model_s2.bin";   // 比較用の昔のモデル
     if (model == "m5") return "kkc_model_m5.bin";   // 正確 (M5、2026-11-11。英字の辺は mid2)
+    if (model == "pure") return "kkc_model_pure.bin";   // クリーン (PureXS + クリーン辞書、2026-11-12。英字の辺は mid2)
     // 高精度 (M4) は廃止: S7 (標準) の方が精度が上で、誤字も直せる (2026-10-14)。前に high を選んでいた人も標準を読む
     return "kkc_model.bin";
+}
+
+const char* lex_file_name(const std::string& model, const std::string& dict) {
+    return model == "pure" || dict == "clean" ? "kkc_lex_clean.bin" : "kkc_lex.bin";   // クリーン辞書 = Mozc + 教材の語・Wikidata (CC0) の固有名詞
+}
+
+const char* variants_file_name(const std::string& model, const std::string& dict) {
+    return model == "pure" || dict == "clean" ? "kkc_variants_clean.tsv" : "kkc_variants.tsv";
 }
 
 bool SettingsFile::refresh() {

@@ -143,9 +143,9 @@ AI変換（設定 → 変換エンジン → AI変換）のモデル **shuntelli
 （`kkc_lex.bin`）は GitHub Releases に置き、`tools/fetch_ai_assets.py` で取得する（`tools/ai_assets.json` に SHA-256）。
 学習のコードと教材は公開していない。モデルの重みと推論のコード（`entry/src/main/cpp/`）だけを公開する。
 
-### モデル shuntelligence — CC BY 4.0
+### モデル shuntelligence — MIT
 
-約630万パラメータの Transformer。学習に使った文章（モデルの重みに文章そのものは含まれない。日本の著作権法第30条の4に基づく情報解析）:
+Transformer（標準 S9 約640万・正確 M5 約1580万・軽量 XS6 と PureXS2 約210万パラメータ）。S9・XS6・PureXS2 は M5 の出力も手本にして学習した（蒸留）。学習に使った文章（モデルの重みに文章そのものは含まれない。日本の著作権法第30条の4に基づく情報解析）:
 
 | 出典 | 条件 |
 |---|---|
@@ -154,12 +154,14 @@ AI変換（設定 → 変換エンジン → AI変換）のモデル **shuntelli
 | 青空文庫（globis-university/aozorabunko-clean） | 著作権の切れた作品のうち新字新仮名のもの |
 | Wikipedia日本語版 | CC BY-SA 4.0。本文の段落のみ |
 | FineWeb-2 日本語（HuggingFaceFW/fineweb-2、jpn_Jpan） | ODC-By 1.0（元の Common Crawl の利用規約にも従う）。本文のみ |
+| FineWeb-Edu（HuggingFaceFW/fineweb-edu、英語） | ODC-By 1.0（元の Common Crawl の利用規約にも従う）。英語の文を打ったときの英字の書き分けに使用 |
 
 - 読み付けは SudachiPy + SudachiDict-core（Apache License 2.0）。
 - 書き分けの強化の参考: 文化庁「「異字同訓」の漢字の使い分け例（報告）」（平成26年、文化審議会国語分科会。
   出典: 文化庁ホームページ。用例から語の組み合わせを取り出して加工し、同じ組み合わせを含む上記の文章を探す手掛かりに使用。
   用例の文そのものは学習に入れていない）、Wikipedia「助数詞」の一覧（CC BY-SA 4.0、名詞と助数詞の組を同様に手掛かりとして使用）、
   Wikidata（CC0、生き物の和名と分類）。
+- 異字同訓の書き分けの例文: 上の報告の用例の句（「客と会う時刻」など約1500句）ごとに、その句を使った新しい例文を Claude（Anthropic）で作り、読みを SudachiPy で確かめたもの（S9・PureXS2）。
 - 評価だけに使ったもの（学習には入れていない）: AJIMEE-Bench（CC BY-SA 3.0）、開発者本人の入力ログ（集計値のみ）。
 
 ### 辞書 shuntorge — 辞書ファイル全体は CC BY-SA 4.0（独自部分は単独では MIT）

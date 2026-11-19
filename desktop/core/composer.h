@@ -99,7 +99,8 @@ struct ComposerOptions {
     // 空白の幅は前後の字で決める (前後どちらかが半角の英数字なら半角、両側とも全角なら全角。settle_spaces)
     bool space_literal = false;
     bool punct_commit = false;  // 句読点で確定: 読みの終わりに 、。！？ を打ったら、句読点を添えて見えている形で確定する
-    bool caps_alpha = true;     // 大文字で打ち始めたら、そこから英字のまま (オフなら大文字の字だけ英字で、小文字はローマ字に戻る)
+    bool typo_keys = true;      // 物理キーの打ち直しで打ち間違いを直す (配列なしの QWERTY のローマ字も。2026-11-15)
+    bool caps_alpha = false;    // 大文字で打ち始めたら、そこから英字のまま (オフ = 既定: 大文字の字だけ英字で、小文字はローマ字に戻る。英字は変換が判断する。2026-11-11)
     int punct = 0;                 // 句読点: 0 = 、。 1 = ，． 2 = 、． 3 = ，。
     bool digits_fullwidth = false; // 数字を全角で入れる
     u16 half_symbols;              // 半角で入れる記号 (詳細設定)
@@ -122,6 +123,18 @@ public:
     ComposerOptions options;
     // 入力の記録を受け取る (空なら何もしない。リリース用のビルドでは空のまま)
     std::function<void(const LogEvent&)> on_log;
+    // キー配列の打ち間違いの直し (2026-11-15)。呼ぶ側 (text_service) が、今の読みを打った打鍵の単位ごとの出した字 (orig) と、
+    // そのうち 1 か所を直した並び (alts、Layout::typo_variants) を返す。letters = 字をローマ字に流す配列 (false = かなのまま)。
+    // 返せない (配列を使っていない・記録が合わない) ときは false で、今までどおりローマ字の打ち直しで直す
+    struct LayoutTypo {
+        std::vector<u16> orig;
+        std::vector<std::vector<u16>> alts;
+        bool letters = true;
+        bool qwerty = false;   // 配列を使っていない: 打ったキーの並びを QWERTY のローマ字の単位にする (組み立てが作る)
+    };
+    std::function<bool(LayoutTypo&)> layout_typo;
+    const u16& raw_keys() const { return raw_; }    // 打ったキーの並び (ローマ字の配列で、読み替えないキーを打ったとき)
+    bool raw_keys_valid() const { return raw_valid_; }
 
     // 入力欄のカーソルの左の文 (変換の文脈)。読めない入力欄では空を返してよい (そのときはこれまでに確定した文を使う)
     // M5: 書き方の記録と、入力しているアプリ (実行ファイル名など。書き方をアプリごとに数える)
@@ -143,6 +156,8 @@ public:
     // ローマ字の表に足す (詳細設定の「ローマ字の表」)
     void add_romaji(const u16& key, const u16& kana) { romaji_.add_pair(key, kana); }
     void reset_romaji() { romaji_ = Romaji(); }   // 足した綴りを外して元の表に
+    void set_romaji_extended(bool on) { romaji_.set_extended(on); }
+    void clear_romaji_table() { romaji_.clear_table(); }   // 元の表を空に (gACT10。Romaji::clear_table)   // 拡張ローマ字 (AZIK など。Romaji::set_extended)
     void clear_recent() { recent_.clear(); }      // 再変換のために覚えた (表記, 読み) を消す (プライベートにしたとき)
     // 文の流れの予測 (無ければ使わない)。確定した文字を覚え、確定の後に続きを view().post に出す
     SentenceFlow* flow = nullptr;
@@ -231,6 +246,7 @@ private:
     void log(LogEvent e);
     void update_live();
     bool live_commit(const Conversion& c);
+    bool writable(const u16& reading, const u16& surface) const;
     void commit_shown();
     void commit_at_punct();
     size_t froze_r_ = 0, froze_s_ = 0;   // 直前の live_commit で固定した読みの長さ・1 位の表記の長さ
@@ -238,7 +254,8 @@ private:
     u16 frozen_reading() const;
     u16 frozen_surface() const;
     u16 conv_ctx() const;
-    void prime_keys(const u16& reading);   // 打ったキーの並びを変換に渡す (読みが打ったキーから作れるときだけ)
+    void prime_keys(const u16& reading);
+    void prime_alts(const u16& reading);   // キー配列の打ち間違いの直し (layout_typo) の読みの打ち直しを変換に渡す   // 打ったキーの並びを変換に渡す (読みが打ったキーから作れるときだけ)
     bool unfreeze_last();
     void calibrate();
     bool live_shown() const;
