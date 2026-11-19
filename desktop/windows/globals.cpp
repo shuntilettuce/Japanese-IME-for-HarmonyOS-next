@@ -22,6 +22,10 @@ std::filesystem::path module_dir() {
 }
 
 std::filesystem::path user_dir() {
+    // ベンチマーク用: このプロセスでだけ置き場所を差し替える (学習・辞書・設定の無い素の状態で測る。ime-bench の tsfrun が使う)
+    wchar_t env[MAX_PATH * 2];
+    const DWORD en = GetEnvironmentVariableW(L"SHUNTI_IME_DATA_DIR", env, DWORD(std::size(env)));
+    if (en > 0 && en < std::size(env)) return std::filesystem::path(std::wstring(env, en));
     PWSTR p = nullptr;
     std::filesystem::path out;
     if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &p))) out = std::filesystem::path(p) / L"shunti IME";
@@ -81,8 +85,8 @@ void Core::use_model(const std::string& name) {
         if (lex != lex_) UnmapViewOfFile(lex);
         return;
     }
-    // M5・PureXS・S9 (標準、0.8.1 から) は網 mid2 で学んでいる
-    conv.set_latin_mid2(file == "kkc_model.bin" || file == "kkc_model_m5.bin" || file == "kkc_model_pure.bin");
+    // M5・PureXS・S9 (標準、0.8.1 から)・XS6 (軽量) は網 mid2 で学んでいる
+    conv.set_latin_mid2(file == "kkc_model.bin" || file == "kkc_model_m5.bin" || file == "kkc_model_pure.bin" || file == "kkc_model_light.bin");
     if (!conv.open(lex, ls, model, ms, 2)) {
         UnmapViewOfFile(model);
         if (lex != lex_) UnmapViewOfFile(lex);

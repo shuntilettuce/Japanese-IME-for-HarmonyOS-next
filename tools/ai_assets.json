@@ -1,7 +1,7 @@
 {
   "note": "AI 変換 (shuntelligence) の辞書とモデル。GitHub Releases に置き、ビルド前に tools/fetch_ai_assets.py で取得する",
-  "release": "shuntelligence-v8",
-  "url": "https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/download/shuntelligence-v8/",
+  "release": "shuntelligence-v9",
+  "url": "https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/download/shuntelligence-v9/",
   "dest": "entry/src/main/resources/rawfile",
   "files": {
     "kkc_lex.bin": {
@@ -17,10 +17,10 @@
       "license": "shuntelligence S9 (標準、後ろの文脈・英字の打ち分け (網 mid2)・ローマ字の打ち間違いの直しつき。版 5: 8.3MB): CC BY 4.0"
     },
     "kkc_model_light.bin": {
-      "src": "kkc_model_xs5v5.bin",
-      "size": 2653840,
-      "sha256": "33060dc533988f2043fda22be0330b97a453d5817bf47b9fe15f8c9002a6f0a2",
-      "license": "shuntelligence XS5 (軽量、打ち間違いの直しつき。版 5: 2.7MB): CC BY 4.0",
+      "src": "kkc_model_xs6v5.bin",
+      "size": 2704024,
+      "sha256": "65d97597b06372394bc33503a66506541f284db5c15bb523bd3933da1071ed4d",
+      "license": "shuntelligence XS6 (軽量、後ろの文脈・英字の打ち分け (網 mid2)・ローマ字の打ち間違いの直しつき。版 5: 2.7MB): CC BY 4.0",
       "dest": "models"
     }
   }

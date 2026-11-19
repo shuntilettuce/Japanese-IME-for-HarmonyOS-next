@@ -56,9 +56,9 @@
 <text transform="translate(20,341) rotate(-90)" font-size="13" fill="#1f2328" text-anchor="middle">1 位の正解率 (1052 問)</text>
 <polyline fill="none" stroke="#4a6fa5" stroke-width="2" stroke-linejoin="round" points="516.1,261.6 657.5,141.5 755.9,127.2"/>
 <polyline fill="none" stroke="#2a9d8f" stroke-width="2" stroke-linejoin="round" points="492.7,192.4 605.0,131.3"/>
-<polyline fill="none" stroke="#d1495b" stroke-width="2" stroke-linejoin="round" points="366.5,216.8 408.3,145.6 469.1,125.2"/>
-<circle cx="366.5" cy="216.8" r="5.5" fill="#d1495b" stroke="#ffffff" stroke-width="2"/>
-<text x="356.5" y="220.8" font-size="12.5" fill="#1f2328" text-anchor="end" stroke="#ffffff" stroke-width="4" paint-order="stroke">XS5（軽量） 82.1%</text>
+<polyline fill="none" stroke="#d1495b" stroke-width="2" stroke-linejoin="round" points="368.3,212.8 408.3,145.6 469.1,125.2"/>
+<circle cx="368.3" cy="212.8" r="5.5" fill="#d1495b" stroke="#ffffff" stroke-width="2"/>
+<text x="358.3" y="216.8" font-size="12.5" fill="#1f2328" text-anchor="end" stroke="#ffffff" stroke-width="4" paint-order="stroke">XS6（軽量） 82.3%</text>
 <circle cx="408.3" cy="145.6" r="5.5" fill="#d1495b" stroke="#ffffff" stroke-width="2"/>
 <text x="398.3" y="137.6" font-size="12.5" fill="#1f2328" text-anchor="end" stroke="#ffffff" stroke-width="4" paint-order="stroke" font-weight="bold">S9（標準） 85.6%</text>
 <circle cx="469.1" cy="125.2" r="5.5" fill="#d1495b" stroke="#ffffff" stroke-width="2"/>
