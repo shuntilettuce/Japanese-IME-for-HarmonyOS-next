@@ -14,13 +14,13 @@
       "src": "kkc_model_s9v5.bin",
       "size": 8264088,
       "sha256": "38bb28a57010e73b3f45db02c40fe0527c091139f89f083d01c78f19d5999dca",
-      "license": "shuntelligence S9 (標準、後ろの文脈・英字の打ち分け (網 mid2)・ローマ字の打ち間違いの直しつき。版 5: 8.3MB): CC BY 4.0"
+      "license": "shuntelligence S9 (標準、後ろの文脈・英字の打ち分け (網 mid2)・ローマ字の打ち間違いの直しつき。版 5: 8.3MB): MIT"
     },
     "kkc_model_light.bin": {
       "src": "kkc_model_xs6v5.bin",
       "size": 2704024,
       "sha256": "65d97597b06372394bc33503a66506541f284db5c15bb523bd3933da1071ed4d",
-      "license": "shuntelligence XS6 (軽量、後ろの文脈・英字の打ち分け (網 mid2)・ローマ字の打ち間違いの直しつき。版 5: 2.7MB): CC BY 4.0",
+      "license": "shuntelligence XS6 (軽量、後ろの文脈・英字の打ち分け (網 mid2)・ローマ字の打ち間違いの直しつき。版 5: 2.7MB): MIT",
       "dest": "models"
     }
   }

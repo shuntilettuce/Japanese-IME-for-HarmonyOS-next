@@ -3,9 +3,8 @@ shunti IME (Android 版)
 ■ アプリのコードと変換エンジン
 MIT License (全文は下に)。Copyright (c) 2026 shuntilettuce
 
-■ shuntelligence (AI 変換のモデル: 標準 S6・軽量 XS3・高精度 M4)
-shuntelligence (shuntilettuce)、CC BY 4.0
-https://creativecommons.org/licenses/by/4.0/
+■ shuntelligence (AI 変換のモデル)
+MIT License (全文は下に)。Copyright (c) 2026 shuntilettuce
 
 ■ shuntorge (AI 変換の辞書)
 Wikipedia と JMdict 由来の語を含むため、辞書ファイル (kkc_lex.bin) 全体は CC BY-SA 4.0 です。
