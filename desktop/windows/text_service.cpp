@@ -485,7 +485,7 @@ void TextService::apply_settings() {
     layout_.continuous = s.layout_continuous;
     layout_.thumb_tap = s.layout_thumb_tap;
     layout_.repeat = s.layout_repeat;
-    c.use_model(s.model);   // 変換モデルを替えた (同じなら何もしない)
+    c.use_model(s.model, s.dict);   // 変換モデル・辞書を替えた (同じなら何もしない)
     c.conv.set_suggest(true);   // 提案は候補に混ぜて種類を添える (Composer)。分けて出す設定は廃止 (ユーザー 2026-10-23「統合の方がわかりやすい」)
     c.conv.set_latin(s.latin_auto);
     c.conv.set_typo(s.typo_fix, typo_bias_of(s.typo_level));

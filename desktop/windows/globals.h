@@ -52,7 +52,7 @@ struct Core {
     Core();
     // 変換モデルを設定の値 (light・standard・high) のものにする。今と同じなら何もしない。
     // ファイルが無ければ standard (kkc_model.bin) を使う。前のモデルはメモリから外す
-    void use_model(const std::string& name);
+    void use_model(const std::string& name, const std::string& dict = "standard");
 
 private:
     std::filesystem::path dir_;

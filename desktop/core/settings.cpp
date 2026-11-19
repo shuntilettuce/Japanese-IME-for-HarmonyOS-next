@@ -46,6 +46,7 @@ bool load_settings(const fs::path& p, Settings& s) {
     boolean("caps_alpha", s.caps_alpha);
     boolean("ctrl_space", s.ctrl_space);
     str("model", s.model);
+    str("dict", s.dict);
     if (const json::Value* x = v.get("punct"); x && x->type == json::Value::Number) s.punct = int(x->num) & 3;
     str("half_symbols", s.half_symbols);
     if (const json::Value* x = v.get("typo_level"); x && x->type == json::Value::Number) s.typo_level = std::clamp(int(x->num), 0, 2);
@@ -121,6 +122,7 @@ bool save_settings(const fs::path& p, const Settings& s) {
     o += std::string("  \"typed_strip\": ") + b(s.typed_strip) + ",\n";
     o += std::string("  \"caps_alpha\": ") + b(s.caps_alpha) + ",\n";
     o += "  \"model\": " + json::quote(s.model) + ",\n";
+    o += "  \"dict\": " + json::quote(s.dict) + ",\n";
     o += "  \"half_symbols\": " + json::quote(s.half_symbols) + ",\n";
     o += "  \"numpad\": " + std::to_string(s.numpad) + ",\n";
     o += "  \"typo_level\": " + std::to_string(s.typo_level) + ",\n";
@@ -157,12 +159,12 @@ const char* model_file_name(const std::string& model) {
     return "kkc_model.bin";
 }
 
-const char* lex_file_name(const std::string& model) {
-    return model == "pure" ? "kkc_lex_clean.bin" : "kkc_lex.bin";   // クリーン辞書 = Mozc + 教材の語・Wikidata (CC0) の固有名詞
+const char* lex_file_name(const std::string& model, const std::string& dict) {
+    return model == "pure" || dict == "clean" ? "kkc_lex_clean.bin" : "kkc_lex.bin";   // クリーン辞書 = Mozc + 教材の語・Wikidata (CC0) の固有名詞
 }
 
-const char* variants_file_name(const std::string& model) {
-    return model == "pure" ? "kkc_variants_clean.tsv" : "kkc_variants.tsv";
+const char* variants_file_name(const std::string& model, const std::string& dict) {
+    return model == "pure" || dict == "clean" ? "kkc_variants_clean.tsv" : "kkc_variants.tsv";
 }
 
 bool SettingsFile::refresh() {

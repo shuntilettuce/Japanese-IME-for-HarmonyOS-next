@@ -35,7 +35,7 @@ constexpr wchar_t VERSION[] = L"0.8.2";
 
 enum Id {
     ID_PUNCT = 100, ID_SPACE, ID_DIGITS, ID_LIVE, ID_LIVEDISPLAY, ID_LIVECOMMIT, ID_SUGGEST,
-    ID_ADVANCED, ID_UPDATE, ID_RESET, ID_RECENT_SPAN, ID_RECENT_FORGET, ID_RECENT_SPAN_AI, ID_RECENT_FORGET_AI, ID_LEARN_LOG, ID_LEARN_CLEAR, ID_LICENSE, ID_GITHUB, ID_MODEL, ID_CANDTREE, ID_SPACELIT, ID_LATIN, ID_CAPS, ID_TYPO, ID_PUNCTCOMMIT, ID_AILEARN, ID_CLIPHIST, ID_LOG_CUT, ID_DICTMGR,
+    ID_ADVANCED, ID_UPDATE, ID_RESET, ID_RECENT_SPAN, ID_RECENT_FORGET, ID_RECENT_SPAN_AI, ID_RECENT_FORGET_AI, ID_LEARN_LOG, ID_LEARN_CLEAR, ID_LICENSE, ID_GITHUB, ID_MODEL, ID_DICT, ID_CANDTREE, ID_SPACELIT, ID_LATIN, ID_CAPS, ID_TYPO, ID_PUNCTCOMMIT, ID_AILEARN, ID_CLIPHIST, ID_LOG_CUT, ID_DICTMGR,
 };
 
 // 変換モデル (settings.json の model の値と、画面の表示)。名前は配布の呼び名 (開発名は出さない)
@@ -113,6 +113,8 @@ void save() {
     g_s.ai_learn = checked(ID_AILEARN);
     g_s.live_commit = checked(ID_LIVECOMMIT);
     g_s.model = g_models[size_t(std::clamp(selected(ID_MODEL), 0, int(g_models.size()) - 1))];
+    // PureXS2 の間は欄を止めてクリーンを見せているだけなので、前に選んだ辞書を残す
+    if (IsWindowEnabled(GetDlgItem(g_wnd, ID_DICT)) && g_s.model != "pure") g_s.dict = selected(ID_DICT) == 1 ? "clean" : "standard";
     if (!save_settings(g_dir / L"settings.json", g_s))
         MessageBoxW(g_wnd, T(12), L"shunti IME", MB_ICONWARNING);
 }
@@ -1369,10 +1371,12 @@ void show_settings();
 
 void build() {
     int y = 8;
-    group(T(32), y, 60);
+    group(T(32), y, 89);
     make(L"STATIC", T(101), 0, 24, y + 27, 170, 20, 0);
     combo(200, y + 23, 250, ID_MODEL, {T(102), T(103), T(189), T(231), T(232)});
-    y += 68;
+    make(L"STATIC", T(280), 0, 24, y + 56, 170, 20, 0);
+    combo(200, y + 52, 250, ID_DICT, {T(281), T(282)});   // 辞書 (2026-11-19。クリーン (PureXS2) のモデルはいつもクリーン辞書)
+    y += 97;
 
     group(T(50), y, 360);
     make(L"STATIC", T(104), 0, 24, y + 27, 170, 20, 0);
@@ -1429,6 +1433,8 @@ void show_settings() {
         const auto it = std::find(g_models.begin(), g_models.end(), g_s.model);
         select(ID_MODEL, it == g_models.end() ? 1 : int(it - g_models.begin()));
     }
+    select(ID_DICT, g_s.dict == "clean" || g_s.model == "pure" ? 1 : 0);
+    EnableWindow(GetDlgItem(g_wnd, ID_DICT), g_s.model != "pure");   // PureXS2 はクリーン辞書と組
     check(ID_SPACE, g_s.space_fullwidth);
     check(ID_DIGITS, g_s.digits_fullwidth);
     check(ID_LIVE, g_s.live);
@@ -1457,7 +1463,7 @@ LRESULT CALLBACK proc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     case WM_COMMAND: {
             int id = LOWORD(w), code = HIWORD(w);
-            if ((id == ID_PUNCT || id == ID_MODEL || id == ID_LIVEDISPLAY) && code == CBN_SELCHANGE) save();
+            if ((id == ID_PUNCT || id == ID_MODEL || id == ID_DICT || id == ID_LIVEDISPLAY) && code == CBN_SELCHANGE) { save(); if (id == ID_MODEL) show_settings(); }
             else if (id == IDCANCEL) DestroyWindow(h);   // 「閉じる」と Esc
             else if (((id >= ID_SPACE && id <= ID_LIVECOMMIT) || id == ID_CANDTREE || id == ID_SPACELIT || id == ID_LATIN || id == ID_CAPS || id == ID_TYPO || id == ID_PUNCTCOMMIT || id == ID_CLIPHIST) && code == BN_CLICKED) save();
             else if (id == ID_AILEARN && code == BN_CLICKED) toggle_ai_learn();

@@ -21,6 +21,10 @@ Wikipedia と JMdict 由来の語を含むため、辞書ファイル (kkc_lex.b
 ・SCOWL (Spell Checker Oriented Word Lists、Copyright 2000-2026 Kevin Atkinson。英単語の一覧 (よく使う語、大きさ 35)。MIT に近い許諾: 著作権表示とこの許諾の表示を残せば自由に使える)
 ・The CEFR-J Wordlist Version 1.5 (投野由紀夫・東京外国語大学 投野研究室。英単語の選定に使用。読みは独自)
 
+■ クリーン辞書 (kkc_lex_clean.bin・kkc_variants_clean.tsv、設定の「辞書: クリーン」)
+辞書ファイル全体は MIT。以下を含みます。
+・mozc (Google、BSD-3-Clause。IPAdic 由来の辞書データを含む。上の shuntorge と同じもの)
+
 ■ ローマ字の表・差別語の表
 HarmonyOS 版 shunti IME と同じもの (MIT)。
 

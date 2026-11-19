@@ -61,21 +61,23 @@ Core::Core()
     // 計測用: 別のフォルダの辞書とモデルを使う (同じ DLL のまま、モデルを替えて比べるため)
     if (const wchar_t* d = _wgetenv(L"SHUNTI_DATA_DIR"); d && *d) dir_ = d;
     settings.refresh();
-    use_model(settings.get().model);
+    use_model(settings.get().model, settings.get().dict);
     // エンジンの作業用のスレッドを持つので、プロセスが終わるまで DLL を外さない
     HMODULE self;
     GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                        reinterpret_cast<LPCWSTR>(&core), &self);
 }
 
-void Core::use_model(const std::string& name) {
+void Core::use_model(const std::string& name, const std::string& dict) {
     std::string file = model_file_name(name);
-    std::string lexf = lex_file_name(name), varf = variants_file_name(name);
+    std::string lexf = lex_file_name(name, dict), varf = variants_file_name(name, dict);
     std::error_code ec;
-    // クリーン版はモデルと辞書が組。どちらかが無ければ標準に戻す
-    if (!std::filesystem::exists(dir_ / file, ec) || !std::filesystem::exists(dir_ / lexf, ec)) {
-        file = model_file_name("standard"); lexf = lex_file_name("standard"); varf = variants_file_name("standard");
+    // モデルか辞書が無ければ標準に戻す (クリーン辞書が無ければ標準の辞書。PureXS はクリーン辞書と組なので標準のモデルに)
+    if (!std::filesystem::exists(dir_ / lexf, ec)) {
+        if (name == "pure") file = model_file_name("standard");
+        lexf = lex_file_name("standard"); varf = variants_file_name("standard");
     }
+    if (!std::filesystem::exists(dir_ / file, ec)) file = model_file_name("standard");
     if (file == model_file_ && lexf == lex_file_) return;
     size_t ms = 0, ls = lex_size_;
     const void* lex = lexf == lex_file_ ? lex_ : map_file(dir_ / std::filesystem::path(lexf), ls);
