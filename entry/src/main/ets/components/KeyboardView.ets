@@ -1,5 +1,6 @@
 import { InputHandler, InputMode, InputState } from '../ime/KeyboardController';
 import { kbTheme } from './Theme';
+import { modeGlyph, modeIsActive, MODE_KEY_FONT_SIZE, QWERTY_KEY_FONT_SIZE, QWERTY_ICON_FONT_SIZE, QWERTY_CARET_FONT_SIZE, QWERTY_SPACE_FONT_SIZE, QWERTY_SYMBOL_FONT_SIZE, QWERTY_PUNCT_FONT_SIZE } from './ModeLabel';
 import { JP_FONT_FAMILY } from './JpFont';
 
 const ROWS: string[][] = [
@@ -149,6 +150,7 @@ export struct KeyboardView {
 
         Row({ space: 4 }) {
           this.ModeKey()
+          this.SymbolKey()
           this.FuncKey(this.inputMode === InputMode.ALPHANUMERIC ? ',' : '、', () => {
             const ch = this.inputMode === InputMode.ALPHANUMERIC ? ',' : '、';
             const state = AppStorage.get<string>('inputState') ?? InputState.IDLE;
@@ -184,7 +186,7 @@ export struct KeyboardView {
     // so the label re-renders when the shift state changes.
     Text((this.isShift || this.isCapsLock) ? value.toUpperCase() : value)
       .fontFamily(JP_FONT_FAMILY)
-      .fontSize(18)
+      .fontSize(QWERTY_KEY_FONT_SIZE)
       .fontWeight(FontWeight.Medium)
       .fontColor(kbTheme(this.isDark).textPrimary)
       .textAlign(TextAlign.Center)
@@ -210,87 +212,93 @@ export struct KeyboardView {
       SymbolGlyph(this.isCapsLock
         ? $r('sys.symbol.switch_majuscule_fill')
         : $r('sys.symbol.switch_majuscule'))
-        .fontSize(18)
+        .fontSize(QWERTY_ICON_FONT_SIZE)
         .fontColor([this.isShift || this.isCapsLock
           ? kbTheme(this.isDark).onAccent
           : kbTheme(this.isDark).textPrimary])
     }
-    .width(this.specialKeyWidthVp)
+    .layoutWeight(1)   // 3段目の両端まで広げる (残りの幅を シフト・バックスペースで分ける)
     .height('100%')
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
     .backgroundColor(this.isShift || this.isCapsLock ? kbTheme(this.isDark).accent : kbTheme(this.isDark).specialBg)
     .borderRadius(KEY_RADIUS)
     .shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-      // QWERTY has no 記号 key, so the shift/caps key doubles as the left-lean
-      // control: long-press to reveal the 左手モード hint, then flick up to
-      // switch. A plain tap still cycles shift/caps via onClick.
-      .bindPopup(this.oneHandHint === 'left', {
-        builder: this.OneHandHintPopup,
-        placement: Placement.Top,
-        enableArrow: true,
-        popupColor: kbTheme(this.isDark).specialBg,
-        backgroundBlurStyle: BlurStyle.NONE,
-        radius: 20,
-        mask: false,
-      })
-      .gesture(
-        GestureGroup(GestureMode.Sequence,
-          LongPressGesture({ duration: 300 })
-            .onAction(() => {
-              this.oneHandHint = 'left';
-              this.ohHintTimer = setTimeout(() => { this.oneHandHint = ''; }, 1500);
-            }),
-          PanGesture({ direction: PanDirection.Up, distance: 20 })
-            .onActionStart(() => {
-              this.getHandler().toggleOneHanded('left');
-              clearTimeout(this.ohHintTimer);
-              this.oneHandHint = '';
-            })
-        )
+    // QWERTY has no 記号 key, so the shift/caps key doubles as the left-lean
+    // control: long-press to reveal the 左手モード hint, then flick up to
+    // switch. A plain tap still cycles shift/caps via onClick.
+    .bindPopup(this.oneHandHint === 'left', {
+      builder: this.OneHandHintPopup,
+      placement: Placement.Top,
+      enableArrow: true,
+      popupColor: kbTheme(this.isDark).specialBg,
+      backgroundBlurStyle: BlurStyle.NONE,
+      radius: 20,
+      mask: false,
+    })
+    .gesture(
+      GestureGroup(GestureMode.Sequence,
+        LongPressGesture({ duration: 300 })
+          .onAction(() => {
+            this.oneHandHint = 'left';
+            this.ohHintTimer = setTimeout(() => { this.oneHandHint = ''; }, 1500);
+          }),
+        PanGesture({ direction: PanDirection.Up, distance: 20 })
+          .onActionStart(() => {
+            this.getHandler().toggleOneHanded('left');
+            clearTimeout(this.ohHintTimer);
+            this.oneHandHint = '';
+          })
       )
-      .onClick(() => {
-        this.getHandler().hapticTick();
-        if (this.isCapsLock) {
-          this.isCapsLock = false;
-          this.isShift = false;
-        } else if (this.isShift) {
-          this.isCapsLock = true;
-        } else {
-          this.isShift = true;
-        }
-      })
+    )
+    .onClick(() => {
+      this.getHandler().hapticTick();
+      if (this.isCapsLock) {
+        this.isCapsLock = false;
+        this.isShift = false;
+      } else if (this.isShift) {
+        this.isCapsLock = true;
+      } else {
+        this.isShift = true;
+      }
+    })
   }
 
   @Builder BackspaceKey() {
     Row() {
       SymbolGlyph($r('sys.symbol.delete_left'))
-        .fontSize(18)
+        .fontSize(QWERTY_ICON_FONT_SIZE)
         .fontColor([kbTheme(this.isDark).textPrimary])
     }
-    .width(this.specialKeyWidthVp)
+    .layoutWeight(1)   // 3段目の両端まで広げる (残りの幅を シフト・バックスペースで分ける)
     .height('100%')
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
     .backgroundColor(kbTheme(this.isDark).specialBg)
     .borderRadius(KEY_RADIUS)
     .shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-      .onTouch((event: TouchEvent) => {
-        if (event.type === TouchType.Down) { this.getHandler().hapticTick(); }
-        if (event.type === TouchType.Down) {
-          this.startBsRepeat();
-        } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
-          this.stopBsRepeat();
-        }
-      })
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) { this.getHandler().hapticTick(); }
+      if (event.type === TouchType.Down) {
+        this.startBsRepeat();
+      } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+        this.stopBsRepeat();
+      }
+    })
   }
 
   // カーソルを左右に動かすキー (変換中は変換する範囲を縮める・伸ばす。文節を選んでいるときは文節を移る)
   @Builder CaretKey(dir: string) {
     Row() {
-      SymbolGlyph($r(dir === 'left' ? 'sys.symbol.chevron_left' : 'sys.symbol.chevron_right'))
-        .fontSize(16)
-        .fontColor([kbTheme(this.isDark).textPrimary])
+      if (dir === 'left') {
+        SymbolGlyph($r('sys.symbol.chevron_left'))
+          .fontSize(QWERTY_CARET_FONT_SIZE)
+          .fontColor([kbTheme(this.isDark).textPrimary])
+      } else {
+        SymbolGlyph($r('sys.symbol.chevron_right'))
+          .fontSize(QWERTY_CARET_FONT_SIZE)
+          .fontColor([kbTheme(this.isDark).textPrimary])
+      }
     }
     .width(this.keyWidthVp)
     .height('100%')
@@ -309,12 +317,12 @@ export struct KeyboardView {
   @Builder SpaceKey() {
     Text(this.qwertyState === InputState.BUNSETSU ? '変換'
       : (this.qwertyState === InputState.COMPOSING && this.qwertyComposing.length >= 2) ? '文節'
-      : (this.inputMode === InputMode.HIRAGANA ? 'かな' : 'space'))
+        : (this.inputMode === InputMode.HIRAGANA ? 'かな' : 'space'))
       .fontFamily(JP_FONT_FAMILY)
-      .fontSize(16)
+      .fontSize(QWERTY_SPACE_FONT_SIZE)
       .fontColor(kbTheme(this.isDark).textPrimary)
       .textAlign(TextAlign.Center)
-      .width(this.spaceKeyWidthVp + this.specialKeyWidthVp + 4)
+      .layoutWeight(1)   // 残りの幅を空白キーが使う。他のキーは固定幅なので、行からはみ出さない
       .height('100%')
       .backgroundColor(kbTheme(this.isDark).keyBg)
       .borderRadius(KEY_RADIUS)
@@ -352,30 +360,65 @@ export struct KeyboardView {
       })
   }
 
+  // あA1 キーの文字: 今の入力モードの文字を濃く、他は薄く
+  private modeGlyphAt(i: number): string {
+    return modeGlyph(this.inputMode, this.numericPadEnabled, i);
+  }
+
+  private modeToneAt(i: number): ResourceColor {
+    return modeIsActive(this.inputMode, this.numericPadEnabled, i)
+      ? kbTheme(this.isDark).textPrimary
+      : kbTheme(this.isDark).textSecondary;
+  }
+
   @Builder ModeKey() {
-    Text(this.numericPadEnabled
-      ? (this.inputMode === InputMode.HIRAGANA ? 'あA1' : 'A1あ')
-      : (this.inputMode === InputMode.HIRAGANA ? 'あA' : 'Aあ'))
+    Text() {
+      Span(this.modeGlyphAt(0)).fontColor(this.modeToneAt(0))
+      Span(this.modeGlyphAt(1)).fontColor(this.modeToneAt(1))
+      Span(this.modeGlyphAt(2)).fontColor(this.modeToneAt(2))
+    }
+    .fontFamily(JP_FONT_FAMILY)
+    .fontSize(MODE_KEY_FONT_SIZE)
+    .textAlign(TextAlign.Center)
+    .width(this.specialKeyWidthVp)
+    .height('100%')
+    .backgroundColor(kbTheme(this.isDark).specialBg)
+    .fontColor(kbTheme(this.isDark).textPrimary)
+    .borderRadius(KEY_RADIUS)
+    .shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
+    .onClick(() => {
+      this.getHandler().hapticTick();
+      // 入力中の文字は確定しない (英字・数字も続けて足して一緒に変換する: ぱちんこ + CR -> パチンコCR)
+      this.getHandler().cycleInputMode();
+    })
+  }
+
+  // 記号パネル (SymbolView) を開く。記号の一覧は SymbolView.ets に 1 つだけあり、
+  // 9 キー・アルファベット盤・数字パッドの「記号」ボタンも同じパネルを開く。
+  @Builder SymbolKey() {
+    Text('記号')
       .fontFamily(JP_FONT_FAMILY)
-      .fontSize(14)
+      .fontSize(QWERTY_SYMBOL_FONT_SIZE)
+      .fontWeight(FontWeight.Medium)
+      .fontColor(kbTheme(this.isDark).textPrimary)
       .textAlign(TextAlign.Center)
       .width(this.specialKeyWidthVp)
       .height('100%')
-      .backgroundColor(kbTheme(this.isDark).specialBg)
-      .fontColor(kbTheme(this.isDark).textPrimary)
+      .backgroundColor(this.keyChromeEnabled ? kbTheme(this.isDark).specialBg : 'transparent')
       .borderRadius(KEY_RADIUS)
-      .shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
+      .shadow(this.keyChromeEnabled
+        ? { radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 }
+        : { radius: 0, color: 'transparent', offsetY: 0 })
       .onClick(() => {
         this.getHandler().hapticTick();
-        // 入力中の文字は確定しない (英字・数字も続けて足して一緒に変換する: ぱちんこ + CR -> パチンコCR)
-        this.getHandler().cycleInputMode();
+        AppStorage.setOrCreate('keyboardSubMode', 'symbol');
       })
   }
 
   @Builder FuncKey(label: string, action: () => void) {
     Text(label)
       .fontFamily(JP_FONT_FAMILY)
-      .fontSize(18)
+      .fontSize(QWERTY_PUNCT_FONT_SIZE)
       .fontWeight(FontWeight.Medium)
       .fontColor(kbTheme(this.isDark).textPrimary)
       .textAlign(TextAlign.Center)
@@ -392,7 +435,7 @@ export struct KeyboardView {
   @Builder EnterKey() {
     Row() {
       SymbolGlyph($r('sys.symbol.arrow_right'))
-        .fontSize(18)
+        .fontSize(QWERTY_ICON_FONT_SIZE)
         .fontColor([kbTheme(this.isDark).onAccent])
     }
     .width(this.specialKeyWidthVp)
@@ -402,14 +445,14 @@ export struct KeyboardView {
     .backgroundColor(kbTheme(this.isDark).accent)
     .borderRadius(KEY_RADIUS)
     .shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
-      // 長押しは、アプリの指定 (送信など) に関係なく改行
-      .gesture(LongPressGesture({ duration: 400 }).onAction(() => {
-        this.getHandler().hapticTick();
-        this.getHandler().handleEnterLongPress();
-      }))
-      .onClick(() => {
-        this.getHandler().hapticTick();
-        this.getHandler().handleEnterKey();
-      })
+    // 長押しは、アプリの指定 (送信など) に関係なく改行
+    .gesture(LongPressGesture({ duration: 400 }).onAction(() => {
+      this.getHandler().hapticTick();
+      this.getHandler().handleEnterLongPress();
+    }))
+    .onClick(() => {
+      this.getHandler().hapticTick();
+      this.getHandler().handleEnterKey();
+    })
   }
 }
