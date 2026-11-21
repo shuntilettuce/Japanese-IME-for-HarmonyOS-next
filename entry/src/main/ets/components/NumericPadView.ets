@@ -380,8 +380,8 @@ export struct NumericPadView {
         Span(this.numericPadEnabled ? '1' : '').fontColor(kbTheme(this.isDark).textPrimary)
       }
       .fontFamily(JP_FONT_FAMILY)
-      .fontSize(MODE_KEY_FONT_SIZE).textAlign(TextAlign.Center)
-      .width(this.flickKeyWidthVp).height('100%')
+.fontSize(MODE_KEY_FONT_SIZE).textAlign(TextAlign.Center)
+.width(this.flickSideKeyWidthVp).height('100%')
       .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
       .borderRadius(8).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
       .onClick(() => {
