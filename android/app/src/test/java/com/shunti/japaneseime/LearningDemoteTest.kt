@@ -28,4 +28,21 @@ class LearningDemoteTest {
         assertNull(l.demote("やまば", "山場", "今日が"))   // もう票が無い
         f.delete()
     }
+
+    /** 確定の取り消しで、押し出した古い文脈の票と上書きした品詞も戻る (Muse 依頼 19 の A・B。PC 版と同じ。2026-11-13) */
+    @Test
+    fun undoRestoresEvictedContextAndPos() {
+        val f = File.createTempFile("learned", ".json").also { it.delete() }
+        val l = Learning(f)
+        for (left in listOf("あい", "かき", "さし", "たち", "なに", "はひ", "まみ", "やゆ")) l.recordChoice("きごう", "記号", left, 5)
+        l.save()
+        val before = f.readText()
+        val u = l.undoOf(listOfNotNull(l.recordChoice("きごう", "記号", "らり", 9)))!!   // 9 個目の文脈で「あい」が押し出され、品詞は 9 に
+        l.save()
+        assert(f.readText() != before)
+        l.restore(u)
+        l.save()
+        assertEquals(before, f.readText())
+        f.delete()
+    }
 }

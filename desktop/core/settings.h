@@ -64,7 +64,7 @@ struct Settings {
     bool live_commit = true;         // リアルタイム確定
     bool live_display = false;       // ライブ変換: 入力中の文字を、空白を押す前から変換して見せる
     bool live_wait = false;          // ライブ変換を打つ手が止まってから行う
-    bool caps_alpha = true;          // 大文字で打ち始めたら英字のまま (ComposerOptions::caps_alpha)
+    bool caps_alpha = false;         // 大文字で打ち始めたら英字のまま (ComposerOptions::caps_alpha)。既定はオフ (2026-11-11)
     bool learn_log = false;          // 確定した文を手元に残す (設定の「学習を始める」で同意した人だけ)
     bool consent_asked = false;      // 同意を聞く画面を出した (更新の後に 1 度だけ出す)
     bool typed_strip = true;         // 入力中の字の上に読みの帯を出す
@@ -80,6 +80,7 @@ struct Settings {
     bool cand_tree = false;          // 新デザインの候補バー (候補の木: 文節の札・強さの色・別の区切り)。既定はオフ
     bool ctrl_space = false;         // Ctrl+Space でも日本語入力のオン・オフ (shortcuts に移した。古い設定の読み替え用)
     std::string model = "standard";  // 変換モデル: light (XS3・メモリの少ない PC 向け)・standard (S7)
+    std::string dict = "standard";   // 辞書: standard・clean (Mozc + CC0 の語、2026-11-19。モデルとは別に選ぶ。pure のモデルはいつも clean)
     // ---- 詳細設定 (2026-10-15。MS-IME・Beki IME などにある設定) ----
     std::string half_symbols;        // 半角で入れる記号 (! ? ( ) @ など。ここに無い記号は全角。, . / - [ ] は 、。・ー「」 の代わりに半角)
     int numpad = 0;                  // テンキー: 0 = いつも半角、1 = 数字の設定に合わせる、2 = いつも全角
@@ -111,6 +112,9 @@ struct Settings {
 
 // 変換モデルの設定の値 -> モデルのファイル名 (辞書と同じフォルダ)。知らない値は standard
 const char* model_file_name(const std::string& model);
+// モデルと組になる辞書・書き方の対の表 (クリーン版 pure だけ別の辞書。2026-11-12)
+const char* lex_file_name(const std::string& model, const std::string& dict = "standard");
+const char* variants_file_name(const std::string& model, const std::string& dict = "standard");
 
 // 読む (無い・壊れていれば既定のまま)。書く (一時ファイルから置き換える)
 bool load_settings(const std::filesystem::path& p, Settings& s);

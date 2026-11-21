@@ -478,14 +478,14 @@ void TextService::apply_settings() {
     Core& c = core();
     c.settings.refresh();
     const Settings& s = c.settings.get();
-    if (s.layout != layout_name_) layout_load(s.layout);
+    if (s.layout != layout_name_) { layout_load(s.layout); romaji_layout_dirty_ = true; }
     layout_.window_ms = uint64_t(s.layout_window);
     layout_.overlap_ratio = s.layout_overlap / 100.0;
     layout_.thumbs = s.layout_thumbs;
     layout_.continuous = s.layout_continuous;
     layout_.thumb_tap = s.layout_thumb_tap;
     layout_.repeat = s.layout_repeat;
-    c.use_model(s.model);   // 変換モデルを替えた (同じなら何もしない)
+    c.use_model(s.model, s.dict);   // 変換モデル・辞書を替えた (同じなら何もしない)
     c.conv.set_suggest(true);   // 提案は候補に混ぜて種類を添える (Composer)。分けて出す設定は廃止 (ユーザー 2026-10-23「統合の方がわかりやすい」)
     c.conv.set_latin(s.latin_auto);
     c.conv.set_typo(s.typo_fix, typo_bias_of(s.typo_level));
@@ -514,13 +514,27 @@ void TextService::apply_settings() {
         std::error_code tec;
         const auto rstamp = std::filesystem::last_write_time(user_dir() / L"romaji.tsv", tec);
         const bool rchanged = tec ? romaji_stamp_ != std::filesystem::file_time_type{} : rstamp != romaji_stamp_;
+        bool rebuild = romaji_layout_dirty_, have_rt = false;
         if (rchanged && tec) {   // ファイルを消した: 元の表に戻す
-            composer_->reset_romaji();
             romaji_stamp_ = {};
+            rebuild = true;
         }
-        if (rchanged && !tec && read_file(user_dir() / L"romaji.tsv", rt)) {
-            romaji_stamp_ = rstamp;   // 読めたときだけ (保存の途中で読めなかったら次の打鍵でもう一度)
+        if (!tec && (rchanged || rebuild)) {
+            have_rt = read_file(user_dir() / L"romaji.tsv", rt);
+            if (have_rt) { romaji_stamp_ = rstamp; rebuild = true; }   // 読めたときだけ (保存の途中で読めなかったら次の打鍵でもう一度)
+            else romaji_stamp_ = {};
+        }
+        if (rebuild) {
+            // 元の表 → 配列の綴り (AZIK など) → 自分で足した綴り の順に重ねる (後のものが上書き)
+            romaji_layout_dirty_ = false;
             composer_->reset_romaji();
+            if (layout_.kind() == shunti::Layout::Kind::Romaji) {
+                composer_->set_romaji_extended(true);
+                if (layout_.romaji_base_empty()) composer_->clear_romaji_table();
+                for (const auto& [k, v] : layout_.romaji_pairs()) composer_->add_romaji(k, v);
+            }
+        }
+        if (rebuild && have_rt) {
             size_t i = 0;
             while (i < rt.size()) {
                 size_t j = rt.find('\n', i);
@@ -641,6 +655,7 @@ bool TextService::ensure_composer() {
     composer_->set_app(to_utf8(u16(reinterpret_cast<const char16_t*>(app_name().c_str()))));
     composer_->flow = &c.flow;
     composer_->set_context_provider([this] { return left_ctx_; });
+    composer_->layout_typo = [this](Composer::LayoutTypo& lt) { return layout_typo(lt); };
     if (INPUT_LOG_ENABLED) {   // デバッグ用のビルドだけ (リリース用では INPUT_LOG_ENABLED が false で、書き出す関数も空)
         composer_->on_log = [this](const LogEvent& e) {
             if (!secure_) input_log(e);
@@ -764,7 +779,10 @@ STDMETHODIMP TextService::OnKeyDown(ITfContext* ctx, WPARAM wp, LPARAM lp, BOOL*
             ComPtr<ITfContext> keep(ctx);
             edit(ctx, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, [this, keep, ev](TfEditCookie ec) {
                 if (!composer_) return;
-                if (!composer_->composing()) begin_input(ec, keep.Get());
+                if (!composer_->composing()) { begin_input(ec, keep.Get()); layout_units_.clear(); layout_units_ok_ = false; }
+                // 配列で受け持たないキー: Backspace は配列の記録も 1 つ戻す。字は記録に無い字が混ざるので記録を使わない
+                if (ev.key == Key::Backspace && !layout_units_.empty()) layout_units_.pop_back();
+                else if (ev.key == Key::Char) layout_units_ok_ = false;
                 composer_->press(ev);
                 apply(ec, keep.Get());
                 // 入力中の 1 打鍵 (デバッグ用のビルドだけ): 押したキーと、押した後の入力中の文字列
@@ -997,13 +1015,15 @@ void CALLBACK TextService::live_timer_proc(HWND, UINT, UINT_PTR id, DWORD) {
 void TextService::layout_apply(ITfContext* ctx, const std::vector<shunti::Layout::Out>& outs) {
     if (outs.empty() || !ctx) return;
     ComPtr<ITfContext> keep(ctx);
-    const bool letters = layout_.kind() == shunti::Layout::Kind::Letters;
+    const bool letters = layout_.kind() == shunti::Layout::Kind::Letters || layout_.kind() == shunti::Layout::Kind::Romaji;   // ACT・SKY の読み替えた字もローマ字に
     edit(ctx, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, [this, keep, outs, letters](TfEditCookie ec) {
         std::vector<WORD> to_app;   // 何も打っていないときの BS・Enter・矢印 (アプリへ送り直す)
         if (!composer_) return;
         for (const auto& o : outs) {
-            if (!composer_->composing()) begin_input(ec, keep.Get());
+            if (!composer_->composing()) { begin_input(ec, keep.Get()); layout_units_.clear(); layout_units_ok_ = true; }
             if (!o.text.empty()) {
+                if (o.unit.empty()) layout_units_ok_ = false;
+                else layout_units_.push_back(o.unit);
                 if (letters) {
                     for (char16_t c : o.text) {
                         KeyEvent ev;
@@ -1018,7 +1038,7 @@ void TextService::layout_apply(ITfContext* ctx, const std::vector<shunti::Layout
             }
             KeyEvent ev;
             WORD vk = 0;
-            if (o.key == "bs") { ev.key = Key::Backspace; vk = VK_BACK; }
+            if (o.key == "bs") { ev.key = Key::Backspace; vk = VK_BACK; if (!layout_units_.empty()) layout_units_.pop_back(); }
             else if (o.key == "enter") { ev.key = Key::Enter; vk = VK_RETURN; }
             else if (o.key == "left") { ev.key = Key::Left; vk = VK_LEFT; }
             else if (o.key == "right") { ev.key = Key::Right; vk = VK_RIGHT; }
@@ -1041,6 +1061,33 @@ void TextService::layout_apply(ITfContext* ctx, const std::vector<shunti::Layout
         SendInput(2, in, sizeof(INPUT));
         }
     });
+}
+
+// 打ち間違いの直しの材料 (Composer::layout_typo)。配列を使っていなければ false (ローマ字の打ち直しのまま)。
+// ローマ字の配列でキーを読み替えないもの (AZIK・gACT10) は、打ったキーの並びがそのまま打鍵の単位
+bool TextService::layout_typo(Composer::LayoutTypo& lt) {
+    if (!composer_) return false;
+    if (!layout_.loaded()) { lt.qwerty = true; return true; }   // 配列なし: 組み立てが打ったキーを QWERTY のローマ字の単位にする
+    std::vector<std::string> units;
+    if (layout_.kind() == shunti::Layout::Kind::Romaji && !layout_.has_key_map()) {
+        if (!composer_->raw_keys_valid()) return false;
+        for (char16_t c : composer_->raw_keys()) {
+            if (c >= 0x80 || (c >= u'A' && c <= u'Z')) return false;   // 大文字 (英字のまま) は直さない
+            units.push_back(std::string(1, char(c)));
+        }
+    } else {
+        if (!layout_units_ok_) return false;
+        units = layout_units_;
+    }
+    if (units.empty()) return false;
+    lt.letters = layout_.kind() == shunti::Layout::Kind::Letters || layout_.kind() == shunti::Layout::Kind::Romaji;
+    lt.orig.clear();
+    for (auto& u : units) {
+        lt.orig.push_back(layout_.unit_text(u));
+        if (lt.orig.back().empty()) return false;
+    }
+    lt.alts = layout_.typo_variants(units);
+    return true;
 }
 
 STDMETHODIMP TextService::OnPreservedKey(ITfContext*, REFGUID, BOOL* eaten) {

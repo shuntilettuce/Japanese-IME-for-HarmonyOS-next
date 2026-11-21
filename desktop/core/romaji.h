@@ -38,15 +38,25 @@ public:
     u16 to_romaji(const u16& kana) const;
     // 表に綴りを足す・上書きする (詳細設定のローマ字の表)
     void add_pair(const u16& key, const u16& kana);
+    // 拡張ローマ字 (AZIK など、子音 + 子音の綴りを足した表)。オンのとき、子音を 2 つ重ねた「っ」(kk) と、n の後の子音で
+    // 「ん」にする決まり (nk → んk) より、表の綴り (kk = きん・nk = にん) とその続きを先に見る
+    void set_extended(bool on) { extended_ = on; }
+    bool extended() const { return extended_; }
+    // 元の表を空にする (gACT10 のように、ふつうのローマ字と全く違う綴りの表だけで打つとき)。
+    // 子音を重ねた「っ」・n の決まりも使わない。かな → ローマ字 (F9・F10) は元の表のまま
+    void clear_table() { table_.clear(); prefixes_.clear(); longer_.clear(); max_kana_ = 1; bare_ = true; }
 
 private:
     Result process_buffered();
 
     std::unordered_map<u16, u16> table_;
     std::unordered_set<u16> prefixes_;
+    std::unordered_set<u16> longer_;   // 足した綴りの、自分より長い綴りの頭になっているもの (拡張ローマ字で続きを待つ)
     std::unordered_map<u16, u16> reverse_;   // かな → いちばん短い綴り
     size_t max_kana_ = 1;
     u16 buffer_;
+    bool extended_ = false;
+    bool bare_ = false;   // clear_table の後
 };
 
 }  // namespace shunti

@@ -63,7 +63,12 @@ class Learning(private val file: File) {
         val evicted: String? = null, val evictedCount: Int = 0,   // 枠から押し出した表記
         val generation: Int = 0,                                  // clear の前の控えは戻さない
         val ctxAdd: Int = 1,                                      // 文脈の表に足した分 (demote は -1: 戻すときに足し戻す)
+        // 足す前の文脈の表と品詞の表の写し (recordChoice のときだけ)。文脈の表は 8 個を超えると古い文脈を捨て、品詞は上書きするので、
+        // 引き算では戻らなかった (Muse 依頼 19: 取り消しで品詞の票が残る・古い文脈の票が消える。PC 版と同じ直し。2026-11-13)
+        val snap: Snap? = null,
     )
+
+    class Snap(val ctx: LinkedHashMap<String, LinkedHashMap<String, Int>>?, val pos: LinkedHashMap<String, Int>?)
 
     /** strongForms の中身が変わるたびに増える */
     var version = 0
@@ -81,6 +86,7 @@ class Learning(private val file: File) {
         val key = left?.let { leftKey(it) }
         val count0 = learned[kana]?.get(candidate) ?: 0
         val day0 = days[kana]
+        val snap = Snap(contexts[kana]?.let { t -> LinkedHashMap(t.mapValues { LinkedHashMap(it.value) }) }, pos[kana]?.let { LinkedHashMap(it) })
         val entry = learned[kana] ?: run {
             if (learned.size >= MAX_READINGS) evictWeakestLearnedReading()
             LinkedHashMap<String, Int>().also { learned[kana] = it }
@@ -95,7 +101,7 @@ class Learning(private val file: File) {
             dropVotes(kana, w.key)
             pos[kana]?.remove(w.key)
         }
-        val undo = Undo(kana, candidate, count0, day0, key, emptyList(), evicted, evictedCount, generation)
+        val undo = Undo(kana, candidate, count0, day0, key, emptyList(), evicted, evictedCount, generation, snap = snap)
         val count = (entry[candidate] ?: 0) + 1
         entry[candidate] = count
         if (count == 2) version++
@@ -159,13 +165,13 @@ class Learning(private val file: File) {
     private fun lidIn(kana: String, surface: String): Int = pos[kana]?.get(surface) ?: lidResolver?.invoke(kana, surface) ?: -1
 
     /** 語ごとの記録と読み全体の記録をまとめて、1 回の取り消しで戻せる形に */
-    fun undoOf(list: List<Undo>): Undo? = list.lastOrNull()?.let { Undo(it.kana, it.candidate, it.count, it.day, it.left, list.dropLast(1), it.evicted, it.evictedCount, it.generation, it.ctxAdd) }
+    fun undoOf(list: List<Undo>): Undo? = list.lastOrNull()?.let { Undo(it.kana, it.candidate, it.count, it.day, it.left, list.dropLast(1), it.evicted, it.evictedCount, it.generation, it.ctxAdd, it.snap) }
 
     /** 2 つの控えを 1 回の取り消しで戻せる形に */
     fun join(a: Undo?, b: Undo?): Undo? {
         if (a == null) return b
         if (b == null) return a
-        fun flat(u: Undo) = u.more + Undo(u.kana, u.candidate, u.count, u.day, u.left, emptyList(), u.evicted, u.evictedCount, u.generation, u.ctxAdd)
+        fun flat(u: Undo) = u.more + Undo(u.kana, u.candidate, u.count, u.day, u.left, emptyList(), u.evicted, u.evictedCount, u.generation, u.ctxAdd, u.snap)
         return undoOf(flat(a) + flat(b))
     }
 
@@ -244,7 +250,11 @@ class Learning(private val file: File) {
     }
 
     private fun restoreOne(u: Undo) {
-        if (u.left != null && u.ctxAdd != 0) note(u.kana, u.left, u.candidate, -u.ctxAdd)
+        val sn = u.snap
+        if (sn != null) {   // 足す前の表へ (押し出した文脈・上書きした品詞も戻る)
+            if (sn.ctx != null) contexts[u.kana] = LinkedHashMap(sn.ctx.mapValues { LinkedHashMap(it.value) }) else contexts.remove(u.kana)
+            if (sn.pos != null) pos[u.kana] = LinkedHashMap(sn.pos) else pos.remove(u.kana)
+        } else if (u.left != null && u.ctxAdd != 0) note(u.kana, u.left, u.candidate, -u.ctxAdd)
         if (u.count == 0 && !learned.containsKey(u.kana)) return
         val entry = learned.getOrPut(u.kana) { LinkedHashMap() }
         if (u.count > 0) entry[u.candidate] = u.count else entry.remove(u.candidate)

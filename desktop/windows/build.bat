@@ -31,6 +31,13 @@ rem light / high conversion models (models\, fetched by tools\fetch_ai_assets.py
 if exist "%ROOT%\models\kkc_model_light.bin" xcopy /D /Y /Q "%ROOT%\models\kkc_model_light.bin" "%DIST%\" >nul
 if exist "%ROOT%\models\kkc_model_s2.bin" copy /Y "%ROOT%\models\kkc_model_s2.bin" "%DIST%\" >nul
 if exist "%ROOT%\models\kkc_model_m5.bin" copy /Y "%ROOT%\models\kkc_model_m5.bin" "%DIST%\" >nul
+rem clean set (PureXS + clean dictionary, 2026-11-12): model, dictionary and variants go together
+if exist "%ROOT%\models\kkc_model_pure.bin" xcopy /D /Y /Q "%ROOT%\models\kkc_model_pure.bin" "%DIST%\" >nul
+if exist "%ROOT%\models\kkc_lex_clean.bin" xcopy /D /Y /Q "%ROOT%\models\kkc_lex_clean.bin" "%DIST%\" >nul
+if exist "%ROOT%\models\kkc_variants_clean.tsv" xcopy /D /Y /Q "%ROOT%\models\kkc_variants_clean.tsv" "%DIST%\" >nul
+rem voice input parts (optional, not in git): models\voice_trie.bin (辞書の読みの発音の木) and models\voice_e1.bin (音響モデル)
+if exist "%ROOT%\models\voice_trie.bin" xcopy /D /Y /Q "%ROOT%\models\voice_trie.bin" "%DIST%\" >nul
+if exist "%ROOT%\models\voice_e1.bin" xcopy /D /Y /Q "%ROOT%\models\voice_e1.bin" "%DIST%\" >nul
 copy /Y "%HERE%install.ps1" "%DIST%\" >nul
 copy /Y "%HERE%install.bat" "%DIST%\" >nul
 copy /Y "%HERE%uninstall.bat" "%DIST%\" >nul
@@ -51,7 +58,7 @@ cl /nologo /c /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNI
   /I"%ROOT%\entry\src\main\cpp" /Fo"%OBJ%\\" ^
   "%HERE%dllmain.cpp" "%HERE%globals.cpp" "%HERE%text_service.cpp" "%HERE%cand_window.cpp" "%HERE%display_attr.cpp" "%HERE%langbar.cpp" ^
   "%HERE%input_log.cpp" "%HERE%strings.cpp" "%CORE%\text.cpp" "%CORE%\romaji.cpp" "%CORE%\store.cpp" "%CORE%\settings.cpp" ^
-  "%CORE%\converter.cpp" "%CORE%\style.cpp" "%CORE%\composer.cpp" "%CORE%\flow.cpp" "%CORE%\layout.cpp" "%CORE%\datetime.cpp" "%ROOT%\entry\src\main\cpp\engine.cpp" || exit /b 1
+  "%CORE%\converter.cpp" "%CORE%\style.cpp" "%CORE%\composer.cpp" "%CORE%\flow.cpp" "%CORE%\layout.cpp" "%CORE%\typo_alts.cpp" "%CORE%\datetime.cpp" "%ROOT%\entry\src\main\cpp\engine.cpp" || exit /b 1
 rem 変換エンジンの AVX2 版の計算だけは /arch:AVX2 で (使うのは CPU が対応しているときだけ。engine_simd.h を参照)
 cl /nologo /c /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /arch:AVX2 %DEFS% /Fo"%OBJ%\\" ^
   "%ROOT%\entry\src\main\cpp\engine_avx2.cpp" || exit /b 1
@@ -86,6 +93,11 @@ rc /nologo %DEFS% /fo "%OBJ%\hand_app.res" "%HERE%hand_app.rc" || exit /b 1
 cl /nologo /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS %DEFS% /Fo"%OBJ%\\" ^
   "%HERE%hand_app.cpp" "%HERE%strings.cpp" /Fe"%DIST%\shunti_hand.exe" ^
   /link /SUBSYSTEM:WINDOWS /guard:cf "%OBJ%\hand_app.res" windowsapp.lib user32.lib gdi32.lib || exit /b 1
+rem voice input: 録音してこの PC の中で認識する小さな窓 (voice_app.cpp・voice_core.h)。変換は IME と同じエンジン
+rc /nologo %DEFS% /fo "%OBJ%\voice_app.res" "%HERE%voice_app.rc" || exit /b 1
+cl /nologo /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS /D_USE_MATH_DEFINES %DEFS% /I"%ROOT%\entry\src\main\cpp" /Fo"%OBJ%\\" ^
+  "%HERE%voice_app.cpp" "%HERE%strings.cpp" "%X64%\engine.obj" "%X64%\engine_avx2.obj" /Fe"%DIST%\shunti_voice.exe" ^
+  /link /SUBSYSTEM:WINDOWS /guard:cf "%OBJ%\voice_app.res" user32.lib gdi32.lib winmm.lib shell32.lib ole32.lib || exit /b 1
 rem clipboard history: 常駐してコピーを記録し、Zori-chan の右クリック・ショートカットで履歴の窓を出す (clip_app.cpp)
 rc /nologo %DEFS% /fo "%OBJ%\clip_app.res" "%HERE%clip_app.rc" || exit /b 1
 cl /nologo /O2 /MT /EHsc /std:c++17 /utf-8 /W3 /GS /guard:cf /DNOMINMAX /DUNICODE /D_UNICODE /D_CRT_SECURE_NO_WARNINGS %DEFS% /Fo"%OBJ%\\" ^

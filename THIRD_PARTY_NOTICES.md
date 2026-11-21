@@ -26,8 +26,8 @@ via GitHub Releases and fetched by `tools/fetch_ai_assets.py`) also contains
 mozc's dictionary entries, connection costs, and symbol / emoji / emoticon
 tables, plus readings from SudachiDict; the mozc, IPAdic, Okinawa Dictionary
 and SudachiDict terms below apply to those parts as well. The AI conversion
-model **shuntelligence** (`kkc_model.bin`) is licensed under CC BY 4.0
-(attribution: "shuntelligence (shuntilettuce)"); the inference code in
+model **shuntelligence** (`kkc_model.bin`) is licensed under the MIT License;
+the inference code in
 `entry/src/main/cpp/` is MIT.
 
 The English-word candidates in shuntorge (e.g. いんじぇくしょん → injection) were

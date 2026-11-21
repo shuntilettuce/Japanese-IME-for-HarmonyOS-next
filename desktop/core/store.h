@@ -31,7 +31,10 @@ public:
     explicit Learning(std::filesystem::path file) : file_(std::move(file)) {}
 
     // record の前の値 (確定の取り消し・時間を指定した消去で元に戻す)
-    struct Undo { u16 reading, surface; int count = 0, day = 0; bool hidden = false; u16 left; int add = 0; u16 evicted; int evicted_count = 0; };   // hidden: 消した操作を戻す。left・add: 文脈の表に足した分。evicted: 枠から押し出した表記
+    struct Undo { u16 reading, surface; int count = 0, day = 0; bool hidden = false; u16 left; int add = 0; u16 evicted; int evicted_count = 0;
+        // record の前の文脈の表と品詞の表 (snap のときだけ)。文脈の表は 8 個を超えると古い文脈を捨て、品詞は上書きするので、
+        // 引き算では戻らなかった (Muse 依頼 19: 取り消しで品詞の票が残る 90 件・古い文脈の票が消える 261 件。2026-11-13)
+        bool snap = false; std::vector<std::pair<u16, std::vector<std::pair<u16, int>>>> ctx; std::vector<std::pair<u16, int>> pos; };   // hidden: 消した操作を戻す。left・add: 文脈の表に足した分。evicted: 枠から押し出した表記
     // 手で選び直した表記を覚えて、すぐ保存する。2 回分に数える (実機の入力ログの時刻順の評価は MELTYPE_NOTES。ユーザー 2026-10-30)
     // left = 左の文脈 (語の学習を文脈ごとに数える。top が見る)
     // lid = 選んだときの文の中での頭の語の品詞 (左 ID、-1 = 分からない)。品詞ごとに分けて数える (2026-11-06)
@@ -140,7 +143,9 @@ u16 latin_key(const u16& w);
 
 class UserDict {
 public:
-    struct Entry { u16 reading, word; std::string pos = "noun", group; };
+    // pack: 入れたパックの名前 (UTF-8)。空 = 未収録 (パックに入っていない語)。JSON の "k" (無ければ未収録。Android 版は読まない)
+    struct Entry { u16 reading, word; std::string pos = "noun", group, pack; };
+    enum class Format { MsIme, Csv, Mozc };   // 書き出しの形: MS-IME の一覧 (UTF-16)・CSV (UTF-8)・Google 日本語入力 / Mozc (UTF-8 の TSV)
     // 変換の網に入れる形: 読み・表記と、品詞を写す代表語の同じ形
     // whole = 読み全体が一致したときだけ (短縮よみ)。bonus = 代表語より下げるコスト (-1 は Converter の既定)
     struct Form { u16 reading, surface, tmpl_reading, tmpl_surface; bool whole = false; int bonus = -1; int lid = -1; };   // lid >= 0: 辞書のその品詞の項目としてだけ置く (学習した語)
@@ -152,28 +157,50 @@ public:
     const std::vector<Entry>& entries() const { return entries_; }
     std::vector<u16> lookup(const u16& reading) const;
     // 登録。うまく登録できなければ理由 (UTF-8)。できたら空
-    std::string add(const u16& reading, const u16& word, const std::string& pos, const std::string& group);
+    std::string add(const u16& reading, const u16& word, const std::string& pos, const std::string& group, const std::string& pack = "");
     void remove(const u16& reading, const u16& word);
-    // まとめて登録 (MS-IME の一覧の出力の形 / CSV)。(登録できた数, できなかった行の説明)
-    std::pair<int, std::vector<std::string>> import_text(const u16& text);
+    // まとめて消す (読み, 表記)。消した数。保存は 1 回だけ
+    int remove_many(const std::vector<std::pair<u16, u16>>& items);
+    // まとめて登録 (MS-IME の一覧の出力の形 / CSV / Mozc の TSV)。pack に入れる (空なら未収録)。(登録できた数, できなかった行の説明)
+    std::pair<int, std::vector<std::string>> import_text(const u16& text, const std::string& pack = "");
     // MS-IME の品詞名から内部の品詞
     static std::pair<std::string, std::string> pos_from_label(const u16& label);
     // 書き出し (MS-IME の「一覧の出力」と同じ形: 読み<TAB>語句<TAB>品詞)
     u16 export_text() const;
+    // 書き出し (ファイルにそのまま書くバイト列)。pack が null なら全部、空文字なら未収録だけ、それ以外はそのパックだけ。n に書いた語の数
+    std::string export_bytes(Format f, const std::string* pack, int* n = nullptr) const;
+    // パックの名前 (出てくる順。未収録は含まない)
+    std::vector<std::string> packs() const;
+    // 語 (読み, 表記) をパックへ移す (空なら未収録へ)。移した数
+    int move_to_pack(const std::vector<std::pair<u16, u16>>& items, const std::string& pack);
+    // パックの名前を変える (同じ名前のパックがあれば 1 つにまとまる)
+    void rename_pack(const std::string& from, const std::string& to);
+    // パックを無くす。with_words なら中の語も消し、そうでなければ未収録に戻す。対象の語の数
+    int remove_pack(const std::string& name, bool with_words);
     std::vector<Form> engine_forms() const;
     // 英字の語 (表記が英字・数字・間の空白だけ): (小文字・空白なしの綴り, 表記)
-    std::vector<std::pair<u16, u16>> latin_words() const;
+    // 版ごとに作り直して持っておく (打つたびに全部の語を見ないように。2026-11-18 10 万語の辞書)
+    const std::vector<std::pair<u16, u16>>& latin_words() const;
+    // 綴り (小文字・空白なし) が key の英字の語の表記。無ければ空
+    u16 latin_find(const u16& key) const;
     // 変わるたびに増える
     uint32_t version() const { return version_; }
 
 private:
     void save();
+    // 読み・表記をそろえて形を確かめる。よければ空を返して out に入れる (重なりは見ない)
+    std::string make_entry(const u16& reading, const u16& word, const std::string& pos, const std::string& group, const std::string& pack, Entry& out) const;
+    void build_latin() const;
 
     std::filesystem::path file_;
     std::filesystem::file_time_type stamp_{};
     bool loaded_ = false;
     std::vector<Entry> entries_;
     uint32_t version_ = 0;
+    mutable bool latin_ok_ = false;
+    mutable uint32_t latin_ver_ = 0;
+    mutable std::vector<std::pair<u16, u16>> latin_;
+    mutable std::unordered_map<u16, u16> latin_map_;
 };
 
 // ファイルを読む・書く (書くときは一時ファイルから置き換える)

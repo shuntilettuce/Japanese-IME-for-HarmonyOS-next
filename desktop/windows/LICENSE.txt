@@ -3,9 +3,8 @@ shunti IME (Windows 版)
 ■ アプリのコードと変換エンジン
 MIT License (全文は下に)。Copyright (c) 2026 shuntilettuce
 
-■ shuntelligence (AI 変換のモデル: 標準 S7・軽量 XS3)
-shuntelligence (shuntilettuce)、CC BY 4.0
-https://creativecommons.org/licenses/by/4.0/
+■ shuntelligence (AI 変換のモデル: 標準 S9・軽量 XS6・正確 M5・クリーン PureXS2)
+MIT License (全文は下に)。Copyright (c) 2026 shuntilettuce
 
 ■ shuntorge (AI 変換の辞書)
 Wikipedia と JMdict 由来の語を含むため、辞書ファイル (kkc_lex.bin) 全体は CC BY-SA 4.0 です。
@@ -20,6 +19,10 @@ Wikipedia と JMdict 由来の語を含むため、辞書ファイル (kkc_lex.b
 ・mecab-ipadic-NEologd (Toshinori Sato、Apache License 2.0。英字の語 (Win・GitHub など) の読み。NEologd ははてなキーワード一覧ファイル (株式会社はてな) ほかの表記と読みを使用)
 ・SCOWL (Spell Checker Oriented Word Lists、Copyright 2000-2026 Kevin Atkinson。英単語の一覧 (よく使う語、大きさ 35)。MIT に近い許諾: 著作権表示とこの許諾の表示を残せば自由に使える)
 ・The CEFR-J Wordlist Version 1.5 (投野由紀夫・東京外国語大学 投野研究室。英単語の選定に使用。読みは独自)
+
+■ クリーン辞書 (kkc_lex_clean.bin・kkc_variants_clean.tsv、設定の「辞書: クリーン」)
+独自の部分 (足した語・書き方の対の表) は MIT。mozc から受け継いだ部分は mozc と同じ許諾です (全文は下に)。
+・mozc (Google、BSD-3-Clause。IPAdic 由来の辞書データと沖縄辞書を含む。上の shuntorge と同じもの)
 
 ■ ローマ字の表・差別語の表
 HarmonyOS 版 shunti IME と同じもの (MIT)。

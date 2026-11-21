@@ -168,3 +168,29 @@ desktop/windows の画面に出る日本語の文言。番号は strings.json �
 | 199 | 消す | hand_app.cpp (ボタン) |
 | 201 | 日本語の手書きを認識できません… | hand_app.cpp (認識器が無いとき) |
 | 202 | 手書き入力... | langbar.cpp (Zori-chan の右クリックのメニュー) |
+| 252 | 辞書の管理… | settings_app.cpp (ユーザー辞書の欄のボタン) |
+| 253 | 辞書の管理 | settings_app.cpp (辞書の管理の窓の題) |
+| 254 | すべて | settings_app.cpp (辞書の管理の左の一覧) |
+| 255 | 未収録 | settings_app.cpp (辞書の管理: パックに入っていない語) |
+| 256 | パック | settings_app.cpp (辞書の管理の列の題) |
+| 257 | パックとして保存する (後からパックごとに管理できます) | settings_app.cpp (読み込みの確認) |
+| 258 | パックの名前: | settings_app.cpp (読み込みの確認・新しいパック・名前を変える) |
+| 259 | 辞書の読み込み | settings_app.cpp (読み込みの確認の題) |
+| 260 | 読み込む | settings_app.cpp (読み込みの確認のボタン) |
+| 261 | 新しいパック… | settings_app.cpp (辞書の管理のボタン) |
+| 262 | 名前を変える… | settings_app.cpp (辞書の管理のボタン) |
+| 263 | パックを消す… | settings_app.cpp (辞書の管理のボタン) |
+| 264 | 選んだ語の移動先: | settings_app.cpp (辞書の管理) |
+| 265 | 移す | settings_app.cpp (辞書の管理のボタン) |
+| 266 | 書き出す… | settings_app.cpp (辞書の管理のボタン) |
+| 268 | MS-IME の一覧 (.txt) | settings_app.cpp (書き出しの形式) |
+| 269 | CSV (.csv) | settings_app.cpp (書き出しの形式) |
+| 270 | Google 日本語入力・Mozc (.txt) | settings_app.cpp (書き出しの形式) |
+| 271 | パックの中の語も消しますか？ | settings_app.cpp (パックを消す) |
+| 272 | パックの名前を入れてください。 | settings_app.cpp (名前が空のとき) |
+| 273 | OK | settings_app.cpp (名前の入力のボタン) |
+| 274 | 書き出す語がありません。 | settings_app.cpp (書き出し) |
+| 276 | 新規登録 | settings_app.cpp (辞書の管理の仕切り) |
+| 277 | 登録先: | settings_app.cpp (辞書の管理の新規登録) |
+| 278 | 登録 | settings_app.cpp (辞書の管理の新規登録のボタン) |
+| 279 | 動詞・形容詞は終止形で入れてください (例: ぐぐる / ググる) | settings_app.cpp (辞書の管理の新規登録の案内) |

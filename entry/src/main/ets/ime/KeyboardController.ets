@@ -309,6 +309,13 @@ export class InputHandler {
   private previewActive: boolean = false;
   // いまプレビューとして出している文字数 (取り消し時の削除長に使う)。
   private previewLen: number = 0;
+  // プレビューを出し始めたときのカーソルの位置と、それ以後に送ったプレビューを順につないだもの。
+  // 対応していると答えるのに、プレビューを受け取るたびに確定済みの字にしてしまう入力欄がある
+  // (PayPay の金額。4500 が 4 + 45 + 450 + 4500 + 確定の字 で入った。ユーザー 2026-11-13)。
+  // カーソルが「始めの位置 + 今のプレビューの長さ」より先にあり、その間の字が送ったものそのままなら、
+  // その欄はプレビューを確定している: 送った分を消して、その欄ではパネルに出す形へ戻す (previewLeaked)
+  private previewBase: number = -1;
+  private previewSent: string = '';
   // 入力中のかなをどこに出すかの設定 (SettingsStore、独立した2つのトグル)。
   private composingInPanel: boolean = true;
   private composingInField: boolean = true;
@@ -3372,11 +3379,14 @@ export class InputHandler {
       return;
     }
     try {
+      if (!this.previewActive) { this.previewBase = this.hostIndex(); this.previewSent = ''; }
       // range は「置き換える範囲」。-1/-1 で現在のプレビュー(無ければ
       // カーソル位置)を差し替える指定になる。
       this.inputClient?.setPreviewTextSync(text, { start: -1, end: -1 });
       this.previewActive = true;
       this.previewLen = text.length;
+      this.previewSent += text;
+      this.previewLeaked(text.length);   // 確定してしまう欄なら消してパネルへ (入力中の字はそのまま続く)
     } catch (e) {
       // 12800011 = この入力欄はプレビュー非対応。以後は呼ばずパネル内表示へ
       // 戻す (対応可否は欄ごとなので、ここで諦めても次の欄でまた試される)。
@@ -3386,6 +3396,35 @@ export class InputHandler {
       this.publishPreviewMode();
       console.info('shuntiIME setPreviewText unsupported, falling back ' + JSON.stringify(e));
     }
+  }
+
+  // プレビューを確定済みの字にしてしまう入力欄か (previewBase のコメント)。そうなら送った字を消し、
+  // この欄ではプレビューを使わずパネルに出す。expect = いま入力欄にあるはずの自分の字の数
+  // (プレビューの長さ・確定した字の長さ・取り消した後の 0)。消したら true
+  private previewLeaked(expect: number): boolean {
+    const base = this.previewBase;
+    if (base < 0 || this.previewSent.length === 0) { return false; }
+    const idx = this.hostIndex();
+    if (idx < 0 || idx <= base + expect) { return false; }
+    const n = idx - base;
+    let before = '';
+    try { before = this.inputClient?.getForwardSync(n) ?? ''; } catch (_e) { return false; }
+    // 指で動かした・アプリが書き換えたなど、送った字そのままでなければ触らない (ほかの字を消さないため)
+    if (n !== this.previewSent.length || before !== this.previewSent) { return false; }
+    try {
+      this.inputClient?.deleteForwardSync(n);
+    } catch (_e) {
+      return false;
+    }
+    console.info(`shuntiIME preview committed by field: removed ${n} chars, falling back to panel`);
+    this.markSelfEdit();
+    this.previewActive = false;
+    this.previewLen = 0;
+    this.previewBase = -1;
+    this.previewSent = '';
+    this.previewSupported = false;   // この欄の間だけ。次の欄 (onInputStart) でまた確かめる
+    this.publishPreviewMode();
+    return true;
   }
 
   // プレビューを「中身を残さずに」取り消す。
@@ -3402,6 +3441,7 @@ export class InputHandler {
     try {
       this.inputClient?.setPreviewTextSync('', { start: -1, end: -1 });
       this.inputClient?.finishTextPreviewSync();
+      this.previewLeaked(0);   // 1 字打って消した: 確定してしまう欄では字が残っている
     } catch (_e) {
       try {
         this.inputClient?.finishTextPreviewSync();
@@ -4082,6 +4122,10 @@ export class InputHandler {
         this.inputClient?.finishTextPreviewSync();
         this.previewActive = false;
         previewCommitted = true;
+        // 確定してしまう欄 (1 字だけ打って確定したときは、打つ間に見分けられない): 生の字 + 確定の字 で残っている。
+        // 両方消して、確定の字だけ入れ直す
+        this.previewSent += finalText;
+        if (this.previewLeaked(finalText.length)) { this.inputClient?.insertTextSync(finalText); }
       } catch (_e) {
         // 置き換えに失敗したらプレビューを畳んで通常の挿入に落とす。
         this.cancelPreviewText();
