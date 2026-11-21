@@ -60,8 +60,8 @@ const NUM_FLICK_GRID: FlickKeyDef[][] = [
 
 @Component
 export struct NumericPadView {
-@StorageLink('flickSideKeyWidthVp') flickSideKeyWidthVp: number = 48; // 必要に応じて調整してください
   @StorageLink('flickKeyWidthVp') flickKeyWidthVp: number = 72;
+  @StorageLink('flickSideKeyWidthVp') flickSideKeyWidthVp: number = 48;
   @StorageLink('keyboardHeightVp') keyboardHeightVp: number = 260;
   @StorageLink('isDark') isDark: boolean = false;
   @StorageLink('keyChromeEnabled') keyChromeEnabled: boolean = true;
