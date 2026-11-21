@@ -73,20 +73,25 @@ HarmonyOS 版のソースを正本として、Android 版に取り込むもの:
 
 IME本体は `InputMethodExtensionAbility` として別プロセス（`:inputMethod`）で動作するため、本体アプリとはサンドボックスが分離されています（ユーザー辞書やログの読み書きが両側で別経路になっているのはこのため）。
 
-### 変換精度の回帰テスト
+### 変換を変えるときの確かめ方
 
-辞書やロジックを変更した際は、既存コーパスでのスコアを必ず確認してください。
+変換はAI変換です。エンジンは `entry/src/main/cpp/engine.cpp` で、HarmonyOS・Android・Windows・Linuxの各版が同じものを使います。
 
-```bash
-bun tools/mozc_data/compare_engines.js corpus_test9.js
-bun tools/mozc_data/compare_engines.js corpus_test10.js
-bun tools/mozc_data/compare_engines.js corpus_test11.js
+- キーボードの見た目や設定画面だけを変える場合は、実機で触って確かめれば十分です。変換の試験は要りません。
+- `engine.cpp` や辞書の扱いを変える場合は、Windowsで次の試験を通してください。変換の上位の候補、文節、学習の決まりを確かめます。Visual Studio 2022 Build Tools (C++) が要ります。
+
+```bat
+python tools/fetch_ai_assets.py
+desktop\tests\build_test.bat
 ```
 
+最後に `all ok` と出れば通っています。
+
+`tools/ime-eval`、`tools/mozc_data/compare_engines.js`、`tools/blind-eval` は以前の変換エンジン用です。今のAI変換には使えません。
 
 ### コントリビュート
 
-Issue・Pull Request歓迎です。辞書データや変換ロジックに手を入れる変更は、上記の回帰テストで既存スコアがなるべく下がっていないことを確認のうえ送ってください。
+Issue・Pull Request歓迎です。変換に手を入れる変更は、上の試験が通ることを確かめてから送ってください。精度の比べ方で迷ったら、Issueで相談してください。
 
 ---
 
