@@ -1,4 +1,5 @@
 import { InputHandler, InputMode, InputState } from '../ime/KeyboardController';
+import { modeKeyLabel } from './ModeLabel';
 import { kbTheme } from './Theme';
 import { JP_FONT_FAMILY } from './JpFont';
 
@@ -23,6 +24,19 @@ const NUMBER_ROW: string[] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 // Key corner radius (design tokens: "regular keys 8px").
 const KEY_RADIUS = 8;
 
+// グライド入力: キーの位置 (ウィンドウの座標、vp)
+interface KeyRect { x: number; y: number; w: number; h: number; }
+const GLIDE_KEYS: string = 'qwertyuiopasdfghjkl-zxcvbnm';
+// 押した所からキーの横の間隔のこの倍だけ動いたらなぞりとみなす (打鍵のずれでは届かない)
+const GLIDE_START: number = 0.8;
+
+
+// なぞりを解くための引数 (キーの文字・キーの中心・軌跡。キーの横の間隔を 1 にした単位)
+interface GlideArgs {
+  ks: string;
+  kxy: number[];
+  pts: number[];
+}
 @Component
 export struct KeyboardView {
   @Prop inputMode: string = InputMode.HIRAGANA;
@@ -45,9 +59,154 @@ export struct KeyboardView {
   // 半角の A/1 は ひらがな と字形の大きさが厳密には揃わないが、
   // 全角にすると見た目が野暮ったくなるため半角のままにしている。
   @StorageLink('numericPadEnabled') numericPadEnabled: boolean = false;
+  @StorageLink('zhGlide') zhGlide: boolean = false;
+  @StorageLink('zhMode') zhMode: boolean = false;
+
+  @StorageLink('glideEnabled') glideEnabled: boolean = false;
+  // なぞった軌跡 (表示用、Stack の中の座標。ほかはウィンドウの座標)
+  @State glideTrail: number[][] = [];
+  // なぞっている間の途中結果 (今指を離したら入る語)。指の上に浮かせる (Gboard と同じ。離した後に字が変わって驚かないように)
+  @State glidePrev: string = '';
+  @State glidePrevX: number = 0;
+  @State glidePrevY: number = 0;
 
   private getHandler(): InputHandler {
     return InputHandler.getInstance();
+  }
+
+  // ---- グライド入力 ----
+  private stackX: number = 0;
+  private stackY: number = 0;
+  private keyRects: Map<string, KeyRect> = new Map<string, KeyRect>();
+  private gTrack: boolean = false;      // 字のキーの上で押して、なぞりを集めている
+  private gActive: boolean = false;     // なぞりと決まった (このあとのキーの onClick は打鍵にしない)
+  private gId: number = -1;
+  private gPts: number[] = [];          // ウィンドウの座標 (vp)
+  private gX0: number = 0;
+  private gY0: number = 0;
+  private gBusy: boolean = false;       // 途中結果を計算中 (重なったら次の分は飛ばす)
+  private gPrevAt: number = 0;
+  private gSeq: number = 0;             // なぞりの番号 (前のなぞりの途中結果が遅れて届いたら捨てる)
+
+  private keyPitch(): number {
+    const q = this.keyRects.get('q');
+    const w = this.keyRects.get('w');
+    if (q && w && w.x > q.x) { return w.x - q.x; }
+    return this.keyWidthVp + 4;
+  }
+
+  private glideKeyAt(x: number, y: number): string {
+    const keys = this.inputMode === InputMode.ALPHANUMERIC ? GLIDE_KEYS.replace('-', '') : GLIDE_KEYS;
+    for (let i = 0; i < keys.length; i++) {
+      const r = this.keyRects.get(keys[i]);
+      if (r && x >= r.x - 2 && x <= r.x + r.w + 2 && y >= r.y - 2 && y <= r.y + r.h + 2) { return keys[i]; }
+    }
+    return '';
+  }
+
+  private onGlideTouch(event: TouchEvent): void {
+    // 中モードではグライドの設定がオフでもなぞれる (なぞりで入れるモードなので)
+    if (!(this.glideEnabled || (this.zhMode && this.inputMode === InputMode.ALPHANUMERIC)) || event.touches.length === 0) {
+      return;
+    }
+    const t = event.changedTouches.length > 0 ? event.changedTouches[0] : event.touches[0];
+    if (event.type === TouchType.Down) {
+      if (event.touches.length > 1) {   // 2 本目の指 (速い打鍵) が来たらなぞりはやめる
+        this.gTrack = false;
+        this.glideTrail = [];
+        return;
+      }
+      this.gActive = false;
+      this.gSeq++;
+      this.glidePrev = '';
+      this.gTrack = this.glideKeyAt(t.windowX, t.windowY) !== '';
+      this.gId = t.id;
+      this.gPts = [t.windowX, t.windowY];
+      this.gX0 = t.windowX;
+      this.gY0 = t.windowY;
+      return;
+    }
+    if (!this.gTrack || t.id !== this.gId) {
+      return;
+    }
+    if (event.type === TouchType.Move) {
+      this.gPts.push(t.windowX, t.windowY);
+      if (!this.gActive && Math.hypot(t.windowX - this.gX0, t.windowY - this.gY0) > GLIDE_START * this.keyPitch()) {
+        this.gActive = true;
+      }
+      if (this.gActive) {
+        const tr: number[][] = [];
+        for (let i = Math.max(0, this.gPts.length - 120); i + 1 < this.gPts.length; i += 2) { tr.push([this.gPts[i] - this.stackX, this.gPts[i + 1] - this.stackY]); }
+        this.glideTrail = tr;
+        this.updateGlidePreview();
+      }
+    } else if (event.type === TouchType.Up) {
+      this.gTrack = false;
+      this.glideTrail = [];
+      this.gSeq++;
+      this.glidePrev = '';
+      if (this.gActive) {
+        this.gPts.push(t.windowX, t.windowY);
+        this.finishGlide();
+      }
+    } else if (event.type === TouchType.Cancel) {
+      this.gTrack = false;
+      this.gActive = false;
+      this.glideTrail = [];
+      this.gSeq++;
+      this.glidePrev = '';
+    }
+  }
+
+  // 途中結果: 0.1 秒ごとに、今までの軌跡で解いて指の上に出す。計算中なら飛ばす
+  private updateGlidePreview(): void {
+    const now = Date.now();
+    if (this.gBusy || now - this.gPrevAt < 100 || this.gPts.length < 8) {
+      return;
+    }
+    this.gBusy = true;
+    this.gPrevAt = now;
+    const seq = this.gSeq;
+    const a = this.glideArgs();
+    const caps = this.isCapsLock ? 2 : (this.isShift ? 1 : 0);
+    const n = this.gPts.length;
+    const lx = this.gPts[n - 2] - this.stackX;
+    const ly = this.gPts[n - 1] - this.stackY;
+    this.getHandler().glidePreview(a.ks, a.kxy, a.pts, caps).then((t: string) => {
+      this.gBusy = false;
+      if (seq !== this.gSeq || !this.gActive) { return; }
+      this.glidePrev = t;
+      this.glidePrevX = Math.max(48, lx);
+      this.glidePrevY = Math.max(34, ly - 1.1 * this.keyPitch());   // 上の段でも欄の外に切れないように
+    }).catch(() => { this.gBusy = false; });
+  }
+
+  // キーの中心と軌跡を、キーの横の間隔を 1 にした単位にする
+  private glideArgs(): GlideArgs {
+    const p = this.keyPitch();
+    const keys = this.inputMode === InputMode.ALPHANUMERIC ? GLIDE_KEYS.replace('-', '') : GLIDE_KEYS;
+    let ks = '';
+    const kxy: number[] = [];
+    for (let i = 0; i < keys.length; i++) {
+      const r = this.keyRects.get(keys[i]);
+      if (!r) { continue; }
+      ks += keys[i];
+      kxy.push((r.x + r.w / 2) / p, (r.y + r.h / 2) / p);
+    }
+    const pts: number[] = [];
+    for (let i = 0; i < this.gPts.length; i++) { pts.push(this.gPts[i] / p); }
+    return { ks: ks, kxy: kxy, pts: pts } as GlideArgs;
+  }
+
+  private finishGlide(): void {
+    const a = this.glideArgs();
+    this.getHandler().hapticTick();
+    // 英字の大文字: Shift なら頭だけ、Caps Lock なら全部 (Shift はキーを打った時と同じく 1 回で戻す)
+    const caps = this.isCapsLock ? 2 : (this.isShift ? 1 : 0);
+    if (this.isShift && !this.isCapsLock) {
+      this.isShift = false;
+    }
+    this.getHandler().handleGlide(a.ks, a.kxy, a.pts, caps);
   }
 
   private bsDelayTimer: number = -1;
@@ -174,9 +333,38 @@ export struct KeyboardView {
       .height('100%')
       .padding({ bottom: 8, top: 4, left: 2, right: 2 })
 
+      if (this.glideTrail.length > 1) {
+        Polyline({ width: '100%', height: '100%' })
+          .points(this.glideTrail)
+          .fillOpacity(0)
+          .stroke(kbTheme(this.isDark).accent)
+          .strokeWidth(5)
+          .strokeOpacity(0.6)
+          .strokeLineJoin(LineJoinStyle.Round)
+          .strokeLineCap(LineCapStyle.Round)
+          .hitTestBehavior(HitTestMode.Transparent)
+      }
+      if (this.glidePrev.length > 0 && this.glideTrail.length > 1) {
+        Text(this.glidePrev)
+          .fontFamily(JP_FONT_FAMILY)
+          .fontSize(18)
+          .fontColor(kbTheme(this.isDark).textPrimary)
+          .padding({ left: 12, right: 12, top: 4, bottom: 4 })
+          .backgroundColor(kbTheme(this.isDark).candidateBg)
+          .borderRadius(16)
+          .shadow({ radius: 4, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
+          .position({ x: this.glidePrevX, y: this.glidePrevY })
+          .markAnchor({ x: '50%', y: '100%' })
+          .hitTestBehavior(HitTestMode.Transparent)
+      }
     }
     .width('100%')
     .height('100%')
+    .onAreaChange((_o: Area, n: Area) => {
+      this.stackX = Number(n.globalPosition.x);
+      this.stackY = Number(n.globalPosition.y);
+    })
+    .onTouch((event: TouchEvent) => { this.onGlideTouch(event); })
   }
 
   @Builder RegularKey(value: string, width: number) {
@@ -195,7 +383,14 @@ export struct KeyboardView {
       .shadow(this.keyChromeEnabled
         ? { radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 }
         : { radius: 0, color: 'transparent', offsetY: 0 })
+      .onAreaChange((_o: Area, n: Area) => {
+        this.keyRects.set(value, {
+          x: Number(n.globalPosition.x), y: Number(n.globalPosition.y),
+          w: Number(n.width), h: Number(n.height),
+        } as KeyRect);
+      })
       .onClick(() => {
+        if (this.gActive) { return; }   // なぞりの終わり (グライド入力)
         this.getHandler().hapticTick();
         const key = (this.isShift || this.isCapsLock) ? value.toUpperCase() : value;
         this.getHandler().handleKeyPress(key);
@@ -353,11 +548,10 @@ export struct KeyboardView {
   }
 
   @Builder ModeKey() {
-    Text(this.numericPadEnabled
-      ? (this.inputMode === InputMode.HIRAGANA ? 'あA1' : 'A1あ')
-      : (this.inputMode === InputMode.HIRAGANA ? 'あA' : 'Aあ'))
+    Text(modeKeyLabel(this.inputMode === InputMode.HIRAGANA ? 'あ' : (this.zhMode && this.inputMode === InputMode.ALPHANUMERIC ? '中' : 'A'),
+      this.numericPadEnabled, this.zhGlide))
       .fontFamily(JP_FONT_FAMILY)
-      .fontSize(14)
+      .fontSize(this.numericPadEnabled && this.zhGlide ? 12 : 14)
       .textAlign(TextAlign.Center)
       .width(this.specialKeyWidthVp)
       .height('100%')

@@ -1,4 +1,5 @@
 import { InputHandler, InputMode } from '../ime/KeyboardController';
+import { modeKeyLabel } from './ModeLabel';
 import { kbTheme } from './Theme';
 import { JP_FONT_FAMILY } from './JpFont';
 
@@ -61,6 +62,8 @@ export struct AlphabetFlickKeyboardView {
   // 半角の A/1 は ひらがな と字形の大きさが厳密には揃わないが、
   // 全角にすると見た目が野暮ったくなるため半角のままにしている。
   @StorageLink('numericPadEnabled') numericPadEnabled: boolean = false;
+  @StorageLink('zhGlide') zhGlide: boolean = false;
+  @StorageLink('zhMode') zhMode: boolean = false;
 
   @State activeRow: number = -1;
   @State activeCol: number = -1;
@@ -312,7 +315,7 @@ export struct AlphabetFlickKeyboardView {
           AppStorage.setOrCreate('keyboardSubMode', 'symbol');
         })
     } else {
-      Text(this.numericPadEnabled ? 'A1あ' : 'あA')
+      Text(this.numericPadEnabled || this.zhGlide ? modeKeyLabel('A', this.numericPadEnabled, this.zhGlide) : 'あA')
         .fontFamily(JP_FONT_FAMILY)
         .fontSize(12).textAlign(TextAlign.Center)
         .width(this.flickSideKeyWidthVp).height('100%')

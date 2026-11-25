@@ -22,6 +22,24 @@
       "sha256": "65d97597b06372394bc33503a66506541f284db5c15bb523bd3933da1071ed4d",
       "license": "shuntelligence XS6 (軽量、後ろの文脈・英字の打ち分け (網 mid2)・ローマ字の打ち間違いの直しつき。版 5: 2.7MB): MIT",
       "dest": "models"
+    },
+    "glide_nn.bin": {
+      "url": "https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/download/glide-v1/",
+      "size": 2923596,
+      "sha256": "5e16cfab49686f76f1ee4d8c66f12e88e8550a86712f4fa5ab7e83f827131b66",
+      "license": "グライド入力のキーの確率のネットワーク (FUTO Swipe の英語の軌跡 (MIT) で学習、FUTO の重みは使わない): MIT"
+    },
+    "glide_en.tsv": {
+      "url": "https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/download/glide-v1/",
+      "size": 2498974,
+      "sha256": "574fb97a099c5f995339ca6a9b2aa198657545b2584c333db2bec175d379cf6f",
+      "license": "グライド入力の英語の語の一覧: SCOWL/ESDB (MIT に近い許諾) + FUTO Swipe の語の頻度 (MIT)"
+    },
+    "glide_zh.tsv": {
+      "url": "https://github.com/shuntilettuce/Japanese-IME-for-HarmonyOS-next/releases/download/glide-v1/",
+      "size": 7529055,
+      "sha256": "33be50a236c763cc8b83d798fab19c2ece640e00aff58b7edffe3ae218f67b58",
+      "license": "グライド入力・中国語の語の一覧: jieba (MIT) + phrase-pinyin-data・pinyin-data (MIT、Unihan 由来)"
     }
   }
 }

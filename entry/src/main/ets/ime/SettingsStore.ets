@@ -30,6 +30,10 @@ export interface KeyboardSettings {
   separateSuggest: boolean;
   // 英数字キーボードで英字も入力中の文字として組み立てて変換する (iphone -> iPhone)。オフは英字をそのまま入れる (数字は組み立てる)
   alphaCompose: boolean;
+  // グライド入力 (QWERTY のキーをなぞって入力する。既定オフ)
+  glideEnabled: boolean;
+  // なぞりを中国語 (簡体字、拼音) で入れる (既定オフ。打つキーはそのまま)
+  zhGlide: boolean;
   // 差別的・不適切な語も候補に出す (既定オン)
   // キーボードのライト／ダーク。'system' は端末のカラーモードに従う（既定）。
   // 'light' / 'dark' はキーボードだけ固定する（ホストアプリの色は変えない）。
@@ -102,6 +106,8 @@ const DEFAULTS: KeyboardSettings = {
   hapticEnabled: false,
   separateSuggest: true,
   alphaCompose: true,
+  glideEnabled: false,
+  zhGlide: false,
   themeMode: 'system',
   keyChromeEnabled: true,
   composingInPanel: true,
@@ -147,6 +153,7 @@ export class SettingsStore {
       const haptic = await prefs.get('hapticEnabled', DEFAULTS.hapticEnabled);
       const separateSuggest = await prefs.get('separateSuggest', DEFAULTS.separateSuggest);
       const alphaCompose = await prefs.get('alphaCompose', DEFAULTS.alphaCompose);
+      const glide = await prefs.get('glideEnabled', DEFAULTS.glideEnabled);
       const themeMode = await prefs.get('themeMode', DEFAULTS.themeMode);
       const keyChrome = await prefs.get('keyChromeEnabled', DEFAULTS.keyChromeEnabled);
       const inPanel = await prefs.get('composingInPanel', DEFAULTS.composingInPanel);
@@ -170,7 +177,7 @@ export class SettingsStore {
       const floatH = await prefs.get('floatingHFrac', DEFAULTS.floatingHFrac);
       console.info('shuntiIME SettingsStore.load ok', JSON.stringify({ kanaLayout, alphabetLayout, oneHanded, side, numericPad, themeMode, keyChrome, forceReload }));
       return {
-        kanaKeyboardLayout: String(kanaLayout),
+        kanaKeyboardLayout: String(await prefs.get('kanaKeyboardLayout', kanaLayout)),
         alphabetKeyboardLayout: String(alphabetLayout),
         oneHandedMode: oneHanded === true,
         oneHandedSide: String(side),
@@ -182,6 +189,8 @@ export class SettingsStore {
         hapticEnabled: haptic === true,
         separateSuggest: separateSuggest !== false,
         alphaCompose: alphaCompose !== false,
+        glideEnabled: glide === true,
+        zhGlide: (await prefs.get('zhGlide', DEFAULTS.zhGlide)) === true,
         themeMode: String(themeMode),
         keyChromeEnabled: keyChrome !== false,
         composingInPanel: inPanel !== false,
@@ -213,6 +222,8 @@ export class SettingsStore {
         hapticEnabled: DEFAULTS.hapticEnabled,
         separateSuggest: DEFAULTS.separateSuggest,
         alphaCompose: DEFAULTS.alphaCompose,
+        glideEnabled: DEFAULTS.glideEnabled,
+        zhGlide: DEFAULTS.zhGlide,
         themeMode: DEFAULTS.themeMode,
         keyChromeEnabled: DEFAULTS.keyChromeEnabled,
         composingInPanel: DEFAULTS.composingInPanel,
@@ -291,6 +302,24 @@ export class SettingsStore {
     try {
       const prefs = await dataPreferences.getPreferences(context, SettingsStore.STORE);
       await prefs.put('hapticEnabled', enabled);
+      await prefs.flush();
+    } catch (_e) {}
+  }
+
+  static async saveGlideEnabled(context: common.Context, enabled: boolean): Promise<void> {
+    InputLog.recordSetting('glideEnabled', String(enabled));
+    try {
+      const prefs = await dataPreferences.getPreferences(context, SettingsStore.STORE);
+      await prefs.put('glideEnabled', enabled);
+      await prefs.flush();
+    } catch (_e) {}
+  }
+
+  static async saveZhGlide(context: common.Context, enabled: boolean): Promise<void> {
+    InputLog.recordSetting('zhGlide', String(enabled));
+    try {
+      const prefs = await dataPreferences.getPreferences(context, SettingsStore.STORE);
+      await prefs.put('zhGlide', enabled);
       await prefs.flush();
     } catch (_e) {}
   }

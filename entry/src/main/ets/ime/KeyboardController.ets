@@ -29,9 +29,19 @@ import { EmojiSuggest } from './EmojiSuggest';
 import { AppMaintenance } from './AppMaintenance';
 import { AiConverter } from './AiConverter';
 import { Pos } from './Pos';
+import type { GlideResult } from 'libkkc.so';
 import { SentenceFlow } from './SentenceFlow';
 import { ClipboardPins } from './ClipboardPins';
 import { ClipHistory, ClipItem } from './ClipHistory';
+
+// 英語・中国語のなぞりで入れた語 (cur)、候補の全部 (all)、帯に出しているもの (shown)、語の後ろに付けた字 (英語は空白)
+interface GlideRep {
+  cur: string;
+  all: string[];
+  shown: string[];
+  suffix: string;
+  zh: boolean;
+}
 
 interface InputMethodSubtype {
   id: string;
@@ -760,6 +770,10 @@ export class InputHandler {
         AppStorage.setOrCreate('hapticEnabled', s.hapticEnabled);
         AppStorage.setOrCreate('themeMode', s.themeMode);
         AppStorage.setOrCreate('keyChromeEnabled', s.keyChromeEnabled);
+        AppStorage.setOrCreate('glideEnabled', s.glideEnabled);
+        if (s.glideEnabled) { AiConverter.glidePrepare(0); }
+        AppStorage.setOrCreate('zhGlide', s.zhGlide);
+        if (s.zhGlide && this.imeContext) { AiConverter.glideLoadZh(this.imeContext); }
         AppStorage.setOrCreate('flickHintsEnabled', s.flickHintsEnabled);
         AppStorage.setOrCreate('bracketCloseMode', s.bracketCloseMode);
         this.applyComposingDisplay(s.composingInPanel, s.composingInField);
@@ -1012,6 +1026,159 @@ export class InputHandler {
     AppStorage.setOrCreate('isDark', resolveIsDark(mode, isDarkFromResourceManager(this.imeContext as ESObject)));
   }
 
+  setGlideEnabled(enabled: boolean): void {
+    AppStorage.setOrCreate('glideEnabled', enabled);
+    if (enabled) { AiConverter.glidePrepare(0); }
+    if (this.imeContext) {
+      SettingsStore.saveGlideEnabled(this.imeContext, enabled);
+    }
+  }
+
+  setZhGlide(enabled: boolean): void {
+    AppStorage.setOrCreate('zhGlide', enabled);
+    if (!enabled) { AppStorage.setOrCreate('zhMode', false); }
+    if (this.imeContext) {
+      if (enabled) { AiConverter.glideLoadZh(this.imeContext); }
+      SettingsStore.saveZhGlide(this.imeContext, enabled);
+    }
+  }
+
+  // 中国語をキーで打つ (中モードのタップ): 今の候補と、候補ごとに消費する打った字の数
+  private zhCands: string[] = [];
+  private zhUse: number[] = [];
+
+  private zhTyping(): boolean {
+    return (AppStorage.get<string>('inputMode') ?? InputMode.HIRAGANA) === InputMode.ALPHANUMERIC &&
+      AppStorage.get<boolean>('zhMode') === true && AiConverter.zhReady() && !this.secureField;
+  }
+
+  // 中モードの拼音の候補 index を入れる。前の方だけの語なら、残りの拼音を入力中のまま続ける。中モードの拼音でなければ false
+  private commitZh(index: number): boolean {
+    const composing = AppStorage.get<string>('composingText') ?? '';
+    if (!this.zhTyping() || this.zhCands.length === 0 || !/^[a-z]+$/.test(composing)) { return false; }
+    const i = index >= 0 && index < this.zhCands.length ? index : 0;
+    const text = this.zhCands[i];
+    const used = Math.min(composing.length, Math.max(1, this.zhUse[i] ?? composing.length));
+    InputLog.recordCommit(composing.slice(0, used), text, i, this.zhCands.length, this.zhCands, 'zh', [] as string[]);
+    this.insertText(text, { raw: true } as InsertTextOptions);
+    KanaKanjiConverter.addContext(text);
+    const rest = composing.slice(used);
+    this.zhCands = [];
+    if (rest.length > 0) {
+      this.continueWithTail(rest);
+    } else {
+      this.resetComposition();
+    }
+    return true;
+  }
+
+  // 英語・中国語のなぞりで入れた語と、予測の帯に出したほかの候補。帯の候補を押すと、入れた語をその候補に置き換える
+  private glideRep: GlideRep | undefined = undefined;
+
+  private showGlideAlts(rep: GlideRep): void {
+    this.glideRep = rep;
+    const shown = rep.all.filter((t: string) => t !== rep.cur).slice(0, 12);
+    rep.shown = shown;
+    // insertText の後の予測 (showFlowPredictions、setTimeout 0) より後に出す
+    setTimeout(() => {
+      if (this.glideRep !== rep) { return; }
+      AppStorage.setOrCreate('predictions', shown);
+      this.predictionWordGroups = shown.map((t: string) => [t]);
+    }, 0);
+  }
+
+  // 予測の帯のなぞりの候補を押した: 入れた語 (と後ろの空白) を消して、その候補を入れる
+  private replaceGlide(rep: GlideRep, index: number): void {
+    const alt = rep.shown[index];
+    const old = rep.cur + rep.suffix;
+    let before = '';
+    try { before = this.inputClient?.getForwardSync(old.length) ?? ''; } catch (_e) { before = ''; }
+    if (before !== old) {
+      // 指でカーソルを動かした・アプリが書き換えたなど: ほかの字を消さないよう触らない
+      this.glideRep = undefined;
+      AppStorage.setOrCreate('predictions', [] as string[]);
+      return;
+    }
+    try { this.inputClient?.deleteForwardSync(old.length); } catch (_e) { return; }
+    this.markSelfEdit();
+    this.insertText(alt + rep.suffix, { raw: true } as InsertTextOptions);
+    if (rep.zh) { AiConverter.glideLog(this.imeContext?.filesDir ?? '', JSON.stringify({ t: Date.now(), fix: alt, from: rep.cur })); }
+    rep.cur = alt;
+    this.showGlideAlts(rep);
+  }
+
+  // なぞっている間の途中結果: 今指を離したら入る語 (KeyboardView が 0.1 秒ごとに呼んで、軌跡の近くに浮かせる)。何も変えない
+  glidePreview(keys: string, kxy: number[], pts: number[], caps: number): Promise<string> {
+    const mode = AppStorage.get<string>('inputMode') ?? InputMode.HIRAGANA;
+    const zh = mode === InputMode.ALPHANUMERIC && AppStorage.get<boolean>('zhMode') === true;
+    if (zh && !AiConverter.zhReady()) {
+      return Promise.resolve('');
+    }
+    const gm = zh ? 2 : (mode === InputMode.ALPHANUMERIC ? 1 : 0);
+    const state = AppStorage.get<string>('inputState') ?? InputState.IDLE;
+    const prefix = state === InputState.COMPOSING ? (AppStorage.get<string>('composingText') ?? '') : '';
+    const pr = AiConverter.glide(gm, keys, kxy, pts, KanaKanjiConverter.recentContext(), prefix, true);
+    if (pr === undefined) {
+      return Promise.resolve('');
+    }
+    return pr.then((r: GlideResult): string => {
+      if (r.readings.length === 0) { return ''; }
+      const w = r.readings[gm === 2 ? 0 : r.pick];
+      if (gm === 1) { return caps === 2 ? w.toUpperCase() : (caps === 1 ? w.charAt(0).toUpperCase() + w.substring(1) : w); }
+      return gm === 0 && mode === InputMode.KATAKANA ? toKatakana(w) : w;
+    });
+  }
+
+  // グライド入力: なぞった軌跡 (KeyboardView が集める) から読みか英単語を出して入れる。
+  // keys = キーの文字、kxy = キーの中心、pts = 軌跡 (どちらも x, y の並び。キーの横の間隔を 1 にした単位)
+  handleGlide(keys: string, kxy: number[], pts: number[], caps: number = 0): void {
+    const mode = AppStorage.get<string>('inputMode') ?? InputMode.HIRAGANA;
+    // 中モード (あA中1 の 中) の間だけ拼音として解く。語の一覧を読み終えるまでのなぞりは捨てる (英語が入ると誤爆になる)
+    const zh = mode === InputMode.ALPHANUMERIC && AppStorage.get<boolean>('zhMode') === true;
+    if (zh && !AiConverter.zhReady()) {
+      console.info('shuntiIME glide zh not ready');
+      return;
+    }
+    const gm = zh ? 2 : (mode === InputMode.ALPHANUMERIC ? 1 : 0);
+    const state = AppStorage.get<string>('inputState') ?? InputState.IDLE;
+    const prefix = state === InputState.COMPOSING ? (AppStorage.get<string>('composingText') ?? '') : '';
+    // かなの選び直しの変換は、なぞっている間の途中結果 (glidePreview) で済んでいて覚えてあるので、ここでは数十 ms
+    const pr = AiConverter.glide(gm, keys, kxy, pts, KanaKanjiConverter.recentContext(), prefix, true);
+    if (pr === undefined) {
+      return;
+    }
+    pr.then((r: GlideResult) => {
+      if (DEBUG_INPUT_LOG) { console.info(`shuntiIME glide mode=${gm} pts=${pts.length / 2} ${r.ms.toFixed(0)}ms (decode ${r.decodeMs.toFixed(0)}) pick=${r.pick} ${r.readings.slice(0, 5).join(',')}`); }
+      if (r.readings.length === 0) {
+        return;
+      }
+      let w = r.readings[r.pick];
+      if (gm === 2) {
+        this.commitPending();
+        this.insertText(w, { raw: true } as InsertTextOptions);
+        const r2 = (p: number[]): number[] => p.map((v: number) => Math.round(v * 1000) / 1000);
+        AiConverter.glideLog(this.imeContext?.filesDir ?? '', JSON.stringify({
+          t: Date.now(), keys: keys, kxy: r2(kxy), pts: r2(pts), cands: r.readings.slice(0, 16)
+        }));
+        this.showGlideAlts({ cur: w, all: r.readings.slice(0, 24), suffix: '', zh: true, shown: [] } as GlideRep);
+        return;
+      }
+      if (gm === 1) {
+        const cap = (t: string): string => caps === 2 ? t.toUpperCase() : (caps === 1 ? t.charAt(0).toUpperCase() + t.substring(1) : t);
+        w = cap(w);
+        this.commitPending();
+        this.insertText(w + ' ');
+        this.showGlideAlts({ cur: w, all: r.readings.map(cap), suffix: ' ', zh: false, shown: [] } as GlideRep);
+        return;
+      }
+      // かな: 選ばなかった読みの変換を提案として帯に出す (入力中の読みがこのなぞりの直後のままの間だけ)
+      const kana = mode === InputMode.KATAKANA ? toKatakana(w) : w;
+      AiConverter.glideAltComp = prefix + kana;
+      AiConverter.glideAlts = mode === InputMode.KATAKANA ? [] : (r.alts ?? []);
+      this.handleDirectKana(kana);
+    });
+  }
+
   setKeyChromeEnabled(enabled: boolean): void {
     AppStorage.setOrCreate('keyChromeEnabled', enabled);
     if (this.imeContext) {
@@ -1054,6 +1221,16 @@ export class InputHandler {
   cycleInputMode(): void {
     const inputMode = AppStorage.get<string>('inputMode') ?? InputMode.HIRAGANA;
     const numericPadEnabled = AppStorage.get<boolean>('numericPadEnabled') ?? false;
+    // 中 (中国語のなぞり): A と 1 の間。入力モードは英数字のまま、なぞりだけ拼音で解く (誤爆しないよう、このモードの間だけ)
+    if (inputMode === InputMode.ALPHANUMERIC && AppStorage.get<boolean>('zhGlide') === true &&
+      AppStorage.get<boolean>('zhMode') !== true) {
+      this.commitPending();
+      AppStorage.setOrCreate('zhMode', true);
+      if (this.imeContext) { AiConverter.glideLoadZh(this.imeContext); }
+      InputLog.recordMode('input=zh');
+      return;
+    }
+    AppStorage.setOrCreate('zhMode', false);
     if (inputMode === InputMode.ALPHANUMERIC) {
       if (numericPadEnabled) {
         AppStorage.setOrCreate('keyboardSubMode', 'numeric');
@@ -2026,6 +2203,11 @@ export class InputHandler {
     if (index < 0 || index >= preds.length) { return; }
     const text = preds[index];
     if (text.length === 0) { return; }
+    const gr = this.glideRep;
+    if (gr !== undefined && preds.join('\u0001') === gr.shown.join('\u0001')) {
+      this.replaceGlide(gr, index);
+      return;
+    }
     InputLog.recordPredictionPick(text, index, preds);
     this.insertText(text, { raw: true } as InsertTextOptions);
     KanaKanjiConverter.addContext(text);
@@ -2141,6 +2323,11 @@ export class InputHandler {
 
     if (mode === InputMode.ALPHANUMERIC) {
       InputLog.recordKey(key, '', '', mode);
+      // 中モード: 英字は拼音として組み立て、候補の帯に簡体字を出す (なぞらずにキーで打つ形。2026-11-25)
+      if (this.zhTyping() && /^[a-zA-Z]$/.test(key)) {
+        this.appendRaw(key.toLowerCase());
+        return;
+      }
       // 英数字も入力中の文字として組み立てて変換する (2000 -> 2,000・二千、ぱちんこ + CR -> パチンコCR、iphone -> iPhone)。
       // 英文は空白・Enter でそのまま確定して続けて打てる (handleSpaceKey)。2026-10-09 ユーザー: 英数字キーボードから変換を起こせるように。
       // 設定「英字も変換する」がオフなら前のまま: 入力中の文字があるときと数字だけ組み立て、ほかはそのまま入れる
@@ -2190,6 +2377,10 @@ export class InputHandler {
       InputLog.recordSpace(state, composing, -1, 0);
     }
 
+    // 中モードの拼音: 空白で 1 位の候補を入れる (残りの拼音があれば続けて打てる)
+    if ((state === InputState.COMPOSING || state === InputState.SELECTING) && this.commitZh(0)) {
+      return;
+    }
     // 英数字で打った英文 (入力中の文字が英数字・記号だけ) は、空白でそのまま確定して空白を入れる (変換は候補から選んだときだけ)
     if (state === InputState.COMPOSING && (AppStorage.get<string>('inputMode') ?? InputMode.HIRAGANA) === InputMode.ALPHANUMERIC
         && /^[\x21-\x7e]+$/.test(composing) && (AppStorage.get<string>('pendingRomaji') ?? '') === '') {
@@ -2489,6 +2680,7 @@ export class InputHandler {
       this.commitBunsetsuCandidate(index);
       return;
     }
+    if (this.commitZh(index)) { return; }
     const composing = AppStorage.get<string>('composingText') ?? '';
     const candidates = AppStorage.get<string[]>('candidates') ?? [];
     const text = index < candidates.length ? candidates[index] : '';
@@ -2614,6 +2806,7 @@ export class InputHandler {
       this.commitBunsetsu();
       return;
     }
+    if (this.commitZh(AppStorage.get<number>('selectedCandidateIndex') ?? 0)) { return; }
     const composing = AppStorage.get<string>('composingText') ?? '';
     const candidates = AppStorage.get<string[]>('candidates') ?? [];
     const idx = AppStorage.get<number>('selectedCandidateIndex') ?? 0;
@@ -3505,6 +3698,17 @@ export class InputHandler {
       AppStorage.setOrCreate('quasiCandidateSurfaces', [] as string[]);
       return;
     }
+    if (this.zhTyping() && /^[a-z]+$/.test(composing)) {
+      const zr = AiConverter.zhCandidates(composing);
+      this.zhCands = zr.cands;
+      this.zhUse = zr.use;
+      AppStorage.setOrCreate('predictions', [] as string[]);
+      this.predictionWordGroups = [];
+      AppStorage.setOrCreate('candidates', zr.cands.length > 0 ? zr.cands : [composing]);
+      AppStorage.setOrCreate('quasiCandidateSurfaces', [] as string[]);
+      return;
+    }
+    this.zhCands = [];
     if (composing.length > this.composingWatermark.length) { this.composingWatermark = composing; }
     // A new composition has started -- retire the post-commit next-word strip
     // so it doesn't linger next to live conversion candidates.
@@ -4930,6 +5134,7 @@ export class KeyboardController {
         const mode = modeMap[subtype.id];
         if (mode) {
           this.inputHandle.commitTopWithPending();
+          AppStorage.setOrCreate('zhMode', false);
           AppStorage.setOrCreate('inputMode', mode);
         }
       });

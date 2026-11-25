@@ -1,4 +1,5 @@
 import { InputHandler, InputMode, InputState } from '../ime/KeyboardController';
+import { modeKeyLabel } from './ModeLabel';
 import { toKatakana } from '../ime/JapaneseConverter';
 import { kbTheme } from './Theme';
 import { JP_FONT_FAMILY } from './JpFont';
@@ -105,6 +106,8 @@ export struct FlickKeyboardView {
   // 半角の A/1 は ひらがな と字形の大きさが厳密には揃わないが、
   // 全角にすると見た目が野暮ったくなるため半角のままにしている。
   @StorageLink('numericPadEnabled') numericPadEnabled: boolean = false;
+  @StorageLink('zhGlide') zhGlide: boolean = false;
+  @StorageLink('zhMode') zhMode: boolean = false;
   // フローティングでキーボード自体が小さくリサイズされると、行の実高さも
   // それに応じて縮む (このコンポーネント自身は '100%' で親に委ねている
   // だけなので、行高そのものはここでは持っていない)。フリックヒント
@@ -474,9 +477,7 @@ export struct FlickKeyboardView {
         })
     } else {
       Row() {
-        Text(this.numericPadEnabled
-          ? (this.inputMode === InputMode.HIRAGANA ? 'あA1' : 'A1あ')
-          : (this.inputMode === InputMode.HIRAGANA ? 'あA' : 'Aあ'))
+        Text(modeKeyLabel(this.inputMode === InputMode.HIRAGANA ? 'あ' : 'A', this.numericPadEnabled, this.zhGlide))
           .fontFamily(JP_FONT_FAMILY)
           .fontSize(12).textAlign(TextAlign.Center)
           .width('100%').height('100%')

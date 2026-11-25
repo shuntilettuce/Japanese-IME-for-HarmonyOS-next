@@ -1,4 +1,5 @@
 import { InputHandler, InputMode } from '../ime/KeyboardController';
+import { modeKeyLabel } from './ModeLabel';
 import { kbTheme } from './Theme';
 import { JP_FONT_FAMILY } from './JpFont';
 
@@ -68,6 +69,8 @@ export struct NumericPadView {
   // 半角の A/1 は ひらがな と字形の大きさが厳密には揃わないが、
   // 全角にすると見た目が野暮ったくなるため半角のままにしている。
   @StorageLink('numericPadEnabled') numericPadEnabled: boolean = false;
+  @StorageLink('zhGlide') zhGlide: boolean = false;
+  @StorageLink('zhMode') zhMode: boolean = false;
   @StorageLink('isLandscape') isLandscape: boolean = false;
 
   @State activeRow: number = -1;
@@ -325,13 +328,14 @@ export struct NumericPadView {
       // 「あA」キーに差し替える(数字パッドへは「あA」キーのサイクルからのみ入る
       // ため、抜けるときは常に日本語(ひらがな)へ戻す -- 入る前のinputModeが何で
       // あってもループが一貫した状態に着地するようにする)。
-      Text(this.numericPadEnabled ? '1あA' : 'あA')
+      Text(modeKeyLabel(this.numericPadEnabled ? '1' : 'あ', this.numericPadEnabled, this.zhGlide))
         .fontFamily(JP_FONT_FAMILY)
         .fontSize(14).textAlign(TextAlign.Center)
         .width(this.flickSideKeyWidthVp).height('100%')
         .backgroundColor(kbTheme(this.isDark).specialBg).fontColor(kbTheme(this.isDark).textPrimary)
         .borderRadius(8).shadow({ radius: 2, color: kbTheme(this.isDark).shadowColor, offsetY: 1 })
         .onClick(() => {
+          AppStorage.setOrCreate('zhMode', false);
           AppStorage.setOrCreate('inputMode', InputMode.HIRAGANA);
           AppStorage.setOrCreate('keyboardSubMode', 'kana');
         })

@@ -39,6 +39,12 @@ export const pathPos: (reading: string, text: string) => number[];
 export const pathPosAsync: (reading: string, text: string) => Promise<number[]>;
 /** 品詞の表 [分類, 仲間] (左 ID ごとに 1 字) */
 export const posTables: () => string[];
+/** 中国語をキーで打つ: 拼音 typed の候補と、候補ごとに消費する打った字の数 */
+export interface ZhResult {
+  cands: string[];
+  use: number[];
+}
+export const zhCandidates: (typed: string) => ZhResult;
 /** 直前の変換の時間の内訳 (ms): [網, 下書き, エンコーダ, 区間と語, 上位k] */
 export const times: () => number[];
 /** 提案を分けて出すか (オフなら日付・住所・打ち間違いの直しを候補に混ぜる) */
@@ -50,3 +56,22 @@ export const aiLearnAsync: (ctx: string, reading: string, text: string) => Promi
 /** AI学習で育てた中身を消す (学習のリセット。オフでも消す)。使っていれば初めの値に戻す */
 export const aiForget: (path: string) => boolean;
 export const close: () => boolean;
+/** グライド入力の結果: 読み (mode 0) か英単語 (mode 1) の候補を良い順に、なぞりのコスト、変換で選び直した候補の番号 */
+export interface GlideResult {
+  readings: string[];
+  costs: number[];
+  /** かな: 選ばなかった読みの変換の 1 位 (良い順)。入力中の読み全体を置き換える表記 */
+  alts: string[];
+  pick: number;
+  ms: number;
+  decodeMs: number;
+}
+/** なぞった軌跡から候補を出す (裏のスレッドで)。mode 0 = かな、1 = 英単語。keys = キーの文字、kxy = キーの中心 (x, y の並び)、
+ * pts = 軌跡 (x, y の並び)。座標はキーの横の間隔を 1 にした単位。ctx = 左の文脈、prefix = 入力中の読み (選び直しに使う) */
+export const glideAsync: (mode: number, keys: string, kxy: number[], pts: number[], ctx: string, prefix: string, rerank?: boolean) => Promise<GlideResult>;
+/** かなの選び直しだけを後から (glideAsync の rerank = false の後で)。pick と alts を埋めて返す */
+export const glideRerankAsync: (ctx: string, prefix: string, readings: string[], costs: number[]) => Promise<GlideResult>;
+/** グライドの辞書の木を前もって作る (裏のスレッドで)。木の節の数 */
+export const glidePrepareAsync: (mode: number) => Promise<number>;
+/** なぞりの語の一覧 (キー TAB 表記|表記 TAB コスト) を rawfile から読む。mode 2 = 中国語の拼音。行の数 */
+export const glideLoadWordsAsync: (resMgr: object, mode: number, name: string) => Promise<number>;

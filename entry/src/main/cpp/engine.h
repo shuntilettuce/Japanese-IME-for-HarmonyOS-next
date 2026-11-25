@@ -130,3 +130,17 @@ KKC_API void kkc_romance_reset(kkc_engine* e);   // 初めの値に戻す
 // 読み込んだモデルのタグ (モデルのファイルの中身から作る 32bit)。AI学習の中身はモデルの内側の数に掛ける重みなので、
 // モデルごとに別のファイルに保存する (ai_learn_<タグ>.bin。軽量・標準の切り替えや更新で消えない。2026-11-06)
 KKC_API uint32_t kkc_model_tag(kkc_engine* e);
+
+// グライド入力 (QWERTY をなぞる)。mode 0 = かな (辞書の読みをローマ字の綴りでたどる)、1 = 英字 (辞書の英単語)。
+// 辞書の読みの木を作る (初めの 1 回は数百 ms。kkc_glide_decode も無ければ作る)。返り値は木の節の数
+KKC_API int kkc_glide_prepare(kkc_engine* e, int mode);
+// 英字のなぞりの語の一覧を渡す (glide_en.tsv の中身。キー TAB 表記|表記 TAB コスト)。無ければ辞書の英字の語を使う。返り値は語の数
+KKC_API int kkc_glide_set_words(int mode, const char* tsv, int n);
+// 中国語をキーで打つ: 拼音 typed の候補 (0 区切り) と、候補ごとに消費する打った字の数 use。返り値は候補の数
+KKC_API int kkc_zh_candidates(const char* typed, int n, int maxout, uint16_t* out, int cap, int32_t* use);
+// 英字のなぞりのネットワーク (glide_nn.bin の中身)。読めれば 1
+KKC_API int kkc_glide_set_net(const void* data, int n);
+// keys = キーの文字 (nkeys 個)、kxy = キーの中心 (x, y を nkeys 組。キーの横の間隔を 1 にした座標)、pts = 軌跡 (x, y を npts 組、同じ座標)。
+// 読みの候補を良い順に最大 nbest 個、0 区切りで out に、なぞりのコストを costs に。返り値は候補の数。kkc_convert と同じスレッドで
+KKC_API int kkc_glide_decode(kkc_engine* e, int mode, const char* keys, const float* kxy, int nkeys, const float* pts, int npts,
+                             int nbest, uint16_t* out, int cap, float* costs);

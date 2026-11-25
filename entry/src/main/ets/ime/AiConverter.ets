@@ -4,8 +4,9 @@ import { bracketVariants } from './Brackets';
 // パラメータ) + 上位 k。学習のコードと教材は公開していない (モデルの重みと推論のコードだけを同梱)。
 // 辞書とモデル (rawfile の kkc_lex.bin / kkc_model.bin、合わせて約 115MB) は HAP の中のまま mmap して使う
 // (端末に写さない。ArkTS の heap にも載せない)。
-import kkc, { KkcResult } from 'libkkc.so';
+import kkc, { ZhResult, KkcResult, GlideResult } from 'libkkc.so';
 import type common from '@ohos.app.ability.common';
+import fs from '@ohos.file.fs';
 import { DEBUG_INPUT_LOG } from './InputLog';
 import type { UserPosEntry } from './ConjugationEngine';
 import { KanaKanjiConverter } from './KanaKanjiConverter';
@@ -49,6 +50,8 @@ export class AiConverter {
         onFail();
       } else {
         AiConverter.applyUserWords();   // 読み込みより先に届いたユーザー辞書を入れる
+        if (AppStorage.get<boolean>('glideEnabled') === true) { AiConverter.glidePrepare(0); }
+        if (AppStorage.get<boolean>('zhGlide') === true) { AiConverter.glideLoadZh(ctx); }
       }
     }).catch((e: Error) => {
       AiConverter.loading = false;
@@ -56,6 +59,81 @@ export class AiConverter {
       console.error('shuntiIME AiConverter load error', JSON.stringify(e));
       onFail();
     });
+  }
+
+  // ---- グライド入力 (QWERTY をなぞる) ----
+
+  private static glidePrepared: boolean[] = [false, false, false];
+  private static zhLoad: number = 0;   // 中国語の語の一覧: 0 = まだ、1 = 読み込み中、2 = 済み
+
+  // 中国語のなぞりの語の一覧 (rawfile の glide_zh.tsv、27 万行) を裏で読んで、木を作っておく。オンにしたときだけ
+  static glideLoadZh(ctx: common.Context): void {
+    if (!AiConverter.ready || AiConverter.zhLoad !== 0) {
+      return;
+    }
+    AiConverter.zhLoad = 1;
+    const t0 = Date.now();
+    kkc.glideLoadWordsAsync(ctx.resourceManager, 2, 'glide_zh.tsv').then((n: number) => {
+      console.info(`shuntiIME glide zh words=${n} ${Date.now() - t0}ms`);
+      AiConverter.zhLoad = n > 0 ? 2 : 0;
+      if (n > 0) { AiConverter.glidePrepare(2); }
+    });
+  }
+
+  static zhReady(): boolean {
+    return AiConverter.zhLoad === 2;
+  }
+
+  // 中国語をキーで打つ (中モードのタップ): 拼音の候補と、候補ごとに消費する打った字の数
+  static zhCandidates(typed: string): ZhResult {
+    if (!AiConverter.ready || AiConverter.zhLoad !== 2 || typed.length === 0) {
+      return { cands: [], use: [] } as ZhResult;
+    }
+    return kkc.zhCandidates(typed);
+  }
+
+  // なぞりのかなで、選ばなかった読みの変換 (入力中の読みが glideAltComp のときだけ、提案として候補の帯に足す)
+  static glideAltComp: string = '';
+  static glideAlts: string[] = [];
+
+  // 中国語のなぞりの記録 (端末の中だけ。本物の拼音の軌跡で正解率を測るため)。1 行 1 件の JSON
+  static glideLog(dir: string, line: string): void {
+    if (!DEBUG_INPUT_LOG || dir.length === 0) {
+      return;
+    }
+    try {
+      const f = fs.openSync(dir + '/glide_zh_log.jsonl', fs.OpenMode.WRITE_ONLY | fs.OpenMode.CREATE | fs.OpenMode.APPEND);
+      fs.writeSync(f.fd, line + '\n');
+      fs.closeSync(f);
+    } catch (_e) {
+    }
+  }
+
+  // 辞書の読みの木を裏で作っておく (初めの 1 回は数百 ms。作らなくても最初のなぞりで作る)
+  static glidePrepare(mode: number): void {
+    if (!AiConverter.ready || AiConverter.glidePrepared[mode]) {
+      return;
+    }
+    AiConverter.glidePrepared[mode] = true;
+    const t0 = Date.now();
+    kkc.glidePrepareAsync(mode).then((n: number) => {
+      console.info(`shuntiIME glide prepare mode=${mode} nodes=${n} ${Date.now() - t0}ms`);
+    });
+  }
+
+  // なぞった軌跡から候補 (mode 0 = 読み、1 = 英単語)。座標はキーの横の間隔を 1 にした単位
+  // rerank = false: かなの選び直し (変換 10 回、実機で 0.2〜0.9 秒) をせず、なぞりの 1 位を急いで返す。選び直しは glideRerank で後から
+  static glide(mode: number, keys: string, kxy: number[], pts: number[], ctx: string, prefix: string,
+    rerank: boolean = true): Promise<GlideResult> | undefined {
+    if (!AiConverter.ready) {
+      return undefined;
+    }
+    AiConverter.glidePrepared[mode] = true;
+    return kkc.glideAsync(mode, keys, kxy, pts, ctx, prefix, rerank);
+  }
+
+  static glideRerank(ctx: string, prefix: string, readings: string[], costs: number[]): Promise<GlideResult> {
+    return kkc.glideRerankAsync(ctx, prefix, readings, costs);
   }
 
   // ---- 予測・ユーザー辞書・その場の変換 ----
@@ -648,6 +726,13 @@ export class AiConverter {
     });
     const sl = order.map((i: number) => list[i]);
     const sk = order.map((i: number) => kinds[i]);
+    // なぞりのかなの、ほかの読みの変換 (種類 10)。入力中の読みがなぞった直後のままのときだけ
+    if (AiConverter.glideAlts.length > 0 && (AppStorage.get<string>('composingText') ?? '') === AiConverter.glideAltComp &&
+      AiConverter.fSurf.length === 0) {
+      for (const t of AiConverter.glideAlts) {
+        if (t !== top && sl.indexOf(t) < 0) { sl.push(t); sk.push(10); }
+      }
+    }
     list.splice(0, list.length, ...sl);
     kinds.splice(0, kinds.length, ...sk);
     AppStorage.setOrCreate('typoTop', typoTop);

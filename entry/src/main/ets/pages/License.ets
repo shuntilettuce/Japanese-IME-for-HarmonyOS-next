@@ -42,6 +42,13 @@ struct License {
     '  Unicode CLDR の絵文字の日本語名（Unicode License v3）\n' +
     '  mecab-ipadic-NEologd（Toshinori Sato, Apache License 2.0、英字の語の読み）\n' +
     '  SCOWL（Kevin Atkinson、英単語の一覧）\n' +
+    '■ グライド入力 (QWERTY をなぞる入力)\n' +
+    '・キーの確率のネットワーク (glide_nn.bin): FUTO Swipe の英語の軌跡のデータ (FUTO, MIT License) で shuntilettuce が学習したもの。FUTO の重みは使っていません\n' +
+    '  https://swipe.futo.org/\n' +
+    '・英語の語の一覧 (glide_en.tsv): SCOWL/ESDB (Kevin Atkinson、MIT に近い許諾) と、FUTO Swipe の正解の語の頻度\n' +
+    '  http://wordlist.aspell.net/\n' +
+    '・中国語の語の一覧 (glide_zh.tsv): jieba の dict.txt (Sun Junyi, MIT License)、phrase-pinyin-data・pinyin-data (mozillazg, MIT License、Unihan Database (Unicode License v3) 由来の拼音を含む)\n' +
+    '  https://github.com/fxsjy/jieba https://github.com/mozillazg/phrase-pinyin-data https://github.com/mozillazg/pinyin-data\n\n' +
     '学習のコードと教材は公開していません。学習に使った文章の出典は DATA_SOURCES.md を参照してください。\n\n' +
     '■ アプリコード\n' +
     'MIT License\n\n' +

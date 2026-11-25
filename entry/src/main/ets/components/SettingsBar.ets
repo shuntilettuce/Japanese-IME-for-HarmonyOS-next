@@ -55,6 +55,8 @@ export struct SettingsBar {
   // キーボードのライト／ダーク。'system' = 端末に合わせる。
   @StorageLink('themeMode') themeMode: string = 'system';
   @StorageLink('keyChromeEnabled') keyChromeEnabled: boolean = true;
+  @StorageLink('glideEnabled') glideEnabled: boolean = false;
+  @StorageLink('zhGlide') zhGlide: boolean = false;
   @StorageLink('flickHintsEnabled') flickHintsEnabled: boolean = true;
   @StorageLink('bracketCloseMode') bracketCloseMode: string = 'pair';
   // タブレット/フォルダブルの展開画面かどうか (KeyboardController が画面の
@@ -866,6 +868,56 @@ export struct SettingsBar {
       }
       .width('100%')
       .padding({ top: 13, bottom: 13 })
+
+      Row() {
+        Column({ space: 2 }) {
+          Text('グライド入力')
+            .fontFamily(JP_FONT_FAMILY)
+            .fontSize(14)
+            .fontColor(kbTheme(this.isDark).textPrimary)
+          Text('QWERTY のキーをなぞって入力する (ローマ字・英語)')
+            .fontFamily(JP_FONT_FAMILY)
+            .fontSize(11)
+            .fontColor(kbTheme(this.isDark).textSecondary)
+        }
+        .alignItems(HorizontalAlign.Start)
+        .layoutWeight(1)
+        Toggle({ type: ToggleType.Switch, isOn: this.glideEnabled })
+          .width(44)
+          .height(26)
+          .selectedColor(kbTheme(this.isDark).accent)
+          .onChange((isOn: boolean) => {
+            InputHandler.getInstance().setGlideEnabled(isOn);
+          })
+      }
+      .width('100%')
+      .padding({ top: 13, bottom: 13 })
+
+      if (true) {
+        Row() {
+          Column({ space: 2 }) {
+            Text('中国語のなぞり')
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(14)
+              .fontColor(kbTheme(this.isDark).textPrimary)
+            Text('「あA1」の切り替えに「中」を足す。中ではなぞると拼音から簡体字が入る (キーを押すと英字)')
+              .fontFamily(JP_FONT_FAMILY)
+              .fontSize(11)
+              .fontColor(kbTheme(this.isDark).textSecondary)
+          }
+          .alignItems(HorizontalAlign.Start)
+          .layoutWeight(1)
+          Toggle({ type: ToggleType.Switch, isOn: this.zhGlide })
+            .width(44)
+            .height(26)
+            .selectedColor(kbTheme(this.isDark).accent)
+            .onChange((isOn: boolean) => {
+              InputHandler.getInstance().setZhGlide(isOn);
+            })
+        }
+        .width('100%')
+        .padding({ top: 13, bottom: 13 })
+      }
 
       // タブレット/フォルダブルの展開画面でだけ効く調整。普通のスマホでは
       // 画面が最大幅の上限に届かないので出しても意味が無く隠してある。

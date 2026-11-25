@@ -368,3 +368,144 @@ Copyright (c) 2018 綾木健一郎
 
 ソフトウェアは「現状のまま」で、明示であるか暗黙であるかを問わず、何らの保証もなく提供されます。ここでいう保証とは、商品性、特定の目的への適合性、および権利非侵害についての保証も含みますが、それに限定されるものではありません。 作者または著作権者は、契約行為、不法行為、またはそれ以外であろうと、ソフトウェアに起因または関連し、あるいはソフトウェアの使用またはその他の扱いによって生じる一切の請求、損害、その他の義務について何らの責任も負わないものとします。
 ```
+
+## FUTO Swipe dataset (training data for the glide key-probability network `glide_nn.bin` and word frequencies in `glide_en.tsv`; the network is trained by shuntilettuce, FUTO's weights are not used) — MIT
+
+https://swipe.futo.org/
+
+```
+MIT License
+
+Copyright (c) 2025 FUTO
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## SCOWL / ESDB (English word list for glide input: `glide_en.tsv`) — MIT-like
+
+http://wordlist.aspell.net/
+
+```
+Copyright 2000-2026 by Kevin Atkinson
+
+Permission to use, copy, modify, distribute, and sell any part of the English
+Speller Database (ESDB, previously known as SCOWLv2), or word lists
+created from it, is hereby granted without fee, provided that the above
+copyright notice appears in all copies and that both the above copyright
+notice and this notice appear in supporting documentation.  Kevin Atkinson
+makes no representations about the suitability of this database for any
+purpose.  It is provided "as is" without express or implied warranty.
+
+ESDB is derived from many sources, most of which are in the Public Domain.
+Data from the Corpus of Contemporary American English (COCA) was also used.
+
+All data from COCA comes from 3-gram data that is not freely available;
+however, the usage is within the rights given by the NDA that was signed when
+purchasing the data.  More information on COCA is available at
+https://www.english-corpora.org/coca/.
+
+The primary source of words for ESDB comes from 12dicts and ENABLE2K.  Both
+are in the Public Domain, but Alan Beale <biljir@pobox.com> deserves special
+credit as he is the author of 12dicts and a major contributor to ENABLE2K.  In
+addition, he gave me an incredible amount of feedback and created a number of
+special lists in order to help improve the overall quality of ESDB.
+```
+
+## jieba (Chinese word list and frequencies for glide / pinyin input: `glide_zh.tsv`) — MIT
+
+https://github.com/fxsjy/jieba
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2013 Sun Junyi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+## phrase-pinyin-data (pinyin of Chinese words in `glide_zh.tsv`) — MIT
+
+https://github.com/mozillazg/phrase-pinyin-data
+
+```
+MIT License
+
+Copyright (c) 2017 mozillazg
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+## pinyin-data (pinyin of Chinese characters in `glide_zh.tsv`; derived from the Unicode Unihan Database, Unicode License v3) — MIT
+
+https://github.com/mozillazg/pinyin-data
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2016 mozillazg
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

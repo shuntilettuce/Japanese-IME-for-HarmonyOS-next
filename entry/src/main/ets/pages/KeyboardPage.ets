@@ -66,6 +66,7 @@ struct KeyboardPage {
   @StorageLink('isLandscape') isLandscape: boolean = false;
   @StorageLink('kanaKeyboardLayout') kanaKeyboardLayout: string = 'QWERTY';
   @StorageLink('alphabetKeyboardLayout') alphabetKeyboardLayout: string = 'QWERTY';
+  @StorageLink('zhMode') zhMode: boolean = false;
   // 記号・絵文字・設定などのパネル切替を入力ログに残す (デバッグビルドのみ)。
   @StorageLink('keyboardSubMode') @Watch('onSubModeChanged') keyboardSubMode: string = 'kana';
 
@@ -272,7 +273,7 @@ struct KeyboardPage {
         // 'numeric' と 'layoutAdjust' は同じ keyboardSubMode の別値なので
         // この分岐にいる間は adjustMode になり得ない (無効化は不要)。
         NumericPadView()
-      } else if (this.alphabetKeyboardLayout === 'FLICK' && this.inputMode === InputMode.ALPHANUMERIC) {
+      } else if (this.alphabetKeyboardLayout === 'FLICK' && this.inputMode === InputMode.ALPHANUMERIC && !this.zhMode) {
         // レイアウト調整中は文字が打てないようにする -- キーボードは見た目
         // どおりに見せつつ (打とうとして誤操作するより、押しても反応しない
         // ほうが分かりやすい)、タップだけ通す。FlickKeyboardView は境界

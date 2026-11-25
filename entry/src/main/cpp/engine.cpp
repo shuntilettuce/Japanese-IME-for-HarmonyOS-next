@@ -4644,3 +4644,259 @@ KKC_API void kkc_romance_reset(kkc_engine* e) {
     e->ro.init(e->m.d_uvec, e->m.dk, e->m.Wu);
     e->ro.E.clear();
 }
+
+// ---- グライド入力 (QWERTY をなぞる)。デコーダは glide.cpp。辞書の読みの木は初めて使うときに作る ----
+#include "glide.h"
+#include "glide_nn.h"
+namespace {
+struct GlideCache {
+    const kkc_engine* owner = nullptr;
+    glide::Decoder d[3];          // 0 = かな (ローマ字の綴り)、1 = 英字 (字そのまま)、2 = 中国語の拼音 (声調なし、字そのまま)
+    bool built[3] = {false, false, false};
+    std::string keysig[3];
+};
+GlideCache g_glide;
+// なぞりの語の一覧 (rawfile の glide_en.tsv・glide_zh.tsv: キー TAB 表記|表記 TAB コスト、UTF-8)。エンジンを開き直しても残す
+//   中国語は 27 万行あるので、表記は 1 本の文字列 (blob) に詰めて、キーの順に並べた番号を二分探索で引く
+struct GlideWords {
+    std::vector<std::pair<std::u16string, int32_t>> words;
+    std::u16string blob;              // 表記の欄 (| 区切り) を行の順につなげたもの
+    std::vector<uint32_t> so, sl;     // 行ごとの blob の位置と長さ
+    std::vector<uint32_t> order;      // キーの順に並べた行の番号
+    std::vector<std::u16string> find(const std::u16string& k) const {
+        std::vector<std::u16string> r;
+        auto it = std::lower_bound(order.begin(), order.end(), k, [&](uint32_t i, const std::u16string& x) { return words[i].first < x; });
+        if (it == order.end() || words[*it].first != k) return r;
+        const char16_t* p = blob.data() + so[*it];
+        const char16_t* e = p + sl[*it];
+        while (p < e) {
+            const char16_t* b = std::find(p, e, u'|');
+            r.emplace_back(p, b);
+            p = b + 1;
+        }
+        return r;
+    }
+};
+GlideWords g_glide_words[3];
+void glide_utf8(const char* p, const char* e, std::u16string& o) {
+    while (p < e) {
+        uint32_t c = uint8_t(*p++);
+        int more = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
+        if (more) c &= (0x3F >> more);
+        for (; more > 0 && p < e; more--) c = (c << 6) | (uint8_t(*p++) & 0x3F);
+        if (c >= 0x10000) { c -= 0x10000; o += char16_t(0xD800 + (c >> 10)); o += char16_t(0xDC00 + (c & 0x3FF)); }
+        else o += char16_t(c);
+    }
+}
+// キーの確率のネットワーク (rawfile の glide_nn.bin)。読めていれば英字はこれと CTC の木のビームサーチで解く
+glide::Net g_glide_net;
+// 縦の縮め: 行の間隔はキーの横の間隔より広いので、縦のずれを軽く見る (FUTO の本物の英語の軌跡で 1 位 +4 点)
+constexpr float GLIDE_YS = 0.75f;
+
+bool glide_hira(uint16_t c) { return (c >= 0x3041 && c <= 0x3094) || c == 0x30FC; }
+
+void glide_build(kkc_engine* e, int mode) {
+    if (g_glide.owner != e) { g_glide = GlideCache(); g_glide.owner = e; }
+    if (g_glide.built[mode]) return;
+    const Lex& L = e->lex;
+    std::vector<std::pair<std::u16string, int32_t>> words;
+    if (mode == 0) {
+        // コスト 7000 までの読み (PC の擬似ベンチで 9000 までと同じ正解率、節は 137 万)
+        uint16_t rbuf[Lex::MAXR];
+        for (int i = 0; i < L.nread; i++) {
+            int rn;
+            const uint16_t* r = (L.ver == 1 || i % Lex::RB == 0) ? L.reading(i, rn, rbuf) : (rn = L.next_reading(i, rbuf), rbuf);
+            if (rn < 1 || rn > 12) continue;
+            bool ok = true;
+            for (int k = 0; k < rn; k++) if (!glide_hira(r[k])) { ok = false; break; }
+            if (!ok) continue;
+            int32_t best = INT32_MAX;
+            for (uint32_t j = L.e_first[i]; j < L.e_first[i + 1]; j++) best = std::min(best, L.ent(j).cost);
+            if (best > 7000) continue;
+            words.emplace_back(std::u16string(reinterpret_cast<const char16_t*>(r), size_t(rn)), best);
+        }
+    } else if (!g_glide_words[mode].words.empty()) {
+        g_glide.d[mode].build(g_glide_words[mode].words, glide::Mode::Letters);
+        g_glide.built[mode] = true;
+        return;
+    } else if (mode == 2) {
+        return;   // 拼音の一覧が無い
+    } else {
+        for (auto& kv : L.latin_words) {
+            bool ok = kv.first.size() >= 2 && kv.first.size() <= 20;
+            for (char c : kv.first) if (c < 'a' || c > 'z') ok = false;
+            if (ok) words.emplace_back(std::u16string(kv.first.begin(), kv.first.end()), kv.second.cost);
+        }
+    }
+    g_glide.d[mode].build(words, mode == 0 ? glide::Mode::Kana : glide::Mode::Letters);
+    g_glide.built[mode] = true;
+}
+}  // namespace
+
+KKC_API int kkc_glide_set_words(int mode, const char* tsv, int n) {
+    if (mode < 1 || mode > 2 || !tsv || n <= 0) return 0;
+    GlideWords W;
+    const char* p = tsv; const char* end = tsv + n;
+    while (p < end) {
+        const char* nl = static_cast<const char*>(memchr(p, '\n', size_t(end - p)));
+        if (!nl) nl = end;
+        const char* t1 = static_cast<const char*>(memchr(p, '\t', size_t(nl - p)));
+        const char* t2 = t1 ? static_cast<const char*>(memchr(t1 + 1, '\t', size_t(nl - t1 - 1))) : nullptr;
+        if (t1 && t2) {
+            std::u16string k(p, t1);
+            W.words.emplace_back(k, int32_t(atoi(std::string(t2 + 1, nl).c_str())));
+            W.so.push_back(uint32_t(W.blob.size()));
+            glide_utf8(t1 + 1, t2, W.blob);
+            W.sl.push_back(uint32_t(W.blob.size()) - W.so.back());
+        }
+        p = nl + 1;
+    }
+    W.order.resize(W.words.size());
+    for (uint32_t i = 0; i < W.order.size(); i++) W.order[i] = i;
+    std::sort(W.order.begin(), W.order.end(), [&](uint32_t a, uint32_t b) { return W.words[a].first < W.words[b].first; });
+    W.blob.shrink_to_fit();
+    g_glide_words[mode] = std::move(W);
+    g_glide.built[mode] = false;
+    return int(g_glide_words[mode].words.size());
+}
+
+// 中国語をキーで 1 字ずつ打つ (中モードのタップ)。打った拼音 typed (a-z) の候補を、よく使う順に out (0 区切り) へ。
+// use[i] = その候補が消費する打った字の数 (前の方だけの語を選ぶと、残りの拼音を続けて打てる)。
+// 並び: 拼音全体と同じキーの語 → 拼音で始まるキーの語 (続きの予測) → 前の方だけと同じキーの語 (長い順)
+KKC_API int kkc_zh_candidates(const char* typed, int n, int maxout, uint16_t* out, int cap, int32_t* use) {
+    const GlideWords& W = g_glide_words[2];
+    if (!typed || n <= 0 || W.words.empty() || maxout <= 0) return 0;
+    std::u16string t(typed, typed + n);
+    int k = 0, at = 0;
+    std::vector<std::u16string> seen;
+    auto put = [&](const std::u16string& s, int u) {
+        if (k >= maxout || s.empty() || at + int(s.size()) + 1 > cap) return;
+        for (auto& x : seen) if (x == s) return;
+        seen.push_back(s);
+        for (char16_t c : s) out[at++] = uint16_t(c);
+        out[at++] = 0;
+        use[k++] = u;
+    };
+    const auto lb = [&](const std::u16string& x) {
+        return std::lower_bound(W.order.begin(), W.order.end(), x, [&](uint32_t i, const std::u16string& y) { return W.words[i].first < y; });
+    };
+    auto surfaces = [&](uint32_t row) {
+        std::vector<std::u16string> r;
+        const char16_t* p = W.blob.data() + W.so[row];
+        const char16_t* e = p + W.sl[row];
+        while (p < e) {
+            const char16_t* b = std::find(p, e, u'|');
+            r.emplace_back(p, b);
+            p = b + 1;
+        }
+        return r;
+    };
+    // 1. 拼音全体
+    for (auto& s : W.find(t)) put(s, n);
+    // 2. 続きの予測: キーが t で始まる行のうちコストの低いもの (多すぎる短い拼音では先頭の数千行だけ見る)
+    if (n >= 2) {
+        std::vector<std::pair<int32_t, uint32_t>> cs;
+        int scanned = 0;
+        for (auto it = lb(t); it != W.order.end() && scanned < 5000; ++it, ++scanned) {
+            const auto& key = W.words[*it].first;
+            if (key.size() < t.size() || key.compare(0, t.size(), t) != 0) break;
+            if (key.size() == t.size()) continue;
+            cs.emplace_back(W.words[*it].second, *it);
+        }
+        std::sort(cs.begin(), cs.end());
+        for (size_t i = 0; i < cs.size() && i < 6; i++) {
+            auto sv = surfaces(cs[i].second);
+            if (!sv.empty()) put(sv[0], n);
+        }
+    }
+    // 3. 前の方だけ (nihaoma の nihao → 你好、残りの ma を続けて打つ)。長い順に、いちばん長いものは多めに
+    int taken = 0;
+    for (int L = n - 1; L >= 1 && k < maxout; L--) {
+        auto sv = W.find(t.substr(0, size_t(L)));
+        if (sv.empty()) continue;
+        const size_t lim = taken == 0 ? 10 : 4;
+        for (size_t i = 0; i < sv.size() && i < lim; i++) put(sv[i], L);
+        if (++taken >= 3) break;
+    }
+    return k;
+}
+
+KKC_API int kkc_glide_set_net(const void* data, int n) {
+    return g_glide_net.load(data, size_t(n)) ? 1 : 0;
+}
+
+KKC_API int kkc_glide_prepare(kkc_engine* e, int mode) {
+    if (!e || mode < 0 || mode > 2) return 0;
+    glide_build(e, mode);
+    return int(g_glide.d[mode].nodes());
+}
+
+KKC_API int kkc_glide_decode(kkc_engine* e, int mode, const char* keys, const float* kxy, int nkeys, const float* pts, int npts,
+                             int nbest, uint16_t* out, int cap, float* costs) {
+    if (!e || mode < 0 || mode > 2 || nkeys <= 0 || npts < 2) return 0;
+    glide_build(e, mode);
+    if (!g_glide.built[mode]) return 0;
+    glide::Decoder& D = g_glide.d[mode];
+    std::string sig(keys, size_t(nkeys));
+    for (int i = 0; i < 2 * nkeys; i++) sig += std::to_string(int(kxy[i] * 100)) + ",";
+    if (sig != g_glide.keysig[mode]) {
+        std::vector<glide::Key> ks;
+        for (int i = 0; i < nkeys; i++) ks.push_back({keys[i], kxy[2 * i], kxy[2 * i + 1] * GLIDE_YS});
+        D.set_keys(ks);
+        g_glide.keysig[mode] = sig;
+    }
+    glide::Params P;
+    std::vector<glide::Result> res;
+    if (mode >= 1 && g_glide_net.ok()) {
+        // ネットワーク: キーボードの字の範囲を 0〜1 にする (左右はキーの中心の端 ± 半キー、上下は行の中心の端 ± 半行)
+        float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f;
+        for (int i = 0; i < nkeys; i++) {
+            x0 = std::min(x0, kxy[2 * i]); x1 = std::max(x1, kxy[2 * i]);
+            y0 = std::min(y0, kxy[2 * i + 1]); y1 = std::max(y1, kxy[2 * i + 1]);
+        }
+        const float rh = std::max(0.5f, (y1 - y0) / 2);
+        x0 -= 0.5f; x1 += 0.5f; y0 -= rh / 2; y1 += rh / 2;
+        std::vector<float> kn(2 * size_t(nkeys)), pn(2 * size_t(npts));
+        for (int i = 0; i < nkeys; i++) { kn[2 * i] = (kxy[2 * i] - x0) / (x1 - x0); kn[2 * i + 1] = (kxy[2 * i + 1] - y0) / (y1 - y0); }
+        for (int i = 0; i < npts; i++) { pn[2 * i] = (pts[2 * i] - x0) / (x1 - x0); pn[2 * i + 1] = (pts[2 * i + 1] - y0) / (y1 - y0); }
+        res = D.decode_ctc(g_glide_net.run(pn, kn), glide::Net::TF, nkeys, 1.0f, 0.0f, 100, nbest);   // FUTO の本物の軌跡 3000 本で 1 位 91.3% (beam 60〜200 で同じ)
+    }
+    // 打ち切り: 本物の指は辞書の形から大きく外れることがあり、60 では候補が 1 つも出ないなぞりがあった
+    P.abs_bound = 200.0f;
+    if (mode >= 1) {
+        // 英字 (と拼音) は FUTO の本物の英語の軌跡 3000 本で決めた (1 位 69.8 → 84.0%)。かなは合成のベンチで 0.7 が良くならず 3 倍遅いので元のまま
+        P.max_words = 1;
+        P.sigma_key = P.sigma_seg = 0.7f;
+        P.lex_w = 0.003f;
+    }
+    P.nbest = nbest;
+    if (res.empty()) {
+        std::vector<float> p(pts, pts + 2 * npts);
+        for (int i = 1; i < 2 * npts; i += 2) p[i] *= GLIDE_YS;
+        res = D.decode(p, P);
+    }
+    // 出す数: 英字・かなは nbest まで、中国語は 1 つの拼音に字が何通りもあるので 3 倍まで (costs はその数だけ要る)
+    const int maxout = mode == 2 ? 3 * nbest : nbest;
+    int n = 0, at = 0;
+    std::vector<std::u16string> seen;
+    auto put = [&](const std::u16string& s, float c) {
+        if (n >= maxout || at + int(s.size()) + 1 > cap) return;
+        if (std::find(seen.begin(), seen.end(), s) != seen.end()) return;
+        seen.push_back(s);
+        for (char16_t ch : s) out[at++] = uint16_t(ch);
+        out[at++] = 0;
+        costs[n++] = c;
+    };
+    const GlideWords& GW = g_glide_words[mode];
+    for (size_t ri = 0; ri < res.size(); ri++) {
+        const auto& r = res[ri];
+        std::vector<std::u16string> sv;
+        if (mode >= 1 && !GW.words.empty()) sv = GW.find(r.reading);
+        if (sv.empty()) { put(r.reading, r.cost); continue; }
+        // 表記が複数 (its・it's、是・事・市) なら、多い方から少しずつ重くして並べる。
+        // 中国語は 1 位の拼音の字を全部、2 位からは上位 3 つまで (ほかの拼音の候補も帯に入るように)
+        const size_t lim = (mode == 2 && ri > 0) ? std::min<size_t>(3, sv.size()) : sv.size();
+        for (size_t k = 0; k < lim; k++) put(sv[k], r.cost + 0.5f * float(k));
+    }
+    return n;
+}
