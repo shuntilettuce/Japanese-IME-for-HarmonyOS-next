@@ -28,6 +28,7 @@ import { bracketVariants } from './Brackets';
 import { EmojiSuggest } from './EmojiSuggest';
 import { AppMaintenance } from './AppMaintenance';
 import { AiConverter } from './AiConverter';
+import { Pos } from './Pos';
 import { SentenceFlow } from './SentenceFlow';
 import { ClipboardPins } from './ClipboardPins';
 import { ClipHistory, ClipItem } from './ClipHistory';
@@ -493,6 +494,8 @@ export class InputHandler {
   setContext(ctx: InputMethodExtensionContext): void {
     if (this.imeContext !== undefined) { return; }
     this.imeContext = ctx;
+    // 品詞の記録の無い (前の版の) 学習の表記は、読みと表記だけでラティスをたどって品詞を決める (PC 版・Android と同じ。2026-11-09)
+    KanaKanjiConverter.lidResolver = (r: string, sf: string): number => AiConverter.resolveLid(r, sf);
     dataPreferences.getPreferences(this.imeContext, 'shunti_learning')
       .then((prefs: dataPreferences.Preferences) => {
         this.learningPrefs = prefs;
@@ -511,6 +514,11 @@ export class InputHandler {
         });
         this.learningPrefs?.get('ctx', '{}').then((v: dataPreferences.ValueType) => {
           try { KanaKanjiConverter.setLearnedCtx(JSON.parse(String(v)) as Record<string, Record<string, Record<string, number>>>); } catch (_e) {}
+        });
+        // 表記ごとの品詞 (PC 版の @p。2026-11-09)。読んだら品詞ごとに数え直した語をラティスに入れ直す
+        this.learningPrefs?.get('pos', '{}').then((v: dataPreferences.ValueType) => {
+          try { KanaKanjiConverter.setLearnedPos(JSON.parse(String(v)) as Record<string, Record<string, number>>); } catch (_e) {}
+          AiConverter.setLearnedWords(KanaKanjiConverter.strongForms());
         });
       })
       .catch((e: Error) => { InputLog.recordInit('shunti_learning', e); });
@@ -1272,6 +1280,7 @@ export class InputHandler {
     prefs.put('v1', JSON.stringify(KanaKanjiConverter.getLearned()))
       .then(() => prefs.put('day', JSON.stringify(KanaKanjiConverter.getLearnedDay())))
       .then(() => prefs.put('ctx', JSON.stringify(KanaKanjiConverter.getLearnedCtx())))
+      .then(() => prefs.put('pos', JSON.stringify(KanaKanjiConverter.getLearnedPos())))
       .then(() => prefs.flush())
       // 書けなかったら次の機会に書き直す (前は dirty を先に落として学習が消えた。2026-10-25)
       .catch((_e: Error) => { this.learningDirty = true; });
@@ -1611,6 +1620,7 @@ export class InputHandler {
     AiConverter.setLearnedWords([]);
     KanaKanjiConverter.setLearnedDay({});
     KanaKanjiConverter.setLearnedCtx({});
+    KanaKanjiConverter.setLearnedPos({});
     NextWordPredictor.setLearned({});
     InputHandler.symbolFreq = {};
     InputHandler.publishFrequentSymbols();
@@ -2559,10 +2569,16 @@ export class InputHandler {
   private learnCommit(composing: string, text: string): void {
     // 1 位以外を選んだ: 選び直した語だけを語として数える (読み全体だけだと次の文に効かない)
     const words = (AiConverter.changedWords(composing, text) ?? []).filter((w: string[]) => w[0] !== composing);
+    // 選んだ文の中での品詞 (文節の頭の語)。品詞ごとに分けて数える (PC 版・Android と同じ。2026-11-09)
+    const pw = AiConverter.pathPos(composing, text);
+    const wholeLid = Pos.headLid(pw, 0);
     if (words.length > 0) {
-      for (const w of words) { KanaKanjiConverter.recordChoice(w[0], w[1], w[2]); }
+      for (const w of words) {
+        const st = w.length > 3 ? Number(w[3]) : -1;
+        KanaKanjiConverter.recordChoice(w[0], w[1], w[2], st >= 0 ? Pos.headLid(pw, st) : -1);
+      }
       if (composing.length <= InputHandler.MAX_WHOLE_LEARN_LEN) {
-        KanaKanjiConverter.recordChoice(composing, text, KanaKanjiConverter.recentContext());
+        KanaKanjiConverter.recordChoice(composing, text, KanaKanjiConverter.recentContext(), wholeLid);
         ShortTermMemory.record(composing, text);
       }
       AiConverter.setLearnedWords(KanaKanjiConverter.strongForms());
@@ -2573,7 +2589,7 @@ export class InputHandler {
       const lastSurface = text.slice(a.prefixText.length);
       const surfaces = a.prefixSurfaces.slice();
       surfaces.push(lastSurface);
-      KanaKanjiConverter.recordSegmentedChoice(a.segs, surfaces);
+      KanaKanjiConverter.recordSegmentedChoice(a.segs, surfaces, pw);
       // ...and the whole reading too. Per-segment records are what make a
       // correction generalize (とった→撮った carries to the next sentence), but
       // they are keyed on the SEGMENTS while the candidate list for a
@@ -2583,11 +2599,11 @@ export class InputHandler {
       // exact same phrase therefore never promoted the choice, no matter how
       // many times it was made: the one case a user most expects to stick.
       if (composing.length <= InputHandler.MAX_WHOLE_LEARN_LEN) {
-        KanaKanjiConverter.recordChoice(composing, text);
+        KanaKanjiConverter.recordChoice(composing, text, undefined, wholeLid);
         ShortTermMemory.record(composing, text);
       }
     } else if (composing.length <= InputHandler.MAX_WHOLE_LEARN_LEN) {
-      KanaKanjiConverter.recordChoice(composing, text, KanaKanjiConverter.recentContext());
+      KanaKanjiConverter.recordChoice(composing, text, KanaKanjiConverter.recentContext(), wholeLid);
       ShortTermMemory.record(composing, text);
     }
   }
@@ -3957,14 +3973,19 @@ export class InputHandler {
     const text = this.bChosen.join('');
     InputLog.recordBunsetsuFinal(this.bSegs.join(''), text, this.bChosen);
     const learnSegs = this.secureField ? 0 : this.bSegs.length;   // パスワードの欄では何も覚えない
+    // 確定した文の中での品詞 (文節ごとの頭の語。学習を品詞ごとに分ける。PC 版・Android と同じ。2026-11-09)
+    const bpw = learnSegs > 0 ? AiConverter.pathPos(this.bSegs.join(''), text) : [];
+    let r0 = 0;
     for (let i = 0; i < learnSegs; i++) {
       // かなのままの文節 (助詞など) は、その読みの学習があるときだけ数える (recordSegmentedChoice・PC 版と同じ。全部数えると読みの枠を食う)
       const segLeft = KanaKanjiConverter.recentContext() + this.bChosen.slice(0, i).join('');
+      const lid = bpw.length === 0 ? -1 : Pos.headLid(bpw, r0);
       if (this.bSegs[i] === this.bChosen[i]) {
-        KanaKanjiConverter.confirmChoice(this.bSegs[i], this.bChosen[i], segLeft);
+        KanaKanjiConverter.confirmChoice(this.bSegs[i], this.bChosen[i], segLeft, lid);
       } else {
-        KanaKanjiConverter.recordChoice(this.bSegs[i], this.bChosen[i], segLeft);
+        KanaKanjiConverter.recordChoice(this.bSegs[i], this.bChosen[i], segLeft, lid);
       }
+      r0 += this.bSegs[i].length;
       // 「足立レイ」のような、辞書が読み全体では出せず自動で2文節に割れて
       // 毎回セグメントごとにタップし直している名前も、UnknownWordLearner
       // から見れば PIECEWISE (音+街+ウナ 方式) と全く同じ信号のはず -- 唯一の

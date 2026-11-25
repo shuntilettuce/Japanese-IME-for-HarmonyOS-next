@@ -9,6 +9,7 @@ import type common from '@ohos.app.ability.common';
 import { DEBUG_INPUT_LOG } from './InputLog';
 import type { UserPosEntry } from './ConjugationEngine';
 import { KanaKanjiConverter } from './KanaKanjiConverter';
+import { Pos, PosWord } from './Pos';
 
 // 長い入力で固定した前の方の 1 か所 (読みと、選び直せる候補。cands[0] が今の表記)
 interface FrozenChunk {
@@ -87,6 +88,8 @@ export class AiConverter {
   // (Android 版 UserDict.kt・PC 版と同じ決まり)。動詞と形容詞は、代表語の活用形と同じ語尾の形も作って入れる
   private static userForms: string[] = [];   // [読み, 表記, 代表語の読み, 代表語の表記] を 4 つずつ
   private static learnedForms: string[] = [];   // 同じ形の、学習で 2 回以上選んだ語
+  private static learnedLids: number[] = [];    // learnedForms の形ごとの品詞の左 ID (-1 = 分からない)
+  private static learnedKey: string = '';
   private static readonly USER_BONUS: number = 800;
   private static readonly NOUN_TMPL: Record<string, string[]> = {
     'noun': ['ねこ', '猫'], 'person': ['やまだ', '山田'], 'place': ['とうきょう', '東京'],
@@ -146,9 +149,19 @@ export class AiConverter {
   }
 
   // 学習で 2 回以上選んだ語を網に入れる (KanaKanjiConverter.strongForms)
+  // forms は [読み, 表記, 代表語の読み, 代表語の表記, 品詞の左 ID] を 5 つずつ
   static setLearnedWords(forms: string[]): void {
-    if (forms.join('\u0001') === AiConverter.learnedForms.join('\u0001')) { return; }   // 変わらないなら変換の控えを捨てない
-    AiConverter.learnedForms = forms;
+    const key = forms.join('\u0001');
+    if (key === AiConverter.learnedKey) { return; }   // 変わらないなら変換の控えを捨てない
+    AiConverter.learnedKey = key;
+    const f: string[] = [];
+    const l: number[] = [];
+    for (let i = 0; i + 4 < forms.length; i += 5) {
+      f.push(forms[i], forms[i + 1], forms[i + 2], forms[i + 3]);
+      l.push(Number(forms[i + 4]));
+    }
+    AiConverter.learnedForms = f;
+    AiConverter.learnedLids = l;
     AiConverter.applyUserWords();
   }
 
@@ -157,7 +170,9 @@ export class AiConverter {
       return;
     }
     const forms = AiConverter.userForms.concat(AiConverter.learnedForms);
-    const n = kkc.setUserWords(forms, AiConverter.USER_BONUS);
+    const lids: number[] = [];
+    for (let i = 0; i < AiConverter.userForms.length / 4; i++) { lids.push(-1); }
+    const n = kkc.setUserWords(forms, AiConverter.USER_BONUS, lids.concat(AiConverter.learnedLids));
     AiConverter.cache.clear();   // 前の辞書で変換した結果を使わない
     console.info(`shuntiIME AiConverter user words ${n}/${forms.length / 4}`);
   }
@@ -171,6 +186,13 @@ export class AiConverter {
     if (paths.length === 0 || r.cands.length === 0 || phraseEnds.length === 0) { return r; }
     const top = paths[0].split('\u0001');
     if (top.filter((_w: string, i: number) => i % 2 === 1).join('') !== r.cands[0]) { return r; }
+    // 1 位の語ごとの品詞 (語の読みの始まり -> 左 ID)。文節の頭の語の品詞で学習を引く (PC 版・Android と同じ。2026-11-09)
+    const lidAt = new Map<number, number>();
+    const rl = r.lids ?? [];
+    if (rl.length === r.ends.length) {
+      let st = 0;
+      for (let w = 0; w < r.ends.length; w++) { lidAt.set(st, rl[w]); st = r.ends[w]; }
+    }
     const path: string[] = [];
     let left = ctx;
     let start = 0;
@@ -186,7 +208,7 @@ export class AiConverter {
         if (end === pe) { break; }
       }
       if (j === i || Number(top[j - 2]) !== pe) { return r; }   // 文節の区切りが経路の語の区切りと合わない
-      const t = KanaKanjiConverter.top(tail.slice(start, pe), left);
+      const t = KanaKanjiConverter.top(tail.slice(start, pe), left, lidAt.get(start) ?? -1);
       if (t !== undefined && t !== was) {
         changed = true;
         path.push(String(pe), t);
@@ -210,7 +232,7 @@ export class AiConverter {
       paths: [path.join('\u0001')].concat(paths), sugg: r.sugg ?? [], suggKinds: r.suggKinds ?? [] } as KkcResult;
   }
 
-  // 1 位以外を選んだとき、1 位の経路と違う所を [読み, 表記, 語の左の文] で返す。分からなければ undefined (1 位を選んだ・経路に無い候補)
+  // 1 位以外を選んだとき、1 位の経路と違う所を [読み, 表記, 語の左の文, 読みの全体 (target) の中での語の始まり] で返す。分からなければ undefined (1 位を選んだ・経路に無い候補)
   static changedWords(target: string, chosen: string): string[][] | undefined {
     if (!target.startsWith(AiConverter.fKana) || !chosen.startsWith(AiConverter.fSurf)) {
       return undefined;
@@ -227,14 +249,14 @@ export class AiConverter {
     for (let p = 1; p < paths.length; p++) {
       const words = paths[p].split('\u0001');
       if (words.filter((_w: string, i: number) => i % 2 === 1).join('') === pick) {
-        return AiConverter.diffWords(ctx2, tail, top, words);
+        return AiConverter.diffWords(ctx2, tail, top, words, AiConverter.fKana.length);
       }
     }
     return undefined;
   }
 
   // a・b は [読みの終わり, 表記, …]。両方の語の区切りがそろう所まで進めて、表記が違えば b の側を返す
-  private static diffWords(ctx: string, tail: string, a: string[], b: string[]): string[][] {
+  private static diffWords(ctx: string, tail: string, a: string[], b: string[], base: number): string[][] {
     const out: string[][] = [];
     let i = 0;
     let j = 0;
@@ -259,7 +281,7 @@ export class AiConverter {
         }
       }
       if (sa !== sb) {
-        out.push([tail.slice(start, ea), sb, left]);
+        out.push([tail.slice(start, ea), sb, left, String(base + start)]);
       }
       left += sb;
       start = ea;
@@ -267,6 +289,40 @@ export class AiConverter {
       j += 2;
     }
     return out;
+  }
+
+  // 確定した文 (読み, 表記) の語ごとの品詞 (PC 版 Converter::path_pos)。品詞ごとの学習で、選んだ文の中での品詞を決める
+  // (PC 版・Android と同じ。2026-11-09)。確定のときに 1 回 (辞書のラティスをたどるだけ)。分からなければ空
+  static pathPos(reading: string, text: string): PosWord[] {
+    if (!AiConverter.ready || reading.length === 0 || text.length === 0) { return []; }
+    try {
+      return Pos.words(reading, text, kkc.pathPos(reading, text));
+    } catch (e) {
+      return [];
+    }
+  }
+
+  // 品詞の記録の無い (前の版の) 学習の表記の品詞 (PC 版 Composer の lid_resolver と同じく、読みと表記だけでラティスをたどって
+  // 文節の頭の語の品詞)。打鍵のたびに UI のスレッドで待たないよう、無ければ裏のスレッドに頼んで今回は -1
+  // (分からない = 前の版と同じ扱い)。結果は控えて次から使う (Android と同じ)
+  private static lidCache: Map<string, number> = new Map<string, number>();
+  private static lidPending: Set<string> = new Set<string>();
+
+  static resolveLid(reading: string, surface: string): number {
+    const key = reading + '\t' + surface;
+    const hit = AiConverter.lidCache.get(key);
+    if (hit !== undefined) { return hit; }
+    if (!AiConverter.ready || AiConverter.lidPending.has(key)) { return -1; }
+    AiConverter.lidPending.add(key);
+    kkc.pathPosAsync(reading, surface).then((a: number[]) => {
+      const ws = Pos.words(reading, surface, a);
+      AiConverter.lidPending.delete(key);
+      if (AiConverter.lidCache.size > 50000) { AiConverter.lidCache.clear(); }
+      AiConverter.lidCache.set(key, ws.length === 0 ? -1 : Pos.headLid(ws, 0));
+    }).catch(() => {
+      AiConverter.lidPending.delete(key);
+    });
+    return -1;
   }
 
   // 挨拶はかな書きを先に。モデルは文脈によって「こんにちは」を「今日は」と書く (教材の読みの入れ替え

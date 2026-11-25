@@ -13,6 +13,8 @@ export interface KkcResult {
   paths?: string[];
   /** 1 位の経路 (paths[0]) の文節 (自立語 + 付属語) ごとの読みの終わり (PC 版と同じ決まり。学習の置き換えの単位)。convertAsync のときだけ */
   phraseEnds?: number[];
+  /** 1 位の語ごとの品詞の左 ID (ends と同じ並び。品詞ごとの学習)。convertAsync のときだけ。分からなければ空 */
+  lids?: number[];
   /** 待ち時間の内訳 (ms): 裏のスレッドの順番待ち / 変換 / 変換が終わってから JS に届くまで */
   waitMs: number;
   runMs: number;
@@ -28,8 +30,15 @@ export const convert: (ctx: string, kana: string, max: number) => KkcResult;
 export const convertAsync: (ctx: string, kana: string, max: number) => Promise<KkcResult>;
 /** 予測: 読みが prefix で始まり、あと maxExtra 字までの辞書の語を、よく使う順に最大 maxOut 個 */
 export const complete: (prefix: string, maxExtra: number, maxOut: number) => string[];
-/** ユーザー辞書を入れ直す。forms は [読み, 表記, 代表語の読み, 代表語の表記] を 4 つずつ並べたもの。入った形の数を返す */
-export const setUserWords: (forms: string[], bonus: number) => number;
+/** ユーザー辞書を入れ直す。forms は [読み, 表記, 代表語の読み, 代表語の表記] を 4 つずつ並べたもの。入った形の数を返す。
+ * lids は形ごとの品詞の左 ID (省略可)。0 以上の形は辞書のその品詞の仲間の項目として置く */
+export const setUserWords: (forms: string[], bonus: number, lids?: number[]) => number;
+/** 確定した文 (読み, 表記) になるパスの語ごとの [読みの終わり, 表記の長さ, 左 ID, 右 ID] を並べたもの。パスが無ければ空 */
+export const pathPos: (reading: string, text: string) => number[];
+/** pathPos を裏のスレッドで */
+export const pathPosAsync: (reading: string, text: string) => Promise<number[]>;
+/** 品詞の表 [分類, 仲間] (左 ID ごとに 1 字) */
+export const posTables: () => string[];
 /** 直前の変換の時間の内訳 (ms): [網, 下書き, エンコーダ, 区間と語, 上位k] */
 export const times: () => number[];
 /** 提案を分けて出すか (オフなら日付・住所・打ち間違いの直しを候補に混ぜる) */

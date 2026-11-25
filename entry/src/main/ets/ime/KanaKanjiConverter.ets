@@ -5,11 +5,13 @@
 // その辞書 (rawfile 約 85MB) があった。AI 変換が Mozc の辞書を取り込んだうえで精度も速さも上回ったので、
 // 1.6.1 の次で AI だけにして外した。名前は呼ぶ側を変えないために残している。
 import { AiConverter } from './AiConverter';
+import { Pos, PosWord } from './Pos';
 
 interface StrongWord {
   count: number;
   reading: string;
   surface: string;
+  lid: number;
 }
 
 export class KanaKanjiConverter {
@@ -20,6 +22,10 @@ export class KanaKanjiConverter {
   private static learnedDay: Record<string, number> = {};
   // 読み -> 左の文脈 -> 表記 -> 回数 (PC 版の @c)。learned に混ぜると予測が文脈を表記と取り違えるので別の表 (shunti_learning の 'ctx')
   private static learnedCtx: Record<string, Record<string, Record<string, number>>> = {};
+  // 読み -> 表記 -> 品詞の左 ID (最後に選んだときの文の中での品詞。PC 版の @p と同じ。2026-11-09)。shunti_learning の 'pos'
+  private static learnedPos: Record<string, Record<string, number>> = {};
+  // 記録に品詞の無い (前の版の) 表記の品詞を決める関数 (読みと表記だけでラティスをたどる。PC 版 set_lid_resolver)。分からなければ -1
+  static lidResolver: ((reading: string, surface: string) => number) | undefined = undefined;
   // 直前に確定した文字列 (最大 15 個)。AI 変換に左の文脈として渡す
   private static contextBuffer: string[] = [];
 
@@ -45,6 +51,46 @@ export class KanaKanjiConverter {
 
   static getLearnedCtx(): Record<string, Record<string, Record<string, number>>> {
     return KanaKanjiConverter.learnedCtx;
+  }
+
+  static setLearnedPos(data: Record<string, Record<string, number>>): void {
+    KanaKanjiConverter.learnedPos = data;
+  }
+
+  static getLearnedPos(): Record<string, Record<string, number>> {
+    return KanaKanjiConverter.learnedPos;
+  }
+
+  private static posOf(kana: string): Record<string, number> | undefined {
+    const t = KanaKanjiConverter.learnedPos[kana];
+    return typeof t === 'object' && t !== null ? t : undefined;
+  }
+
+  // その読みの品詞の記録を消す (surface を渡せばその表記だけ)
+  private static dropPos(kana: string, surface?: string): void {
+    const t = KanaKanjiConverter.posOf(kana);
+    if (t === undefined) { return; }
+    if (surface !== undefined) {
+      if (typeof t[surface] !== 'number') { return; }
+      const kept: Record<string, number> = {};
+      for (const s of Object.keys(t)) { if (s !== surface) { kept[s] = t[s]; } }
+      if (Object.keys(kept).length > 0) {
+        KanaKanjiConverter.learnedPos[kana] = kept;
+        return;
+      }
+    }
+    const next: Record<string, Record<string, number>> = {};
+    for (const r of Object.keys(KanaKanjiConverter.learnedPos)) {
+      if (r !== kana) { next[r] = KanaKanjiConverter.learnedPos[r]; }
+    }
+    KanaKanjiConverter.learnedPos = next;
+  }
+
+  // 表記の品詞 (記録に無ければ lidResolver に聞く。PC 版 lid_in)。分からなければ -1
+  private static lidIn(kana: string, surface: string): number {
+    const v = KanaKanjiConverter.posOf(kana)?.[surface];
+    if (typeof v === 'number') { return v; }
+    return KanaKanjiConverter.lidResolver !== undefined ? KanaKanjiConverter.lidResolver(kana, surface) : -1;
   }
 
   private static ctxOf(kana: string): Record<string, Record<string, number>> | undefined {
@@ -87,16 +133,35 @@ export class KanaKanjiConverter {
 
   // 文中の語の読みの表記を置き換える学習 (PC 版 Learning::top と同じ)。同じ左の文脈で選んだ回数から別の表記の票を引いて
   // SAME_CTX_MIN 以上、または ANY_CTX_MIN 回選んでいてこの文脈に別の表記の票が無い表記のうち、いちばん多く選んだもの
-  static top(kana: string, left: string): string | undefined {
+  // lid = 置き換える所の文節の頭の語の品詞 (-1 = 分からない)。その品詞の仲間 (want) と同じ仲間の表記は、その仲間の中の票だけでも
+  // 「ほとんどこれ」と言えれば置き換える (か を助詞で、化 を接尾で選んでいる読みでも、接尾の所は 化 に)。品詞の分からない表記は
+  // どの仲間にも入れる (PC 版・Android と同じ。2026-11-09)
+  static top(kana: string, left: string, lid: number = -1): string | undefined {
     const entry = KanaKanjiConverter.entryOf(kana);
     if (entry === undefined) { return undefined; }
+    const want = Pos.group(lid);
+    const same = (s: string): boolean => {
+      if (want === Pos.NO_GROUP) { return true; }
+      const g = Pos.group(KanaKanjiConverter.lidIn(kana, s));
+      return g === Pos.NO_GROUP || g === want;
+    };
     const here = KanaKanjiConverter.ctxOf(kana)?.[KanaKanjiConverter.leftKey(left)];
     const votes: Record<string, number> = typeof here === 'object' && here !== null ? here : {};
     let all = 0;
     for (const s of Object.keys(votes)) { all += votes[s]; }
     // 文脈を問わずに置き換えるのは、その読みでほかの表記がほとんど選ばれていないときだけ (ほかの票が 1/4 以下。PC 版と同じ)。
     // 用途の違う表記を両方選ぶ短い読み (か/化・と/都) は同じ左の文脈で選んだときだけ置き換え、ほかはモデルに任せる (ユーザー 2026-11-06)
-    const total = KanaKanjiConverter.totalOf(entry);
+    // 品詞で絞る形 (仲間の違う表記は置き換えない) は、PC の入力ログを時刻順になぞると 直した 3・壊した 22 で悪かった
+    // (モデルのパスの品詞が違うから選び直している所まで止める)。仲間の中で数えるのは、置き換えてよい条件を足す側だけ
+    let total = 0;
+    let totalAll = 0;
+    for (const s of Object.keys(entry)) {
+      const n = entry[s];
+      if (typeof n === 'number' && n > 0) {
+        totalAll += n;
+        if (same(s)) { total += n; }
+      }
+    }
     let best: string | undefined = undefined;
     let most = 0;
     for (const s of Object.keys(entry)) {
@@ -105,7 +170,7 @@ export class KanaKanjiConverter {
       const v = votes[s];
       const mine = typeof v === 'number' ? v : 0;
       const against = all - mine;
-      const dominant = (total - n) * 4 <= n;
+      const dominant = (totalAll - n) * 4 <= n || (want !== Pos.NO_GROUP && same(s) && (total - n) * 4 <= n);
       if (mine - against >= KanaKanjiConverter.SAME_CTX_MIN || (n >= KanaKanjiConverter.ANY_CTX_MIN && against === 0 && dominant)) {
         most = n;
         best = s;
@@ -140,8 +205,9 @@ export class KanaKanjiConverter {
   private static readonly CTX_CHARS = 2;       // 文脈として覚える左の字数
   private static readonly MAX_CONTEXTS = 8;    // 読みごとに覚える文脈の数
 
-  // left = 語の左の文。分からなければ省く (文脈の表には足さない)
-  static recordChoice(kana: string, candidate: string, left?: string): void {
+  // left = 語の左の文。分からなければ省く (文脈の表には足さない)。
+  // lid = 選んだときの文の中での文節の頭の語の品詞 (左 ID、-1 = 分からない)。品詞ごとに分けて数える (PC 版・Android と同じ。2026-11-09)
+  static recordChoice(kana: string, candidate: string, left?: string, lid: number = -1): void {
     // かなのままの表記も数える。数えないと、かなで打ち続けても 1 回選んだ漢字に勝てない (ユーザー 2026-10-31)
     if (kana.length === 0 || candidate.length === 0) { return; }
     let entry = KanaKanjiConverter.entryOf(kana);
@@ -170,17 +236,23 @@ export class KanaKanjiConverter {
         KanaKanjiConverter.learned[kana] = kept;
         entry = kept;
         KanaKanjiConverter.dropVotes(kana, weakest);
+        KanaKanjiConverter.dropPos(kana, weakest);
       }
       entry[candidate] = 1;
+    }
+    if (lid >= 0) {   // 品詞は最後に選んだときのもの
+      const t: Record<string, number> = KanaKanjiConverter.posOf(kana) ?? {};
+      t[candidate] = lid;
+      KanaKanjiConverter.learnedPos[kana] = t;
     }
     KanaKanjiConverter.learnedDay[kana] = KanaKanjiConverter.today();
     if (left !== undefined) { KanaKanjiConverter.note(kana, left, candidate); }
   }
 
   // かなのまま確定した: その読みの学習があるときだけ数える (全部数えると読みの枠を食う。PC 版と同じ)
-  static confirmChoice(kana: string, candidate: string, left: string): boolean {
+  static confirmChoice(kana: string, candidate: string, left: string, lid: number = -1): boolean {
     if (KanaKanjiConverter.entryOf(kana) === undefined) { return false; }
-    KanaKanjiConverter.recordChoice(kana, candidate, left);
+    KanaKanjiConverter.recordChoice(kana, candidate, left, lid);
     return true;
   }
 
@@ -201,6 +273,7 @@ export class KanaKanjiConverter {
     }
     KanaKanjiConverter.dropDay(weakest);
     KanaKanjiConverter.dropCtx(weakest);
+    KanaKanjiConverter.dropPos(weakest);
     const remaining: Record<string, Record<string, number>> = {};
     for (const r of readings) {
       if (r !== weakest) { remaining[r] = KanaKanjiConverter.learned[r]; }
@@ -257,6 +330,7 @@ export class KanaKanjiConverter {
     const entry = KanaKanjiConverter.entryOf(kana);
     if (entry === undefined || typeof entry[candidate] !== 'number') { return; }
     KanaKanjiConverter.dropVotes(kana, candidate);
+    KanaKanjiConverter.dropPos(kana, candidate);
     const next: Record<string, number> = {};
     for (const k of Object.keys(entry)) {
       if (k !== candidate) { next[k] = entry[k]; }
@@ -276,10 +350,15 @@ export class KanaKanjiConverter {
 
   // 文の確定を語ごとに学習する (文全体の読みはほぼ二度と同じものが来ないので、語に分けないと次に効かない)。
   // readings と surfaces は語ごとに対応する。かなのままの語 (助詞など) は語ごとには数えない
-  static recordSegmentedChoice(readings: string[], surfaces: string[]): void {
+  // pw = 文全体の語ごとの品詞 (AiConverter.pathPos)。語の品詞を文節の頭の語から引く (無ければ品詞なし)
+  static recordSegmentedChoice(readings: string[], surfaces: string[], pw: PosWord[] = []): void {
     const n = Math.min(readings.length, surfaces.length);
+    let r0 = 0;
     for (let i = 0; i < n; i++) {
-      if (readings[i] !== surfaces[i]) { KanaKanjiConverter.recordChoice(readings[i], surfaces[i]); }
+      if (readings[i] !== surfaces[i]) {
+        KanaKanjiConverter.recordChoice(readings[i], surfaces[i], undefined, pw.length === 0 ? -1 : Pos.headLid(pw, r0));
+      }
+      r0 += readings[i].length;
     }
   }
 
@@ -293,25 +372,36 @@ export class KanaKanjiConverter {
     return t;
   }
 
-  // 2 回以上選んだ短い語を、変換の網に入れる形で返す ([読み, 表記, 代表語の読み, 代表語の表記] を 4 つずつ)。
+  // 2 回以上選んだ短い語を、変換のラティスに入れる形で返す ([読み, 表記, 代表語の読み, 代表語の表記, 品詞の左 ID] を 5 つずつ)。
   // 文の途中でも AI が文脈で選べるように (PC 版と同じ)。後ろの同じかな (なにを → 何を の を) は外す
   static strongForms(): string[] {
     const found: StrongWord[] = [];
     for (const r of Object.keys(KanaKanjiConverter.learned)) {
       if (r.length > KanaKanjiConverter.MAX_NET_READING) { continue; }
       const entry = KanaKanjiConverter.learned[r];
-      // ほかの表記も選んでいる読み (ほかの票が 1/4 を超える: か/化・し/死) は入れない (PC 版と同じ。ユーザー 2026-11-06)
-      const total = KanaKanjiConverter.totalOf(entry);
+      // ほかの表記も選んでいる読み (ほかの票が 1/4 を超える: か/化・し/死) は入れない (PC 版と同じ。ユーザー 2026-11-06)。
+      // ほかの票は同じ品詞の仲間の表記だけで数える (か の助詞と 化 の接尾は取り合わない。PC 版・Android と同じ。2026-11-09)
+      const lids: Record<string, number> = {};
+      for (const c of Object.keys(entry)) { lids[c] = entry[c] > 0 ? KanaKanjiConverter.lidIn(r, c) : -1; }
       for (const c of Object.keys(entry)) {
-        if (entry[c] < 2 || (total - entry[c]) * 4 > entry[c]) { continue; }
+        if (entry[c] < 2) { continue; }
+        const lid = lids[c];
+        const g = Pos.group(lid);
+        let total = 0;
+        for (const c2 of Object.keys(entry)) {
+          const g2 = Pos.group(lids[c2]);
+          if (entry[c2] > 0 && (g === Pos.NO_GROUP || g2 === Pos.NO_GROUP || g2 === g)) { total += entry[c2]; }
+        }
+        if ((total - entry[c]) * 4 > entry[c]) { continue; }
         let n = 0;
         while (n < r.length && n < c.length && r.charAt(r.length - 1 - n) === c.charAt(c.length - 1 - n)
           && r.charAt(r.length - 1 - n) >= 'ぁ' && r.charAt(r.length - 1 - n) <= 'ゖ') { n++; }
         const rr = r.slice(0, r.length - n);
         const cc = c.slice(0, c.length - n);
-        // 1 字の読み (し・か・と) は網に入れない: どの文脈でも安い 1 字の辺になり区切りまで変えた (していない -> し/ていない)。
-        // 同じ左の文脈で選んだときの置き換え (top) は残る (PC 版と同じ)
-        if (rr.length >= 2 && cc.length > 0 && rr !== cc) { found.push({ count: entry[c], reading: rr, surface: cc }); }
+        // 1 字の読み (し・か・と) はラティスに入れない: どの文脈でも安い 1 字のエッジになり区切りまで変えた (していない -> し/ていない)。
+        // 同じ左の文脈で選んだときの置き換え (top) は残る (PC 版と同じ)。
+        // 品詞の分かる語は、その品詞のエッジとしてだけ置くので 1 字の読みも入れる (PC 版・Android と同じ。2026-11-09)
+        if ((rr.length >= 2 || lid >= 0) && cc.length > 0 && rr !== cc) { found.push({ count: entry[c], reading: rr, surface: cc, lid: lid }); }
       }
     }
     found.sort((a: StrongWord, b: StrongWord) => b.count - a.count);
@@ -321,7 +411,7 @@ export class KanaKanjiConverter {
     top.sort((a: StrongWord, b: StrongWord) => a.reading < b.reading ? -1 : a.reading > b.reading ? 1 :
       (a.surface < b.surface ? -1 : a.surface > b.surface ? 1 : 0));
     const out: string[] = [];
-    for (const f of top) { out.push(f.reading, f.surface, f.reading, f.surface); }
+    for (const f of top) { out.push(f.reading, f.surface, f.reading, f.surface, String(f.lid)); }
     return out;
   }
 

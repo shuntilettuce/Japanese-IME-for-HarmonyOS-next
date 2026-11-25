@@ -234,6 +234,7 @@ struct Job {
     std::vector<std::u16string> sugg;  // 提案 (kkc_last_suggest)
     std::vector<int32_t> sugg_kinds;
     std::vector<int32_t> phrase_ends;   // 1 位の文節ごとの読みの終わり (phrase_ends.h。学習の置き換えの単位)
+    std::vector<int32_t> lids;          // 1 位の語ごとの品詞の左 ID (ends と同じ並び。品詞ごとの学習。数が合わなければ空)
     std::chrono::steady_clock::time_point queued, started, done;   // 待ち時間の切り分け用
 };
 
@@ -272,6 +273,11 @@ napi_value ConvertAsync(napi_env env, napi_callback_info info) {
             int m = kkc_last_segments(g_engine, j->ends.data(), j->lens.data(), 512);
             j->ends.resize(m > 0 ? m : 0);
             j->lens.resize(m > 0 ? m : 0);
+            {
+                std::vector<int32_t> lids(512), rids(512);
+                const int np = kkc_last_segment_pos(g_engine, lids.data(), rids.data(), 512);
+                if (np == m && np > 0) j->lids.assign(lids.begin(), lids.begin() + np);
+            }
             j->paths = read_paths(g_engine);
             if (!j->res.empty()) {
                 j->phrase_ends.resize(512);
@@ -330,6 +336,14 @@ napi_value ConvertAsync(napi_env env, napi_callback_info info) {
                 napi_set_element(env, pe, i, v);
             }
             napi_set_named_property(env, obj, "phraseEnds", pe);
+            napi_value li;
+            napi_create_array(env, &li);
+            for (uint32_t i = 0; i < j->lids.size(); i++) {
+                napi_value v;
+                napi_create_int32(env, j->lids[i], &v);
+                napi_set_element(env, li, i, v);
+            }
+            napi_set_named_property(env, obj, "lids", li);
             napi_value sg, sk;
             napi_create_array(env, &sg);
             napi_create_array(env, &sk);
@@ -407,9 +421,11 @@ napi_value Complete(napi_env env, napi_callback_info info) {
 
 // ユーザー辞書を入れ直す。forms は [読み, 表記, 代表語の読み, 代表語の表記] を 4 つずつ並べた配列 (AiConverter.userForms)。
 // 入った形の数を返す (代表語が辞書に無い形は入らない)。変換と同時には触れないので、変換中なら終わるまで待つ
+// lids (省略可) は形ごとの品詞の左 ID。0 以上の形 (学習した語) は、選んだときの品詞の仲間の中でいちばん安い辞書の項目を見本にして置く
+// (PC 版 set_user_words・Android と同じ kkc_user_add_pos + POS_GROUPS。2026-11-09)。置けなければ今までどおり代表語で
 napi_value SetUserWords(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value argv[2];
+    size_t argc = 3;
+    napi_value argv[3];
     napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
     napi_value res;
     int32_t bonus = 800, added = 0;
@@ -422,12 +438,29 @@ napi_value SetUserWords(napi_env env, napi_callback_info info) {
         napi_get_element(env, argv[0], i, &v);
         f.push_back(u16_arg(env, v));
     }
+    std::vector<int32_t> fl;
+    uint32_t nl = 0;
+    if (argc >= 3) napi_get_array_length(env, argv[2], &nl);
+    for (uint32_t i = 0; i < nl; i++) {
+        napi_value v;
+        int32_t x = -1;
+        napi_get_element(env, argv[2], i, &v);
+        napi_get_value_int32(env, v, &x);
+        fl.push_back(x);
+    }
     std::lock_guard<std::mutex> lk(g_mu);
     if (g_engine) {
         kkc_user_clear(g_engine);
         auto p = [](const std::u16string& x) { return reinterpret_cast<const uint16_t*>(x.data()); };
         const std::u16string neko = u"ねこ", cat = u"猫";
         for (size_t i = 0; i + 3 < f.size(); i += 4) {
+            const int32_t lid = i / 4 < fl.size() ? fl[i / 4] : -1;
+            if (lid >= 0 && kkc_user_add_pos(g_engine, p(f[i]), int(f[i].size()), p(f[i + 1]), int(f[i + 1].size()), bonus, 0, lid,
+                                             shunti::POS_GROUPS, shunti::POS_CLASS_COUNT)) {
+                added++;
+                continue;
+            }
+            if (lid >= 0 && f[i].size() < 2) continue;   // 1 字の語は品詞を決めて置けるときだけ (どの文脈でも安い 1 字のエッジにしない)
             int ok = kkc_user_add_like(g_engine, p(f[i]), int(f[i].size()), p(f[i + 1]), int(f[i + 1].size()),
                                        p(f[i + 2]), int(f[i + 2].size()), p(f[i + 3]), int(f[i + 3].size()), bonus);
             // 代表語がその語そのもの (学習で選んだ語) で辞書に無いときは、名詞の代表語で入れる (PC 版と同じ)
@@ -439,6 +472,95 @@ napi_value SetUserWords(napi_env env, napi_callback_info info) {
     }
     napi_create_int32(env, added, &res);
     return res;
+}
+
+// 確定した文 (読み, 表記) になるパスのうちコストのいちばん低いものの語ごとの [読みの終わり, 表記の長さ, 左 ID, 右 ID] を並べる
+// (PC 版 Converter::path_pos。品詞ごとの学習で、選んだ文の中での品詞を決める。2026-11-09)。パスが無ければ空。g_mu を取って呼ぶ
+std::vector<int32_t> path_pos(const std::u16string& r, const std::u16string& t) {
+    std::vector<int32_t> v;
+    if (!g_engine || r.empty() || t.empty()) return v;
+    const size_t cap = r.size() + 1;
+    std::vector<int32_t> ends(cap), l16(cap), lids(cap), rids(cap);
+    const int n = kkc_path_pos(g_engine, reinterpret_cast<const uint16_t*>(r.data()), int(r.size()), reinterpret_cast<const uint16_t*>(t.data()),
+                               int(t.size()), ends.data(), l16.data(), lids.data(), rids.data(), int(cap));
+    for (int i = 0; i < n; i++) {
+        v.push_back(ends[size_t(i)]);
+        v.push_back(l16[size_t(i)]);
+        v.push_back(lids[size_t(i)]);
+        v.push_back(rids[size_t(i)]);
+    }
+    return v;
+}
+
+napi_value int_array(napi_env env, const std::vector<int32_t>& v) {
+    napi_value a;
+    napi_create_array(env, &a);
+    for (uint32_t i = 0; i < v.size(); i++) {
+        napi_value x;
+        napi_create_int32(env, v[i], &x);
+        napi_set_element(env, a, i, x);
+    }
+    return a;
+}
+
+// path_pos (呼んだスレッドで。確定のときに 1 回)
+napi_value PathPos(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    std::vector<int32_t> v;
+    if (argc >= 2) {
+        const std::u16string r = u16_arg(env, argv[0]), t = u16_arg(env, argv[1]);
+        std::lock_guard<std::mutex> lk(g_mu);
+        v = path_pos(r, t);
+    }
+    return int_array(env, v);
+}
+
+struct PathPosJob {
+    napi_async_work work = nullptr;
+    napi_deferred deferred = nullptr;
+    std::u16string r, t;
+    std::vector<int32_t> v;
+};
+
+// path_pos (裏のスレッドで)。品詞の記録の無い前の版の学習の表記の品詞を引く (打鍵のたびに UI のスレッドで待たない)
+napi_value PathPosAsync(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value argv[2];
+    napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr);
+    auto* job = new PathPosJob();
+    if (argc >= 2) { job->r = u16_arg(env, argv[0]); job->t = u16_arg(env, argv[1]); }
+    napi_value promise, name;
+    napi_create_promise(env, &job->deferred, &promise);
+    napi_create_string_utf8(env, "kkcPathPos", NAPI_AUTO_LENGTH, &name);
+    napi_create_async_work(
+        env, nullptr, name,
+        [](napi_env, void* data) {
+            auto* j = static_cast<PathPosJob*>(data);
+            std::lock_guard<std::mutex> lk(g_mu);
+            j->v = path_pos(j->r, j->t);
+        },
+        [](napi_env env, napi_status, void* data) {
+            auto* j = static_cast<PathPosJob*>(data);
+            napi_resolve_deferred(env, j->deferred, int_array(env, j->v));
+            napi_delete_async_work(env, j->work);
+            delete j;
+        },
+        job, &job->work);
+    napi_queue_async_work(env, job->work);
+    return promise;
+}
+
+// 品詞の表 (desktop/core/pos_classes.h の POS_CLASSES・POS_GROUPS、左 ID ごとに 1 字)。[分類, 仲間]
+napi_value PosTables(napi_env env, napi_callback_info) {
+    napi_value out, a, b;
+    napi_create_array(env, &out);
+    napi_create_string_utf8(env, shunti::POS_CLASSES, size_t(shunti::POS_CLASS_COUNT), &a);
+    napi_create_string_utf8(env, shunti::POS_GROUPS, size_t(shunti::POS_CLASS_COUNT), &b);
+    napi_set_element(env, out, 0, a);
+    napi_set_element(env, out, 1, b);
+    return out;
 }
 
 // 直前の変換の時間の内訳 (ミリ秒): [網, 下書き, エンコーダ, 区間と語, 上位k]
@@ -544,6 +666,9 @@ napi_value Init(napi_env env, napi_value exports) {
         {"setAiLearn", nullptr, SetAiLearn, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"aiLearnAsync", nullptr, AiLearnAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"aiForget", nullptr, AiForget, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"pathPos", nullptr, PathPos, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"pathPosAsync", nullptr, PathPosAsync, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"posTables", nullptr, PosTables, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"close", nullptr, Close, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
