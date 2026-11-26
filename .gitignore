@@ -36,9 +36,6 @@ local.properties
 # (tools/ai_assets.json と tools/fetch_ai_assets.py)。ネイティブのビルドの生成物も入れない
 entry/src/main/resources/rawfile/kkc_lex.bin
 entry/src/main/resources/rawfile/kkc_model.bin
-entry/src/main/resources/rawfile/glide_nn.bin
-entry/src/main/resources/rawfile/glide_en.tsv
-entry/src/main/resources/rawfile/glide_zh.tsv
 entry/.cxx/
 entry/oh_modules/
 oh_modules/

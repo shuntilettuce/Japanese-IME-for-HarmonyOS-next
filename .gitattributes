@@ -5,5 +5,7 @@ entry/src/main/resources/rawfile/*.blob binary
 entry/src/main/resources/rawfile/*.len binary
 entry/src/main/resources/rawfile/*.base binary
 entry/src/main/resources/rawfile/*.bin binary
+# グライドの語の一覧も取り出すときに変えない (中身のハッシュと読み込みがずれる)
+entry/src/main/resources/rawfile/glide_*.tsv binary
 android/gradlew text eol=lf
 *.bat text eol=crlf

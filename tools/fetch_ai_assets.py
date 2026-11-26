@@ -37,8 +37,7 @@ def main():
         print(f'{name}: 取得中 ({info["size"] / 1e6:.0f}MB) ...', flush=True)
         tmp = path + '.part'
         # リリースの中の名前 (src) は置く名前と違ってよい (古いチェックアウトが使う同じ名前の資産を残したまま差し替えるため)
-        # url はファイルごとに替えられる (グライド入力のデータは別の Release)
-        urllib.request.urlretrieve(info.get('url', m['url']) + info.get('src', name), tmp)
+        urllib.request.urlretrieve(m['url'] + info.get('src', name), tmp)
         if sha256(tmp) != info['sha256']:
             os.remove(tmp)
             print(f'{name}: SHA-256 が合わない (取得失敗)', file=sys.stderr)
